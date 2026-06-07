@@ -108,6 +108,37 @@ def analyze_tag(tag):
           f"C_cc mean={cc_s['mean']:6.2f} p95={cc_s['p95']:6.2f}us")
     return {"tag": tag, "cspray": cs_s, "ccc": cc_s, "flow": flow, "npaths": npaths}
 
+def aggregate_tag(tag, min_samples=200):
+    """Cross-flow robust statistic (spec-mandated). For every flow with >= min_samples
+    ACKs, compute its steady-window mean C_spray and C_cc; return the MEDIAN across
+    flows. This avoids the artifact of comparing a single (run-dependent) representative
+    flow across configs. Returns {nflows, cspray_med, ccc_med} or None if no eligible flow."""
+    import statistics
+    rows = parse_csv(os.path.join(HERE, f"{tag}.pathrtt.csv"))
+    if not rows:
+        return None
+    mins = rtt_min_per_path(rows)
+    counts = collections.Counter(r[1] for r in rows)
+    cs_list, cc_list = [], []
+    for flow, cnt in counts.items():
+        if cnt < min_samples:
+            continue
+        t_ns, cs_ns, cc_ns = decompose(rows, mins, flow)
+        t_us = [t/1000.0 for t in t_ns]
+        ssp = steady_stats(t_us, [x/1000.0 for x in cs_ns])
+        scc = steady_stats(t_us, [x/1000.0 for x in cc_ns])
+        if ssp["n"] > 0:
+            cs_list.append(ssp["mean"]); cc_list.append(scc["mean"])
+    if not cs_list:
+        return None
+    return {"nflows": len(cs_list),
+            "cspray_med": statistics.median(cs_list),
+            "ccc_med": statistics.median(cc_list)}
+
 if __name__ == "__main__":
     for tag in sys.argv[1:]:
         analyze_tag(tag)
+        agg = aggregate_tag(tag)
+        if agg:
+            print(f"{'':14s}   cross-flow median (n={agg['nflows']}): "
+                  f"C_spray={agg['cspray_med']:6.2f}us  C_cc={agg['ccc_med']:6.2f}us")

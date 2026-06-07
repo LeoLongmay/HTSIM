@@ -62,10 +62,39 @@ def test_single_path_zero_spray():
     assert cc == [0, 50], cc
     print("ok single-path zero spray")
 
+def test_aggregate_cross_flow_median():
+    # 2 flows x 2 paths. Each path: a pre-window min sample (400us) + elevated samples
+    # at 500us and 1000us, so q is constant across the [500,1500]us window (carry-forward).
+    # flow0: path10 q=50, path20 q=90 -> C_spray=40, C_cc=50
+    # flow1: path30 q=30, path40 q=70 -> C_spray=40, C_cc=30
+    # median across flows: C_spray=median([40,40])=40 ; C_cc=median([50,30])=40
+    # rtt values in ns; aggregate_tag converts q to us (divide by 1000), so
+    # q10 = 150000-100000 = 50000ns = 50us, etc.
+    rows = [(400000,0,10,100000),(500000,0,10,150000),(1000000,0,10,150000),
+            (400000,0,20,100000),(500000,0,20,190000),(1000000,0,20,190000),
+            (400000,1,30,100000),(500000,1,30,130000),(1000000,1,30,130000),
+            (400000,1,40,100000),(500000,1,40,170000),(1000000,1,40,170000)]
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "_testagg.pathrtt.csv")
+    with open(path, "w") as f:
+        for r in rows:
+            f.write(",".join(str(x) for x in r) + "\n")
+    try:
+        agg = A.aggregate_tag("_testagg", min_samples=1)
+        assert agg["nflows"] == 2, agg
+        assert abs(agg["cspray_med"] - 40.0) < 1e-9, agg
+        assert abs(agg["ccc_med"] - 40.0) < 1e-9, agg
+        # min_samples filter: each flow has 6 samples; requiring 7 -> no eligible flow
+        assert A.aggregate_tag("_testagg", min_samples=7) is None
+    finally:
+        os.unlink(path)
+    print("ok aggregate cross-flow median + min_samples filter")
+
 if __name__ == "__main__":
     test_rtt_min_per_path()
     test_decompose_bins_and_carryforward()
     test_steady_stats()
     test_p95_nearest_rank()
     test_single_path_zero_spray()
+    test_aggregate_cross_flow_median()
     print("ALL PASS")
