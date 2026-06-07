@@ -1,0 +1,27 @@
+Smoke phase outcome (2026-06-07)
+================================
+Floor test: pod0 agg->core C_cc steady-window median >= 2.0us AND >= 3x baseline.
+
+k = NONE — no irreducible queue floor up to failed=16 (entire pod0 egress at 25%).
+
+Evidence (REPS, permutation 128x30MB, 2us sampling, [500,1500]us window):
+  reps_f0  (failed 0) : agg0 C_spray mean 5.47us / C_cc median 0.33us ; POD0 C_cc median 0.00us
+  reps_f8  (failed 8) : agg0 C_spray mean 4.52us / C_cc median 0.33us ; POD0 C_cc median 0.00us
+  reps_f16 (failed 16): agg0 C_spray mean 5.57us / C_cc median 0.33us ; POD0 C_cc median 0.00us
+  Time-averaged per-uplink occupancy (removes instantaneous-min bias):
+    reps_f0  POD0 16 uplinks: min-of-means 0.57us  max 3.92us  mean 2.56us
+    reps_f16 POD0 16 uplinks: min-of-means 0.50us  max 3.97us  mean 2.46us  (NOT higher than baseline)
+
+Congestion IS present but does not appear as a queue floor:
+  goodput (New data pkts in 2ms): 718511 (f0) -> 685374 (f8, -4.6%) -> 650375 (f16, -9.5%)
+  trims (NACKs):                  102 (f0)    -> 2476 (f8, 24x)      -> 2879 (f16, 28x)
+
+Interpretation: REPS reroutes around degraded uplinks AND trimming + delay-based NSCC
+absorb the asymmetry (excess becomes header-trims + sender pace-down), so the 1xBDP
+buffer never builds a standing C_cc floor. The irreducible congestion lives in
+goodput-deficit / trim-rate space, not queue-occupancy space. => queue-based C_cc is
+the wrong proxy for "irreducible congestion" in a trimming network.
+
+Per plan Task 5 STOP gate: did NOT run the queue-based matrix. Paused for user decision
+on metric/direction (queue-floor C_cc degenerates; trim/goodput-based C_cc is promising).
+Budget actuals: ~27-31s wall per run, 97MB .dat / 57MB q.txt per run (well within budget).
