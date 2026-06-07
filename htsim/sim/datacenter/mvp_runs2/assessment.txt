@@ -1,0 +1,77 @@
+PRISM Motivation Redesign — Phase-2 Assessment (2026-06-07)
+==========================================================
+Scenario: 128-flow cross-pod permutation (each host i -> (i+64)%128, 30MB),
+fat_tree_128_1os (128 host / 8 pod, 100Gbps, 1xBDP, trimming), NSCC delay-CC.
+Asymmetry: -failed N degrades N agg->core uplinks to 25% (sequential from agg_sw0).
+Metric: queue occupancy at the agg->core (US->CS) tier, decomposed per agg-switch
+uplink bundle and per pod (pod = agg//4): C_spray=max-min, C_cc=min over the bundle.
+Sampling 2us, steady window [500,1500]us (n=501). LB: REPS vs OBLIVIOUS.
+
+NOTE (tooling correction): an initial pass used -strat reps/oblivious, which are NOT
+LB-algo values (-strat sets route strategy) and silently fell back to the default MIXED
+LB, making all runs identical. Fixed to -load_balancing_algo; numbers below are the
+corrected runs (LB lines confirmed: "Load balancing algorithm set to reps/oblivious").
+
+RESULTS (steady window)
+-----------------------
+run        agg0 C_spray   POD0 C_spray   POD0 C_cc(med)   goodput(pkts/2ms)   trims(NACK)
+reps_f0       6.56us         8.55us          0.00us            700373               334
+reps_f8       8.08us        10.15us          0.00us            652282 (-6.9%)      4477
+reps_f16      8.36us         9.70us          0.00us            636220 (-9.2%)      2820
+obl_f0        1.69us        13.37us          0.00us            680855              3760
+obl_f16       1.92us        13.29us          0.00us            615750             5823
+(agg0 C_cc median = 0.33us = exactly 1 MTU = effectively idle; POD0 C_cc median = 0.00us.
+ Time-averaged per-uplink occupancy confirms it: reps_f16 POD0 min-of-means 0.50us, not
+ above the baseline 0.57us — the absent floor is not an instantaneous-min artifact.)
+
+CRITERIA VERDICTS (design section 6)
+------------------------------------
+(i)  irreducible C_cc floor exists?           NO  — C_cc median 0.00us (POD0) at every
+       failure level, for BOTH REPS and OBLIVIOUS. Even pod0 at 4x oversubscription
+       (failed=16) produces no standing queue floor.
+(ii) REPS C_spray << OBLIVIOUS C_spray?        PARTIAL — at POD level yes (8.6 vs 13.4us,
+       ~36% lower), so better LB reduces spray. At agg0 it inverts (6.6 vs 1.7us) only
+       because OBLIVIOUS starves agg0 and piles onto agg1 (12.8us); the per-pod lens is
+       the correct one and supports "LB reduces spray".
+(iii) C_cc invariant to LB?                     N/A — C_cc ~= 0 for both LBs; "invariant
+       at zero" is meaningless (no floor for CC to own).
+(iv) C_cc monotonic in -failed (0->8->16)?     NO  — flat ~0 throughout.
+
+CONCLUSION: 退化 (degenerate / negative).
+The queue-based congestion decomposition C = C_spray + C_cc does NOT hold in this
+modern REPS+NSCC+trimming regime. There is no irreducible queue-floor component (C_cc),
+so there is nothing for a CC mechanism to "own" that load balancing cannot reach.
+
+依据 (evidence):
+- No queue floor for either LB at any asymmetry level, robust to the instantaneous-min
+  caveat (time-averaged min-of-means stays ~0.5us = ~1 MTU, == baseline).
+- The real cost of asymmetry shows up as goodput loss (-9%) and trims (up to ~17x), i.e.
+  in goodput/trim space, NOT queue space (trimming + delay-CC cap the 1xBDP buffer).
+- Crucially, that cost is itself LB-reducible: REPS beats OBLIVIOUS on goodput AND trims
+  at every failure level (e.g. f0: 700k vs 681k goodput, 334 vs 3760 trims = 11x fewer).
+  So link-asymmetry congestion is largely LB-addressable with no clean CC-only residue.
+
+意外 (surprises):
+1. Asymmetry barely perturbs the queue metrics at all (C_spray f0 ~= f16; C_cc ~= 0
+   always). The variable that was supposed to drive the decomposition (link failure)
+   moves goodput/trims, not queues.
+2. Most of C_spray is REPS's own packet-spray transient imbalance, present even at
+   failed=0 (POD0 8.6us with zero failures), not asymmetry-induced.
+3. The per-agg bundle metric is misleading under a non-adaptive LB (OBLIVIOUS starves
+   agg0 -> low intra-agg0 spread despite high pod-level imbalance). Per-pod is the
+   faithful "interchangeable path set" lens here.
+
+下一步建议 (next steps) — NOT entering PRISM implementation (conclusion != 成立):
+- If the question is pursued further, the only place an "irreducible" component could
+  live is goodput-deficit / trim-rate space, not queue space; that would require
+  per-flow/per-path trim & goodput logging (-log sink/flow_events) and a fresh metric
+  design. But the current goodput/trim numbers already show REPS reduces that cost too,
+  so the expectation remains negative.
+- Before any positive claim, replicate across multiple seeds and a second scenario
+  (e.g. incast, other permutations) to rule out single-run coincidence.
+- Reconsider whether a queue-decomposition framing is appropriate at all for a trimming
+  transport, where congestion is expressed as loss/rate rather than standing queue.
+
+SCOPE/CAVEATS: single seed per config; one topology; one traffic pattern; measurement
+only (no C++ changes); no performance claims about any PRISM mechanism. Budget actuals:
+~25-31s wall and ~97MB raw log per run; full set ran well within budget.
