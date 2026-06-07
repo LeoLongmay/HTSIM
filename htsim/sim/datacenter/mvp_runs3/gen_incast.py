@@ -8,6 +8,8 @@ import sys
 
 def build(n=32, dest=0, size=20_000_000, nodes=128, hpp=16):
     dest_pod = dest // hpp
+    if dest >= nodes:
+        raise ValueError(f"dest {dest} >= nodes {nodes}")
     senders = [h for h in range(nodes) if h // hpp != dest_pod][:n]
     if len(senders) != n:
         raise ValueError(f"need {n} senders outside pod{dest_pod}, only {len(senders)} available")
@@ -23,7 +25,8 @@ def main():
     nodes = int(sys.argv[5]) if len(sys.argv) > 5 else 128
     hpp = int(sys.argv[6]) if len(sys.argv) > 6 else 16
     text, senders = build(n, dest, size, nodes, hpp)
-    open(out, "w").write(text)
+    with open(out, "w") as fh:
+        fh.write(text)
     print(f"wrote {out}: {n} senders {senders[0]}..{senders[-1]} -> host{dest} (pod{dest//hpp}), size {size}")
 
 if __name__ == "__main__":

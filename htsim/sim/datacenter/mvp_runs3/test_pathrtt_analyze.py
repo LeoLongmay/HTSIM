@@ -41,8 +41,31 @@ def test_steady_stats():
     assert s["n"]==2 and abs(s["mean"]-2.0)<1e-9 and abs(s["median"]-2.0)<1e-9, s
     print("ok steady_stats")
 
+def test_p95_nearest_rank():
+    times = [500.0 + i for i in range(20)]   # all inside [500,1500]
+    series = list(range(20))                  # sorted values 0..19
+    s = A.steady_stats(times, series, 500.0, 1500.0)
+    assert s["n"] == 20, s
+    assert s["p95"] == 18, s   # nearest-rank p95 of 0..19 = ceil(0.95*20)-1 = index 18
+
+def test_single_path_zero_spray():
+    rows = [(1000,0,10,100),(12000,0,10,150)]   # flow 0, ONE path (10)
+    import tempfile, os
+    f = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False)
+    for r in rows: f.write(",".join(str(x) for x in r) + "\n")
+    f.close()
+    data = A.parse_csv(f.name); os.unlink(f.name)
+    mins = A.rtt_min_per_path(data)
+    t, cs, cc = A.decompose(data, mins, flow_id=0, bin_ns=10000, t0=0, t1=20000)
+    # bin0: latest 100 -> q=0; bin1: latest 150 -> q=50. single path => spray always 0.
+    assert cs == [0, 0], cs
+    assert cc == [0, 50], cc
+    print("ok single-path zero spray")
+
 if __name__ == "__main__":
     test_rtt_min_per_path()
     test_decompose_bins_and_carryforward()
     test_steady_stats()
+    test_p95_nearest_rank()
+    test_single_path_zero_spray()
     print("ALL PASS")

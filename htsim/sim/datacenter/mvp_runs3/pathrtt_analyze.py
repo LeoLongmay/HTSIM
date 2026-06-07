@@ -4,7 +4,7 @@ where q_i = (latest raw_rtt on path i) - (historical min raw_rtt on path i), per
 Reads the PRISM_PATHRTT CSV: time_ns,flow_id,path_id,raw_rtt_ns
 Usage: python3 pathrtt_analyze.py <tag> [<tag> ...]   (reads mvp_runs3/<tag>.pathrtt.csv)
 """
-import sys, os, collections
+import sys, os, collections, math
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -72,7 +72,7 @@ def steady_stats(times_us, series, lo=WIN[0], hi=WIN[1]):
         return {"mean": 0.0, "median": 0.0, "p95": 0.0, "n": 0}
     n = len(w)
     return {"mean": sum(w)/n, "median": (w[(n-1)//2]+w[n//2])/2,
-            "p95": w[min(n-1, int(0.95*n))], "n": n}
+            "p95": w[min(n - 1, max(0, math.ceil(0.95 * n) - 1))], "n": n}
 
 def representative_flow(rows):
     """flow_id with the most RTT samples (best per-path statistics)."""
@@ -81,6 +81,9 @@ def representative_flow(rows):
 
 def analyze_tag(tag):
     rows = parse_csv(os.path.join(HERE, f"{tag}.pathrtt.csv"))
+    if not rows:
+        print(f"{tag}: WARNING empty CSV (run may have failed) — skipping", file=sys.stderr)
+        return None
     mins = rtt_min_per_path(rows)
     flow = representative_flow(rows)
     t_ns, cs_ns, cc_ns = decompose(rows, mins, flow)
@@ -89,17 +92,17 @@ def analyze_tag(tag):
     cc_us = [x/1000.0 for x in cc_ns]
     cs_s = steady_stats(t_us, cs_us)
     cc_s = steady_stats(t_us, cc_us)
+    npaths = len({p for (f, p) in mins if f == flow})
 
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(t_us, cs_us, label="C_spray = max-min", linewidth=1.0)
     ax.plot(t_us, cc_us, label="C_cc = min", linewidth=1.0, linestyle="--")
     ax.axvspan(WIN[0], WIN[1], color="grey", alpha=0.12)
     ax.set_xlabel("time (us)"); ax.set_ylabel("per-path queueing delay q (us)")
-    ax.set_title(f"{tag} (flow {flow}, {len(mins)} paths)")
+    ax.set_title(f"{tag} (flow {flow}, {npaths} paths)")
     ax.legend(fontsize=8); ax.grid(alpha=0.3); ax.set_xlim(0, 2000)
     plt.tight_layout(); plt.savefig(os.path.join(HERE, f"{tag}.png"), dpi=130); plt.close()
 
-    npaths = len({p for (f, p) in mins if f == flow})
     print(f"{tag:14s} flow{flow} npaths={npaths:3d} samples={len(rows):6d}  "
           f"C_spray mean={cs_s['mean']:6.2f} p95={cs_s['p95']:6.2f}us  "
           f"C_cc mean={cc_s['mean']:6.2f} p95={cc_s['p95']:6.2f}us")
