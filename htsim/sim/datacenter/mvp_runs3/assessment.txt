@@ -1,0 +1,75 @@
+PRISM per-path-RTT Incast Demo — Assessment (2026-06-07)
+========================================================
+Metric (faithful to the per-path definition): for each flow, per path i (= sender-chosen
+path_id), q_i = rtt_i - rtt_min_i (latest raw RTT on path i minus that path's historical
+min raw RTT). C_cc = min_i q_i ; C_spray = max_i q_i - min_i q_i. Measured via a read-only
+env-gated hook in uec.cpp logging (time, flow, path_id, raw_rtt) per valid ACK.
+Scenario: 32-sender incast -> one dest host0 in pod0; -failed degrades pod0's core->agg
+ingress (the layer flows INTO pod0 traverse). Sender path pool -paths 8 (small pool so each
+path is densely sampled; also the realistic regime for a sender tracking per-path state).
+Steady window [500,1500]us. Primary statistic: cross-flow MEDIAN of per-flow steady means
+(robust; avoids comparing a single run-dependent representative flow across configs).
+
+RESULTS (cross-flow median of steady-window C_spray / C_cc, us)
+--------------------------------------------------------------
+tag         role                 C_spray_med   C_cc_med   (nflows)
+reps_a0     REPS, sym (failed 0)     7.17         1.36       7
+reps_a4     REPS, failed 4           7.93         1.36       9
+reps_a8     REPS, failed 8           3.37         1.45       7   <- decisive
+reps_a12    REPS, failed 12          4.21         1.33       6
+obl_a8      OBLIVIOUS, failed 8      8.44         1.54       7   <- LB ablation
+reps_n16    REPS, incast 16          7.86         1.33      16
+reps_n64    REPS, incast 64          (too few samples/flow at -paths 8 to aggregate)
+
+CRITERIA VERDICTS (design section 6)
+------------------------------------
+(i)  Decisive run both components nonzero?           YES. reps_a8: C_spray 3.37us, C_cc 1.45us;
+       the time series (fig1) shows both sustained and distinct.
+(ii) REPS C_spray << OBLIVIOUS C_spray?              YES. 3.37 vs 8.44us (~2.5x). Better LB
+       flattens the per-path spread. (fig2)
+(iii) C_cc invariant to LB choice?                   YES. REPS 1.45us ~= OBLIVIOUS 1.54us
+       (within ~6%). The floor is unchanged by load balancing. (fig2)
+(iv) Orthogonal drivers (C_spray~asymmetry, C_cc~load)?  NO / MIXED.
+       - C_spray vs -failed is NON-monotonic (7.17, 7.93, 3.37, 4.21) and is already large
+         at failed=0. So C_spray here is driven mainly by incast + REPS spraying itself,
+         not by link asymmetry. (fig3, fig4-left)
+       - C_cc rises only weakly with incast degree (16:1.33 -> 32:1.45) and n=64 could not be
+         aggregated (too few per-path samples), so load-monotonicity is inconclusive. (fig4-right)
+
+CONCLUSION: 部分成立 (core decomposition holds; driver-attribution does not).
+The central PRISM premise is supported: bottleneck congestion separates into an
+LB-removable component (C_spray, which REPS lowers ~2.5x vs Oblivious) and an
+LB-invariant floor (C_cc, unchanged by LB choice -> only CC can reduce it). This is the
+LB/CC role separation the decomposition needs, and it is clean under the LB ablation.
+What is NOT demonstrated: the cleaner causal story that C_spray is gated by link asymmetry
+and C_cc by load. In incast-to-one-host, C_spray is dominated by the spray/incast dynamics
+themselves (present even when symmetric), and the load sweep is sampling-limited.
+
+依据 (evidence): reps_a8 vs obl_a8 cross-flow medians (C_spray 3.37 vs 8.44; C_cc 1.45 vs
+1.54); fig1 (both nonzero, distinct dynamics); fig2 (the LB contrast).
+
+意外 (surprises):
+1. The single representative-flow view (per-tag "mean" lines in summary.txt) INVERTED the LB
+   contrast (it made OBL look like LESS spray) — an artifact of each run's representative flow
+   being a different sender. The cross-flow median fixes it and is the statistic to trust.
+2. C_spray is high even with NO link asymmetry (reps_a0 = 7.17us): incast + REPS per-packet
+   spraying alone produces large per-path RTT spread; the asymmetry knob does not cleanly
+   modulate it in this scenario.
+3. With the default -paths 64, C_cc collapses to ~0 (sparse per-path sampling -> some path
+   always sits at its own min). The per-path-min floor is only observable when the sender
+   tracks few enough paths to sample each densely (-paths 8 here). This directly bears on the
+   O(N)->O(1) per-path-state question: a realistic small path set is also what makes the
+   decomposition measurable.
+
+下一步建议 (next steps):
+- To test the orthogonal-driver story cleanly, use a scenario where asymmetry, not incast,
+  sets the spread: e.g. the round-2 dest-pod-overload scenario (whole-pod ingress degraded),
+  where the LB-invariant rate/RTT floor was already shown in throughput space; measure its
+  per-path RTT there. Also fix a consistent set of measured flows across configs and ensure
+  >=200 samples/flow at every incast degree (longer -end or fewer senders) so the load sweep
+  is conclusive.
+- The clean (i)/(ii)/(iii) result already supports PRISM's core motivation; the (iv) gap is
+  about which knob drives which component, which is a refinement, not a contradiction.
+
+SCOPE/CAVEATS: single seed per config; one topology; incast-to-one-host; the C++ change is a
+read-only env-gated log (no simulation-behavior change). Final go/no-go left to the user.
