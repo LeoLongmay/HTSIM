@@ -1,0 +1,7 @@
+*.cm
+*.csv
+*.stdout
+*.png
+*.dat
+_hooktest*
+_off*
