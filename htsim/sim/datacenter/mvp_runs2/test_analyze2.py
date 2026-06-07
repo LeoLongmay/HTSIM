@@ -52,6 +52,8 @@ def test_steady_window():
     s = A.steady_stats(times, series, 500.0, 1500.0)
     assert s["n"] == 2, s
     assert abs(s["mean"] - 2.0) < 1e-9, s
+    assert abs(s["median"] - 2.0) < 1e-9, s
+    assert abs(s["p95"] - 3.0) < 1e-9, s
     print("ok steady_stats window")
 
 if __name__ == "__main__":

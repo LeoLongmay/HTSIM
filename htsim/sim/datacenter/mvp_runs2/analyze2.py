@@ -31,7 +31,7 @@ def agg_core_groups(idmap):
     """agg_index(int) -> [queue_id,...] for US{agg}->CS{core} queues (excludes Pipe-*)."""
     groups = collections.defaultdict(list)
     for qid, name in idmap.items():
-        if name.startswith("Pipe-"):
+        if name.startswith("Pipe-"):  # redundant defense: ^US regex anchor already excludes Pipe-*; keep for clarity
             continue
         m = AGGCORE_RE.match(name)
         if m:
@@ -79,7 +79,7 @@ def steady_stats(times, series, lo=500.0, hi=1500.0):
     if not w:
         return {"mean": 0.0, "median": 0.0, "p95": 0.0, "n": 0}
     n = len(w)
-    return {"mean": sum(w) / n, "median": w[n // 2],
+    return {"mean": sum(w) / n, "median": (w[(n - 1) // 2] + w[n // 2]) / 2,
             "p95": w[min(n - 1, int(0.95 * n))], "n": n}
 
 def analyze_tag(tag, focus_aggs=(0, 1), focus_pods=(0,), win=(500.0, 1500.0)):
