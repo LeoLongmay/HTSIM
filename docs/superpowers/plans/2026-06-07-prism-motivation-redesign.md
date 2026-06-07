@@ -21,7 +21,7 @@
 - `Logged::dump_idmap()` (called at `main_uec.cpp:1103`) writes `idmap.txt` (lines `<id> <name>`) to the **process CWD** on each run — **must be copied per-run before the next run overwrites it.**
 - A queue logs only after the first packet traverses it; loggers exist on **all** tiers. Agg→core uplink queues are named `US{agg}->CS{core}(b)`; the `Pipe-US...` lines are pipes (must be excluded).
 - `-failed N` degrades N agg→core uplinks to 25% linkspeed, filled sequentially from `agg_sw 0` (links 0..3), then `agg_sw 1`, etc. So: failed=2 → agg0 has 2 degraded + 2 good (mixed); failed=4 → agg0 fully degraded; failed=8 → agg0+agg1 fully degraded; failed=16 → pod0 (agg0–3) fully degraded.
-- `-strat reps` and `-strat oblivious` are the two LB modes (confirmed from prior stdout).
+- The LB algorithm is set by **`-load_balancing_algo reps|oblivious|mixed|...`** (main_uec.cpp:223; prints "Load balancing algorithm set to …"), NOT by `-strat` (which sets the *route* strategy ecmp/adaptive/… and silently defaults to ECMP if given an unrecognized value). Route strategy is left at its ECMP default, matching round 1. (Corrected after an initial run used `-strat` and silently fell back to the default MIXED LB.)
 - Topology `fat_tree_128_1os.topo`: 128 host / 8 pod, 4 agg per pod, agg radix_up=4 (4 uplinks/agg), 32 agg → 128 agg→core uplinks. pod index = agg_index // 4.
 
 ---
