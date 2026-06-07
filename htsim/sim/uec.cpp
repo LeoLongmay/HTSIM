@@ -1046,6 +1046,22 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         pkt_size = i->second.pkt_size;
         raw_rtt = eventlist().now() - send_time;
 
+        // PRISM: read-only per-path RTT log, gated by env var PRISM_PATHRTT.
+        // No simulation-behavior change. Emits one CSV row per valid data ACK:
+        //   time_ns,flow_id,path_id,raw_rtt_ns
+        {
+            static std::ofstream* prism_pathrtt_log = [](){
+                const char* p = getenv("PRISM_PATHRTT");
+                return (p && *p) ? new std::ofstream(p) : nullptr;
+            }();
+            if (prism_pathrtt_log) {
+                (*prism_pathrtt_log) << (uint64_t)timeAsNs(eventlist().now()) << ','
+                                     << flowId() << ',' << i->second.path_id << ','
+                                     << (uint64_t)timeAsNs(raw_rtt) << '\n';
+                prism_pathrtt_log->flush();
+            }
+        }
+
         if (!pkt.is_rts()) {
             update_base_rtt(raw_rtt);
         }
