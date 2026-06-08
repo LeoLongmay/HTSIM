@@ -14,7 +14,7 @@ Data: per (config, seed) CSV at mvp_runs3/<tag>.s<seed>.pathrtt.csv, produced by
 Stats: per seed -> cross-flow median (aggregate_rows); across seeds -> mean +/- std (error bar).
 Run: python3 make_paper_figs.py   (after repro.sh has produced the data)
 """
-import os, sys, statistics
+import os, sys, statistics, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -48,6 +48,28 @@ def bprop():
 
 
 BPROP = bprop()
+
+
+def timeseries_median(csv, const_base, bin_ns=10000, tmax_us=2000, min_samples=200):
+    """Cross-flow MEDIAN per time bin of C_spray and C_cc(const) from one run's CSV.
+    Uses baseline='const': C_spray=max-min (baseline-independent), C_cc=min-const_base.
+    Bins are aligned by absolute time across flows. -> (times_us, cspray_us, ccc_us)."""
+    rows = A.parse_csv(csv)
+    mins = A.rtt_min_per_path(rows); minf = A.rtt_min_per_flow(rows)
+    counts = collections.Counter(r[1] for r in rows); t1 = tmax_us * 1000
+    cs_by_bin = collections.defaultdict(list); cc_by_bin = collections.defaultdict(list)
+    for flow, c in counts.items():
+        if c < min_samples:
+            continue
+        t_ns, cs, cc = A.decompose(rows, mins, flow, baseline="const",
+                                   rtt_min_flow=minf, const_base=const_base, t0=0, t1=t1)
+        for tt, a, b in zip(t_ns, cs, cc):
+            cs_by_bin[tt].append(a); cc_by_bin[tt].append(b)
+    bins = sorted(cs_by_bin)
+    return ([t/1000 for t in bins],
+            [statistics.median(cs_by_bin[t])/1000 for t in bins],
+            [statistics.median(cc_by_bin[t])/1000 for t in bins])
+
 
 # ---- FigA: C_cc floor vs load, LB-invariant (symmetric incast) -> need CC ----
 Ns = [16, 32, 64]
@@ -95,6 +117,41 @@ plt.title("FigC. LB only removes C_spray where path diversity exists\n"
 plt.legend(); plt.grid(alpha=0.3, axis="y")
 plt.tight_layout(); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.png", dpi=140); plt.close()
 
+# ---- FigD: REPS time series, low vs high load (asymmetric) -> LB alone limited ----
+# whole-pod overload into a partly-degraded pod (failed=12, good-path cap ~400G < 800G
+# receivers). At low load REPS dodges congestion (C_cc floor ~0); at high load it cannot
+# (floor sustained > 0) -> spraying alone is exhausted, CC must slow the sender.
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(12, 4.2), sharey=True)
+for ax, n, tag in ((axL, 4, "low load (4 senders): LB alone handles it"),
+                   (axR, 32, "high load (32 senders): LB exhausted")):
+    csv = os.path.join(HERE, f"mp_load_reps_n{n}.s13.pathrtt.csv")
+    if os.path.exists(csv):
+        t, cs, cc = timeseries_median(csv, const_base=BPROP)
+        ax.plot(t, cs, label="C_spray = max_i q_i - min_i q_i (LB-removable)")
+        ax.plot(t, cc, "--", label="C_cc = min_i q_i vs true floor (CC-only)")
+    ax.axvspan(500, 1500, color="grey", alpha=0.12)
+    ax.set_xlabel("time (us)"); ax.set_title(tag); ax.grid(alpha=0.3); ax.set_xlim(0, 2000)
+axL.set_ylabel("per-path queueing delay (us)\ncross-flow median"); axL.legend(fontsize=8)
+fig.suptitle("FigD. REPS under asymmetry (failed=12): floor C_cc stays ~0 at low load but "
+             "emerges at high load -> spraying alone is limited, CC is required")
+plt.tight_layout(); plt.savefig(f"{HERE}/figD_reps_floor_emerges.png", dpi=140); plt.close()
+
+# ---- FigE: C_cc floor vs load under REPS+asymmetry -> the 0->positive transition ----
+loads = [2, 4, 8, 16, 32]
+e_cc = [ms(f"mp_load_reps_n{n}", "const", WIN_WP, "ccc_med", const_base=BPROP) for n in loads]
+e_sp = [ms(f"mp_load_reps_n{n}", "global", WIN_WP, "cspray_med") for n in loads]
+plt.figure(figsize=(7, 4.5))
+plt.errorbar(loads, [m for m,_,_ in e_cc], yerr=[s for _,s,_ in e_cc], fmt="D-", capsize=4,
+             label="C_cc (irreducible floor, CC-only)")
+plt.errorbar(loads, [m for m,_,_ in e_sp], yerr=[s for _,s,_ in e_sp], fmt="o--", capsize=4,
+             label="C_spray (LB-removable)")
+plt.xlabel("offered load (number of senders)")
+plt.ylabel("cross-flow median (us)")
+plt.title("FigE. REPS + asymmetry (failed=12): C_cc floor rises from ~0 to >0 with load\n"
+          "-> LB suffices at low load; beyond good-path capacity only CC can reduce the floor")
+plt.legend(); plt.grid(alpha=0.3); plt.xticks(loads); plt.ylim(bottom=0)
+plt.tight_layout(); plt.savefig(f"{HERE}/figE_floor_vs_load_reps_asym.png", dpi=140); plt.close()
+
 # ---- console summary (for README / verification) ----
 def fmt(t): return "n/a" if t[0] is None else f"{t[0]:.2f}+/-{t[1]:.2f}(n={t[2]})"
 print(f"B_prop = {BPROP} ns ({BPROP/1000:.2f} us)")
@@ -107,4 +164,8 @@ for f, r, o in zip(fails, b_reps, b_obl):
 print("FigC C_spray(global), symmetric:")
 print(f"  incast  N=32: REPS {fmt(ic_r)}  OBL {fmt(ic_o)}")
 print(f"  whole-pod f0: REPS {fmt(wp_r)}  OBL {fmt(wp_o)}")
-print("wrote figA_floor_vs_load.png figB_spray_lb_removable.png figC_lb_depends_on_bottleneck.png")
+print("FigE C_cc(const) vs load (REPS, failed=12):")
+for n, c, s in zip(loads, e_cc, e_sp):
+    print(f"  n={n:2d}: C_cc {fmt(c)}  C_spray {fmt(s)}")
+print("wrote figA_floor_vs_load.png figB_spray_lb_removable.png figC_lb_depends_on_bottleneck.png "
+      "figD_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png")

@@ -16,13 +16,16 @@ bash mvp_runs3/repro.sh
 
 产物:`figA_floor_vs_load.png`、`figB_spray_lb_removable.png`、`figC_lb_depends_on_bottleneck.png`。
 
-## 三张图说明(及诚实作用域)
+## 五张图说明(及诚实作用域)
 
 论点:**CC 与 spraying 两种机制都必要**(因此值得协同设计)。
 
 - **figA**:对称 incast,`C_cc`(真实传播基线)随 incast 度 N 上升,且 **REPS 与 OBL 几乎重合** → floor 是 LB 消不掉、随负载增长的不可约拥塞 → **必须 CC**。
 - **figB**:whole-pod overload(多目的 host,有路径多样性),`C_spray` 在每个非对称档 **REPS < OBL** → 好 LB 能消除可重路由的不均衡 → **必须 spraying/LB**。
 - **figC**:同为对称负载,**单主机 incast(共享末跳、无路径多样性)REPS≈OBL,LB 帮不上**;**whole-pod(路径多样)REPS<OBL,LB 有效** → 机制是否有效取决于瓶颈条件 → **需要按条件协同两种机制**。
+- **figD**(时序,2 联面板):**REPS + 非对称(failed=12)**,左=低负载(4 发送端)、右=高负载(32 发送端),画 C_spray(t) 与 C_cc(const, t) 跨流中位数。**低负载 C_cc≈0(REPS 绕开降速路径,LB 独力够用);高负载 C_cc 持续 >0(换路到极限,floor 留存)** → 仅靠 spraying 有上限,**必须配合 CC 降速**。
+- **figE**:同场景的负载扫描,`C_cc(const)` 随发送端数从 ~1.2µs(低负载)升到 ~5.3µs(高负载,误差棒收紧)→ **超过好路径容量后,只有 CC 能压低 floor**。量化 figD 的转变。
+  - 容量算账:`failed=12` 降 US0–US2(各剩 100G)、US3 健康(400G)→ 好路径容量 ≈400G;8 接收端 =800G。需求 <400G 时 REPS 全走 US3(C_cc≈0),>400G 时被迫外溢/好路径饱和(C_cc>0)。**单流到单 host 永远逼不出(被接收端 100G 封顶),必须多流聚合需求超过好路径容量。**
 
 **作用域(必须在论文里写清)**:以上仅论证"**两种机制各自必要**";**未**证明"**联合 co-design 优于各自独立运行**"——本实验没有测量联合方案的性能,不对 PRISM 机制性能做任何声称。
 
@@ -49,6 +52,8 @@ bash mvp_runs3/repro.sh
 | figA | 对称 incast N∈{16,32,64} | 8 ms | [1000,7000] | `mp_inc_{reps,obl}_n{N}` | `const`(C_cc) |
 | figB | whole-pod overload f∈{0,4,8,12} | 2 ms | [500,1500] | `mp_wp_{reps,obl}_f{F}` | `global`(C_spray) |
 | figC | incast N=32 vs whole-pod f=0(均对称) | 8/2 ms | 同上 | `mp_inc_*_n32` / `mp_wp_*_f0` | `global`(C_spray) |
+| figD | REPS whole-pod failed=12,低/高负载(4 vs 32 发送端) | 2 ms | [500,1500] | `mp_load_reps_n{4,32}`(时序用 seed 13) | `const`(C_cc)/`global`(C_spray) |
+| figE | REPS whole-pod failed=12,负载扫描 N∈{2,4,8,16,32} 发送端 | 2 ms | [500,1500] | `mp_load_reps_n{N}` | `const`(C_cc) |
 
 真实传播 floor `B_prop` = `mp_inc_reps_n1.s13` 的 min raw RTT(空载单流;拓扑决定、与种子无关)。
 

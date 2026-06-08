@@ -46,6 +46,15 @@ for s in $SEEDS; do
   done
 done
 
-echo "== 5. figures =="
+echo "== 5. REPS load sweep under asymmetry (failed=12) for figD/figE, END=2, seeds $SEEDS =="
+for n in 2 4 8 16 32; do
+  python3 mvp_runs3/gen_overload.py mvp_runs3/overload_n$n.cm $n 0 8
+  for s in $SEEDS; do
+    SEED=$s END=2 bash mvp_runs3/run_one.sh reps 12 mp_load_reps_n$n.s$s mvp_runs3/overload_n$n.cm
+  done
+done
+
+echo "== 6. figures =="
 python3 mvp_runs3/make_paper_figs.py
 echo "== done: figA_floor_vs_load.png figB_spray_lb_removable.png figC_lb_depends_on_bottleneck.png =="
+echo "==       figD_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png =="
