@@ -152,6 +152,25 @@ plt.title("FigE. REPS + asymmetry (failed=12): C_cc floor rises from ~0 to >0 wi
 plt.legend(); plt.grid(alpha=0.3); plt.xticks(loads); plt.ylim(bottom=0)
 plt.tight_layout(); plt.savefig(f"{HERE}/figE_floor_vs_load_reps_asym.png", dpi=140); plt.close()
 
+# ---- FigF: CC strength sets the floor (REPS, failed=12, high load) -> only CC reduces C_cc ----
+# Same high-load asymmetric scenario as figD-right, but sweep NSCC's target_q_delay (CC
+# aggressiveness). C_cc(const) tracks the target -> the floor IS governed by CC, and
+# tightening CC drives it toward 0. C_spray (LB's domain) is not reduced by tightening CC.
+TQDS = [2, 4, 6, 8, 12, 16]
+f_cc = [ms(f"mp_cc_tqd{q}", "const",  WIN_WP, "ccc_med", const_base=BPROP) for q in TQDS]
+f_sp = [ms(f"mp_cc_tqd{q}", "global", WIN_WP, "cspray_med") for q in TQDS]
+plt.figure(figsize=(7, 4.5))
+plt.errorbar(TQDS, [m for m,_,_ in f_cc], yerr=[s for _,s,_ in f_cc], fmt="D-",  capsize=4,
+             label="C_cc (irreducible floor)")
+plt.errorbar(TQDS, [m for m,_,_ in f_sp], yerr=[s for _,s,_ in f_sp], fmt="o--", capsize=4,
+             label="C_spray (LB-removable)")
+plt.xlabel("NSCC target_q_delay (us)  [larger = less aggressive CC]")
+plt.ylabel("cross-flow median (us)")
+plt.title("FigF. CC strength sets the floor: C_cc tracks NSCC target_q_delay\n"
+          "(REPS, failed=12, high load) -> tightening CC drives the floor toward 0")
+plt.legend(); plt.grid(alpha=0.3); plt.xticks(TQDS); plt.ylim(bottom=0)
+plt.tight_layout(); plt.savefig(f"{HERE}/figF_cc_strength_sets_floor.png", dpi=140); plt.close()
+
 # ---- console summary (for README / verification) ----
 def fmt(t): return "n/a" if t[0] is None else f"{t[0]:.2f}+/-{t[1]:.2f}(n={t[2]})"
 print(f"B_prop = {BPROP} ns ({BPROP/1000:.2f} us)")
@@ -167,5 +186,8 @@ print(f"  whole-pod f0: REPS {fmt(wp_r)}  OBL {fmt(wp_o)}")
 print("FigE C_cc(const) vs load (REPS, failed=12):")
 for n, c, s in zip(loads, e_cc, e_sp):
     print(f"  n={n:2d}: C_cc {fmt(c)}  C_spray {fmt(s)}")
+print("FigF C_cc(const) vs CC target_q_delay (REPS, failed=12, high load):")
+for q, c, s in zip(TQDS, f_cc, f_sp):
+    print(f"  tqd={q:2d}us: C_cc {fmt(c)}  C_spray {fmt(s)}")
 print("wrote figA_floor_vs_load.png figB_spray_lb_removable.png figC_lb_depends_on_bottleneck.png "
-      "figD_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png")
+      "figD_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png figF_cc_strength_sets_floor.png")

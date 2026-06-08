@@ -54,7 +54,14 @@ for n in 2 4 8 16 32; do
   done
 done
 
-echo "== 6. figures =="
+echo "== 6. CC-strength sweep (REPS failed=12, high load, vary target_q_delay) for figF, seeds $SEEDS =="
+for q in 2 4 6 8 12 16; do
+  for s in $SEEDS; do
+    SEED=$s TQD=$q END=2 bash mvp_runs3/run_one.sh reps 12 mp_cc_tqd$q.s$s mvp_runs3/overload_n32.cm
+  done
+done
+
+echo "== 7. figures =="
 python3 mvp_runs3/make_paper_figs.py
 echo "== done: figA_floor_vs_load.png figB_spray_lb_removable.png figC_lb_depends_on_bottleneck.png =="
-echo "==       figD_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png =="
+echo "==       figD_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png figF_cc_strength_sets_floor.png =="

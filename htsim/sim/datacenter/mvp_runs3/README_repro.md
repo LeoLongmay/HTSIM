@@ -16,7 +16,7 @@ bash mvp_runs3/repro.sh
 
 产物:`figA_floor_vs_load.png`、`figB_spray_lb_removable.png`、`figC_lb_depends_on_bottleneck.png`。
 
-## 五张图说明(及诚实作用域)
+## 六张图说明(及诚实作用域)
 
 论点:**CC 与 spraying 两种机制都必要**(因此值得协同设计)。
 
@@ -26,6 +26,7 @@ bash mvp_runs3/repro.sh
 - **figD**(时序,2 联面板):**REPS + 非对称(failed=12)**,左=低负载(4 发送端)、右=高负载(32 发送端),画 C_spray(t) 与 C_cc(const, t) 跨流中位数。**低负载 C_cc≈0(REPS 绕开降速路径,LB 独力够用);高负载 C_cc 持续 >0(换路到极限,floor 留存)** → 仅靠 spraying 有上限,**必须配合 CC 降速**。
 - **figE**:同场景的负载扫描,`C_cc(const)` 随发送端数从 ~1.2µs(低负载)升到 ~5.3µs(高负载,误差棒收紧)→ **超过好路径容量后,只有 CC 能压低 floor**。量化 figD 的转变。
   - 容量算账:`failed=12` 降 US0–US2(各剩 100G)、US3 健康(400G)→ 好路径容量 ≈400G;8 接收端 =800G。需求 <400G 时 REPS 全走 US3(C_cc≈0),>400G 时被迫外溢/好路径饱和(C_cc>0)。**单流到单 host 永远逼不出(被接收端 100G 封顶),必须多流聚合需求超过好路径容量。**
+- **figF**:固定 figD 高负载场景(REPS,failed=12,32 发送端),扫 **NSCC `target_q_delay`(CC 激进程度)**。`C_cc(const)` 随 target 单调升(2µs→**0.33µs**,16µs→**5.49µs**)、`C_spray` 基本不随之降 → **floor 由 CC 直接控制,收紧 CC 把 floor 压向 0;C_spray 不是 CC 的活(是 LB 的)**。这把"只能 CC 消 C_cc"从推理变成**实测**。
 
 **作用域(必须在论文里写清)**:以上仅论证"**两种机制各自必要**";**未**证明"**联合 co-design 优于各自独立运行**"——本实验没有测量联合方案的性能,不对 PRISM 机制性能做任何声称。
 
@@ -54,6 +55,7 @@ bash mvp_runs3/repro.sh
 | figC | incast N=32 vs whole-pod f=0(均对称) | 8/2 ms | 同上 | `mp_inc_*_n32` / `mp_wp_*_f0` | `global`(C_spray) |
 | figD | REPS whole-pod failed=12,低/高负载(4 vs 32 发送端) | 2 ms | [500,1500] | `mp_load_reps_n{4,32}`(时序用 seed 13) | `const`(C_cc)/`global`(C_spray) |
 | figE | REPS whole-pod failed=12,负载扫描 N∈{2,4,8,16,32} 发送端 | 2 ms | [500,1500] | `mp_load_reps_n{N}` | `const`(C_cc) |
+| figF | REPS whole-pod failed=12,32 发送端,扫 CC `target_q_delay`∈{2,4,6,8,12,16}µs | 2 ms | [500,1500] | `mp_cc_tqd{Q}`(env `TQD`) | `const`(C_cc)/`global`(C_spray) |
 
 真实传播 floor `B_prop` = `mp_inc_reps_n1.s13` 的 min raw RTT(空载单流;拓扑决定、与种子无关)。
 
