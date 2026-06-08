@@ -132,13 +132,14 @@ def analyze_tag(tag, baseline="own"):
           f"C_cc mean={cc_s['mean']:6.2f} p95={cc_s['p95']:6.2f}us")
     return {"tag": tag, "cspray": cs_s, "ccc": cc_s, "flow": flow, "npaths": npaths}
 
-def aggregate_tag(tag, min_samples=200, baseline="own", win=WIN, const_base=None):
-    """Cross-flow robust statistic. For every flow with >= min_samples ACKs INSIDE the
-    steady window `win`, compute its steady-window mean C_spray and C_cc; return the
-    MEDIAN across flows. baseline selects 'own' (per-path min) or 'global' (flow floor).
+def aggregate_rows(rows, min_samples=200, baseline="own", win=WIN, const_base=None):
+    """Cross-flow robust statistic from ALREADY-PARSED rows (path-agnostic core of
+    aggregate_tag; used by multi-seed paper aggregation). For every flow with
+    >= min_samples ACKs INSIDE the steady window `win`, compute its steady-window mean
+    C_spray and C_cc; return the MEDIAN across flows. baseline selects 'own' (per-path
+    min), 'global' (per-flow floor) or 'const' (fixed const_base floor).
     Returns {nflows, cspray_med, ccc_med} or None if no eligible flow."""
     import statistics
-    rows = parse_csv(os.path.join(HERE, f"{tag}.pathrtt.csv"))
     if not rows:
         return None
     mins = rtt_min_per_path(rows)
@@ -161,6 +162,11 @@ def aggregate_tag(tag, min_samples=200, baseline="own", win=WIN, const_base=None
     return {"nflows": len(cs_list),
             "cspray_med": statistics.median(cs_list),
             "ccc_med": statistics.median(cc_list)}
+
+def aggregate_tag(tag, min_samples=200, baseline="own", win=WIN, const_base=None):
+    """Thin wrapper over aggregate_rows: parse mvp_runs3/<tag>.pathrtt.csv first."""
+    return aggregate_rows(parse_csv(os.path.join(HERE, f"{tag}.pathrtt.csv")),
+                          min_samples, baseline, win, const_base)
 
 if __name__ == "__main__":
     for tag in sys.argv[1:]:

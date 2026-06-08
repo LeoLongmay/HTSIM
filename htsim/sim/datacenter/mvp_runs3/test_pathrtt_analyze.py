@@ -155,6 +155,27 @@ def test_const_requires_base():
         pass
     print("ok const requires base")
 
+def test_aggregate_rows_matches_tag():
+    # aggregate_rows(parsed rows) must equal aggregate_tag(file) on the same data.
+    rows = [(400000,0,10,100000),(500000,0,10,150000),(1000000,0,10,150000),
+            (400000,0,20,100000),(500000,0,20,190000),(1000000,0,20,190000),
+            (400000,1,30,100000),(500000,1,30,130000),(1000000,1,30,130000),
+            (400000,1,40,100000),(500000,1,40,170000),(1000000,1,40,170000)]
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "_testaggrows.pathrtt.csv")
+    with open(path, "w") as f:
+        for r in rows:
+            f.write(",".join(str(x) for x in r) + "\n")
+    try:
+        direct = A.aggregate_rows(A.parse_csv(path), min_samples=1)
+        viatag = A.aggregate_tag("_testaggrows", min_samples=1)
+        assert direct == viatag, (direct, viatag)
+        assert direct["nflows"] == 2 and abs(direct["cspray_med"] - 40.0) < 1e-9, direct
+        assert A.aggregate_rows([], min_samples=1) is None
+    finally:
+        os.unlink(path)
+    print("ok aggregate_rows matches tag")
+
 if __name__ == "__main__":
     test_rtt_min_per_path()
     test_decompose_bins_and_carryforward()
@@ -167,4 +188,5 @@ if __name__ == "__main__":
     test_global_vs_own_structural_slow()
     test_const_baseline()
     test_const_requires_base()
+    test_aggregate_rows_matches_tag()
     print("ALL PASS")

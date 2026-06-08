@@ -1,0 +1,51 @@
+#!/bin/bash
+# Reproduce the paper motivation figures (figA/figB/figC) from scratch.
+#
+# Requirements:
+#   - htsim_uec built from a commit that contains the read-only PRISM_PATHRTT logging
+#     hook in htsim/sim/uec.cpp (added in commit 32fde90). Build from sim/ with:
+#         cmake -S . -B build && cmake --build build -j
+#     (the symlink ./htsim_uec points at build/datacenter/htsim_uec)
+#   - python3 + matplotlib
+#
+# Determinism: every run passes an explicit -seed; htsim is deterministic given
+# (seed, inputs) -- reruns are byte-identical. We average over 5 seeds (13..17) and
+# plot mean +/- std error bars. Traffic generators are deterministic (no RNG).
+#
+# Usage:  bash mvp_runs3/repro.sh
+set -euo pipefail
+DC="$(cd "$(dirname "$0")/.." && pwd)"   # .../sim/datacenter
+cd "$DC"
+SEEDS="13 14 15 16 17"
+
+[ -x ./htsim_uec ] || { echo "ERROR: ./htsim_uec missing. Build it: (cd .. && cmake -S . -B build && cmake --build build -j)"; exit 1; }
+
+echo "== 1. deterministic traffic matrices =="
+python3 mvp_runs3/gen_incast.py   mvp_runs3/incast_n1.cm  1  0
+python3 mvp_runs3/gen_incast.py   mvp_runs3/incast_n16.cm 16 0
+python3 mvp_runs3/gen_incast.py   mvp_runs3/incast_n32.cm 32 0
+python3 mvp_runs3/gen_incast.py   mvp_runs3/incast_n64.cm 64 0
+python3 mvp_runs3/gen_overload.py mvp_runs3/overload.cm   32 0 8
+
+echo "== 2. propagation floor (uncontended N=1, deterministic -> seed 13 only) =="
+SEED=13 END=8 bash mvp_runs3/run_one.sh reps 0 mp_inc_reps_n1.s13 mvp_runs3/incast_n1.cm
+
+echo "== 3. incast (symmetric, vary load) REPS & OBL, END=8, seeds $SEEDS =="
+for s in $SEEDS; do
+  for n in 16 32 64; do
+    SEED=$s END=8 bash mvp_runs3/run_one.sh reps      0 mp_inc_reps_n$n.s$s mvp_runs3/incast_n$n.cm
+    SEED=$s END=8 bash mvp_runs3/run_one.sh oblivious 0 mp_inc_obl_n$n.s$s  mvp_runs3/incast_n$n.cm
+  done
+done
+
+echo "== 4. whole-pod overload (vary asymmetry) REPS & OBL, END=2, seeds $SEEDS =="
+for s in $SEEDS; do
+  for f in 0 4 8 12; do
+    SEED=$s END=2 bash mvp_runs3/run_one.sh reps      $f mp_wp_reps_f$f.s$s mvp_runs3/overload.cm
+    SEED=$s END=2 bash mvp_runs3/run_one.sh oblivious $f mp_wp_obl_f$f.s$s  mvp_runs3/overload.cm
+  done
+done
+
+echo "== 5. figures =="
+python3 mvp_runs3/make_paper_figs.py
+echo "== done: figA_floor_vs_load.png figB_spray_lb_removable.png figC_lb_depends_on_bottleneck.png =="
