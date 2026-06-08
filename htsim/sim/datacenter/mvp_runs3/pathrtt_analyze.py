@@ -60,6 +60,8 @@ def decompose(rows, rtt_min, flow_id, bin_ns=BIN_NS, t0=None, t1=None,
     if t1 is None:
         t1 = fr[-1][0] + 1
     if baseline == "global":
+        if rtt_min_flow is None:
+            raise ValueError("baseline='global' requires rtt_min_flow")
         base = rtt_min_flow[flow_id]
         base_of = lambda p: base
     else:
@@ -134,18 +136,18 @@ def aggregate_tag(tag, min_samples=200, baseline="own", win=WIN):
     rows = parse_csv(os.path.join(HERE, f"{tag}.pathrtt.csv"))
     if not rows:
         return None
-    mp = rtt_min_per_path(rows)
-    mf = rtt_min_per_flow(rows)
+    mins = rtt_min_per_path(rows)
+    minf = rtt_min_per_flow(rows)
     inwin = collections.Counter(f for (t, f, p, r) in rows
-                                if win[0] <= t / 1000.0 <= win[1])
+                                if win[0] <= t/1000.0 <= win[1])
     cs_list, cc_list = [], []
     for flow in inwin:
         if inwin[flow] < min_samples:
             continue
-        t_ns, cs_ns, cc_ns = decompose(rows, mp, flow, baseline=baseline, rtt_min_flow=mf)
-        t_us = [t / 1000.0 for t in t_ns]
-        ssp = steady_stats(t_us, [x / 1000.0 for x in cs_ns], win[0], win[1])
-        scc = steady_stats(t_us, [x / 1000.0 for x in cc_ns], win[0], win[1])
+        t_ns, cs_ns, cc_ns = decompose(rows, mins, flow, baseline=baseline, rtt_min_flow=minf)
+        t_us = [t/1000.0 for t in t_ns]
+        ssp = steady_stats(t_us, [x/1000.0 for x in cs_ns], win[0], win[1])
+        scc = steady_stats(t_us, [x/1000.0 for x in cc_ns], win[0], win[1])
         if ssp["n"] > 0:
             cs_list.append(ssp["mean"]); cc_list.append(scc["mean"])
     if not cs_list:
