@@ -12,6 +12,11 @@
 
 **核心命题被支持,但"驱动归因"没做干净。** 在 per-path RTT 指标 + incast 场景下:分解的两个分量同时非零(判据 i),且 **REPS 的 C_spray ≪ Oblivious(LB 能压平 spread,判据 ii)**、**C_cc 对 LB 不敏感(floor 只能靠 CC,判据 iii)** —— 这就是 PRISM 要的 LB/CC 职责分离。**未**做干净的是"C_spray 由非对称驱动、C_cc 由负载驱动"这条因果链(判据 iv),原因见 §6、§7。
 
+> **Round 4 更新(2026-06-08,见 §9):** 加了公共基线(`global`)和真实传播基线(`const`)两种指标 + 两个隔离场景后,结论被**细化但未改变**:
+> - **LB 职责分离更干净了** —— **REPS C_spray < Oblivious 在每个非对称档都成立**(fig5),`C_spray` 确实可由 LB 消除;`C_cc` 只有用**真实传播基线**才测得出,且**随真实负载上升**(fig8)。
+> - **判据 (iv) 仍不成立** —— `C_spray` 被**逐包喷洒 + NSCC 动态主导**(对称 f0 时就有 ~9µs),非对称只弱、非单调地叠加;且**非对称会节流负载**(NSCC 降速 → 最快路径变空 → C_cc 反而降,fig7),非对称与负载**纠缠**,无法正交归因。
+> - **新发现(基线污染):** per-flow 的 min 基线(`own`/`global`)在**持续拥塞**下会被污染(流根本观测不到空网),`C_cc` 被错误地算成**随负载下降**;只有固定的真实传播基线 `const` 才显出 floor 随负载上升。
+
 ---
 
 ## 1. 三轮实验的演进
@@ -134,14 +139,36 @@ C_spray  = max_i q_i − min_i q_i    # 最堵 − 最空(路径间不均衡)
 
 ---
 
-## 9. 下一步(明天的起点)
+## 9. Round 4 执行结果(2026-06-08,补齐 (iv) 的尝试)
 
-**目标:把判据 (iv) 做干净,验证"非对称→C_spray"直觉。** 计划:
-1. **换场景**:用 Round 2 的**整-pod 入口过载**(非对称就是瓶颈,无 incast 最后一跳遮挡)——那里 LB-invariant 的 floor 在吞吐空间已很干净。
-2. **改基线**:加一个**公共基线**版的 `q_i = rtt_i − 全局min`(与现有 per-path-min 版并列对比)。
-3. **固定 LB**:补 `obl_a0`(Oblivious 对称)对比已有 `obl_a8`(Oblivious 非对称),预计清晰复现"对称小、不对称大"。
-4. **修采样**:保证每个 incast 度(含 N=64)每条流 ≥200 样本(延长 `-end` 或减发送端),让负载扫描可下结论。
-5. 预测:在 (公共基线 + Oblivious + 整-pod 过载) 下,C_spray 会随非对称单调增、C_cc 随负载单调增 → 补齐 (iv)。
+按 §9 原计划执行了:① 公共基线 `global` + 真实传播基线 `const`;② 场景 A = 整-pod 过载(32 发送端→pod0 的 8 host)验 iv-a;③ 场景 B = incast 度扫描(对称,N=16/32/64,`-end 8`)验 iv-b;④ 窗内 ≥200 样本门。设计/计划见 `docs/superpowers/specs|plans/2026-06-08-prism-pathrtt-driver-attribution*`。完整数据见 `assessment.txt` 的 ROUND 4 段,图见 fig5–fig8。
+
+**指标(新增两种基线,与 `own` 并列):**
+```
+own    : q_i = rtt_i − 路径i自身历史min            (Round 3 默认)
+global : q_i = rtt_i − B_flow(该流所有路径/时刻min);C_spray = max−min 原始RTT(基线抵消)
+const  : q_i = rtt_i − B_prop(固定真实传播floor);B_prop=13945ns(N=1 空载run实测)
+```
+
+**结果与判定:**
+
+| 子判据 | 结果 | 证据 |
+|---|---|---|
+| **iv-a**(C_spray~非对称) | ❌ 不成立(指标伪信号已修,但 C_spray 由喷洒主导) | 预验证:incast 上 `own` C_spray 随 failed **非单调** [7.33,6.49,6.21,7.51] → `global` **单调升** [2.58,2.74,3.33,3.96](修掉 Round-3 反转)。但场景 A:`global` C_spray = OBL [9.07,8.86,9.87,12.44](非单调、f0 就 ~9µs)、REPS [7.36,6.36,7.43,7.31](近平);8 发送端中等负载更平 [12.58,13.34,12.60,12.40]。fig5/fig6 |
+| **LB 职责分离**(C_spray 可被 LB 消除) | ✅ **干净成立** | REPS C_spray < OBL 在**每个** failed 档(f0:9.07>7.36;f4:8.86>6.36;f8:9.87>7.43;f12:12.44>7.31)。fig5 |
+| **iv-b**(C_cc~负载) | △ 弱成立,**仅在真实传播基线下** | 场景 B:`C_cc(const)` 随 N **单调升** [10.22,10.35,11.38];`C_cc(global)` 反而**降** [7.61,4.97,1.41](污染);`C_cc(own)` 也降 [2.10,1.16,0.78]。最后一跳全程饱和 → 升幅小。fig8 |
+
+**为什么 (iv) 还是没补齐(三条根因):**
+1. **C_spray 由逐包喷洒 + NSCC 动态主导,不是非对称。** 对称 f0 时 C_spray 就 ~9µs;非对称只弱、非单调叠加(OBL f12 比 f0 高 37%)。用户"对称→小"的直觉只在"对称且无拥塞且 LB 已均衡"时成立 —— Oblivious 过载下两个前提都不满足。
+2. **非对称与负载纠缠。** 场景 A 里 `-failed` 越大,NSCC 越降速 → 总负载下降、那条健康路径变空 → `C_cc(const)` 反而**降** [OBL 6.10,4.39,3.45,0.46](fig7)。非对称不是一个能独立于负载的旋钮,正交归因结构上就难。
+3. **per-flow 基线污染(新发现)。** 持续拥塞下流观测不到空网,其 `B_flow` 随负载抬高(中位 16.5→19.4→23.9µs),把要测的 floor 抵消掉,使 `C_cc(global/own)` 看着随负载**下降**。只有固定的真实传播基线 `const` 才显出 floor 随负载上升 —— 这对"真实发送端如何估 base_rtt"是个有意义的提示。
+
+**结论(细化 Round-3 的"部分成立",未改变方向):**
+- **核心分解 + LB/CC 职责分离:成立,且比 Round 3 更干净** —— C_spray 可被 LB 消除(fig5 干净);C_cc 是 LB 消不掉的下界,用真实基线测得出且随真实负载上升(fig8)。
+- **干净的因果归因(判据 iv):不成立** —— C_spray 喷洒主导、两个驱动纠缠、floor 仅对真实基线可见。
+- 按约束 §11:结论**不是**"分解成立 + 驱动可归因",故**不建议进入 PRISM 实现阶段**;不对 PRISM 机制性能做任何声称;最终 go/no-go 由用户裁定。
+
+**若要继续(下一步候选,未执行):** ① 用**非贪婪/受控速率**流量,使对称 f0 真正无拥塞,把"非对称→C_spray"从喷洒噪声里分离;② 让非对称与负载**解耦**(如固定总负载、只改单条链路速率),单独验 iv-a/iv-b;③ 在**速率空间**(goodput 赤字 / trim 率)而非延迟空间测 C_cc(Round 2 已显示不可消除拥塞在速率空间最干净)。
 
 ---
 
@@ -156,7 +183,18 @@ C_spray  = max_i q_i − min_i q_i    # 最堵 − 最空(路径间不均衡)
 - `fig1_decisive.png` … `fig4_sweeps.png` — 演示图
 - C++ 钩子:`htsim/sim/uec.cpp`(只读、env 触发)
 
+**Round 4(`mvp_runs3/`)**
+- `pathrtt_analyze.py` — 加 `global`/`const` 基线模式 + 窗内采样门(`test_pathrtt_analyze.py` 现 11 测)
+- `gen_overload.py`(+`test_gen_overload.py`)— whole-pod overload 生成器(N 发送端→pod 多 host)
+- `run_one.sh` — `-end` 由 `END` 环境变量控制(默认 2)
+- `make_figures_r4.py` — fig5–fig8(与 Round-3 `make_figures.py` 分开:窗内门使旧 `-end 2` CSV 不再合格)
+- `prevalidation.txt` — `global` 重算旧 incast CSV(`own` 反转 → `global` 单调)
+- `fig5_lb_ablation.png`(LB 消融,REPS<OBL 每档)、`fig6_baseline_compare.png`(own vs global)、`fig7_ccc_vs_asymmetry.png`(非对称节流负载→C_cc 降)、`fig8_ccc_vs_load.png`(C_cc vs 负载,三基线)
+- `assessment.txt` 的 ROUND 4 段 — 完整数据表与判定
+- 原始 `*.cm/*.csv/*.stdout` 被 `.gitignore` 忽略(可由 `gen_incast.py`/`gen_overload.py` + `run_one.sh` 复现)
+
 **设计/计划文档(`docs/superpowers/`)**
+- `specs/2026-06-08-prism-pathrtt-driver-attribution-design.md`、`plans/2026-06-08-prism-pathrtt-driver-attribution.md`(Round 4)
 - `specs/2026-06-07-prism-pathrtt-incast-demo-design.md`(本轮设计)
 - `plans/2026-06-07-prism-pathrtt-incast-demo.md`(本轮实现计划)
 - Round 2:`specs/2026-06-07-prism-motivation-redesign-design.md`、`plans/2026-06-07-prism-motivation-redesign.md`

@@ -73,3 +73,80 @@ themselves (present even when symmetric), and the load sweep is sampling-limited
 
 SCOPE/CAVEATS: single seed per config; one topology; incast-to-one-host; the C++ change is a
 read-only env-gated log (no simulation-behavior change). Final go/no-go left to the user.
+
+
+================================================================================
+ROUND 4 — Driver attribution (criterion iv), 2026-06-08
+================================================================================
+Goal: close the iv gap from Round 3 ("C_spray ~ asymmetry" iv-a; "C_cc ~ load" iv-b),
+testing the user's intuition "symmetric -> small C_spray, asymmetric -> large".
+
+METRIC CHANGE: added two baselines beside the original per-path own-min ("own"):
+  own    : q_i = rtt_i - min_i(path i's own history)           [Round 3 default]
+  global : q_i = rtt_i - B_flow (flow's min over all paths/time); C_spray = max-min raw RTT
+  const  : q_i = rtt_i - B_prop (a FIXED true-propagation floor, measured uncontended)
+B_prop = 13945 ns = min raw RTT of an uncontended N=1 incast run (same topology, healthy path).
+In-window sample gate tightened to >=200 ACKs INSIDE the steady window per flow.
+
+----------------------------------------------------------------------
+iv-a  (C_spray ~ asymmetry):  NOT cleanly demonstrated (metric artifact fixed; spray-dominated)
+----------------------------------------------------------------------
+Pre-validation (existing Round-3 incast CSVs, relaxed min_samples=100; mvp_runs3/prevalidation.txt):
+  own    C_spray vs -failed [0,4,8,12] = [7.33,6.49,6.21,7.51]  NON-monotonic (Round-3 reversal)
+  global C_spray vs -failed             = [2.58,2.74,3.33,3.96]  monotonic UP  <- global fixes the
+     own-min artifact (a degraded path's structural slowness no longer hides in its own min).
+Scenario A (whole-pod overload: 32 senders -> 8 hosts in pod0; default window [500,1500]us):
+  OBL  C_spray(global) vs -failed = [9.07, 8.86, 9.87, 12.44]  monotonic=NO (f4 dip; f0 large)
+  REPS C_spray(global) vs -failed = [7.36, 6.36, 7.43,  7.31]  ~flat (REPS balances asymmetry away)
+  Moderate-load probe (8 senders -> 8 dests, OBL) = [12.58,13.34,12.60,12.40]  flat & high.
+  => C_spray is dominated by per-packet spray + NSCC dynamics (large ~9us even at SYMMETRIC f0);
+     asymmetry only weakly/non-monotonically adds to it (OBL f12 is +37% vs f0). The user's
+     "symmetric -> small" holds only if the symmetric case is uncongested AND the LB balances;
+     under Oblivious overload neither is true. (fig5, fig6)
+
+----------------------------------------------------------------------
+LB ABLATION (core premise "LB removes C_spray"):  CLEAN / HOLDS
+----------------------------------------------------------------------
+REPS C_spray < OBLIVIOUS C_spray at EVERY asymmetry level (fig5):
+  f= 0: OBL 9.07 vs REPS 7.36     f= 4: 8.86 vs 6.36
+  f= 8: 9.87 vs 7.43              f=12: 12.44 vs 7.31
+=> C_spray is genuinely LB-removable. This is the LB half of the decomposition, and it is robust.
+
+----------------------------------------------------------------------
+iv-b  (C_cc ~ load):  HOLDS WEAKLY, but ONLY against a true-propagation baseline
+----------------------------------------------------------------------
+Scenario B (incast N -> host0, symmetric, REPS, -end 8ms, window [1000,7000]us; fig8):
+  C_cc(const, vs 13945ns) vs N[16,32,64] = [10.22, 10.35, 11.38] us  monotonic UP  <- iv-b
+  C_cc(global, per-flow)                  = [ 7.61,  4.97,  1.41]     FALLS (contaminated)
+  C_cc(own,    per-path)                  = [ 2.10,  1.16,  0.78]     FALLS (contaminated)
+NEW FINDING (baseline contamination): under sustained congestion a flow never observes the
+  empty network, so its per-flow/per-path min INFLATES with load (B_flow median 16.5->19.4->
+  23.9us as N grows) and cancels the very floor we want. Only a fixed true-propagation floor
+  reveals that C_cc rises with load. Caveat: the last hop is saturated at all N, so the rise
+  is modest (~10->11us).
+Entanglement (fig7): in Scenario A, increasing -failed THROTTLES load (NSCC backs off; the
+  one healthy path empties), so C_cc(const) FALLS [OBL 6.10,4.39,3.45,0.46]. Asymmetry and
+  load are not independent knobs here -> a clean orthogonal attribution is structurally hard.
+
+----------------------------------------------------------------------
+VERDICT
+----------------------------------------------------------------------
+(iv) overall:  NOT closed.  iv-a not clean (C_spray spray-dominated, asymmetry weak/non-mono);
+  iv-b holds only weakly and only with a true-propagation baseline; asymmetry & load entangled.
+CORE DECOMPOSITION + LB/CC ROLE SEPARATION:  better-supported than Round 3 ---
+  - C_spray is LB-removable: REPS < OBL at every asymmetry level (fig5).  CLEAN.
+  - C_cc is an irreducible floor: rises with true load (fig8), invisible to LB choice; it is
+    only measurable against a true-propagation baseline (per-flow baselines self-contaminate).
+CONCLUSION (refines Round-3 "部分成立"): the decomposition's LB/CC role split holds and is now
+  cleanly shown for C_spray (LB ablation) and for the load-driven C_cc floor (const baseline).
+  The cleaner CAUSAL story (C_spray gated solely by asymmetry, C_cc solely by load) does NOT
+  hold: C_spray is spray/CC-dominated and the two drivers are entangled. Per constraints, the
+  result is NOT "分解成立 + 驱动可归因", so this does NOT recommend entering a PRISM
+  implementation phase. No claim is made about PRISM mechanism performance. Final go/no-go: user.
+
+依据: fig5 (LB ablation, REPS<OBL everywhere); fig6 (own vs global baseline); fig7 (C_cc vs
+  asymmetry, entanglement); fig8 (C_cc vs load, 3 baselines); prevalidation.txt (own reversal ->
+  global monotonic on incast). B_prop=13945ns from N=1 uncontended run.
+SCOPE/CAVEATS (Round 4): single seed; one topology; saturated bottleneck in Scenario B (load
+  rise modest); whole-pod overload makes Scenario A congestion-spread-dominated; the C++ hook
+  remains a read-only env-gated log (no behavior change); no new C++ this round.
