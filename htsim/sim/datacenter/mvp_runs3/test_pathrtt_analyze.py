@@ -84,11 +84,50 @@ def test_aggregate_cross_flow_median():
         assert agg["nflows"] == 2, agg
         assert abs(agg["cspray_med"] - 40.0) < 1e-9, agg
         assert abs(agg["ccc_med"] - 40.0) < 1e-9, agg
-        # min_samples filter: each flow has 6 samples; requiring 7 -> no eligible flow
+        # min_samples filter is on IN-WINDOW samples: each flow has 4 in [500,1500]us
+        # (the 400us sample is pre-window); requiring 7 -> no eligible flow
         assert A.aggregate_tag("_testagg", min_samples=7) is None
     finally:
         os.unlink(path)
     print("ok aggregate cross-flow median + min_samples filter")
+
+def test_rtt_min_per_flow():
+    rows = [(1000,0,10,300),(2000,0,20,100),(3000,0,10,250),(4000,1,30,500)]
+    p = _csv(rows); data = A.parse_csv(p); os.unlink(p)
+    mf = A.rtt_min_per_flow(data)
+    assert mf[0] == 100, mf   # min over BOTH paths of flow0
+    assert mf[1] == 500, mf
+    print("ok rtt_min_per_flow")
+
+def test_global_baseline_cancels():
+    # flow0, 2 paths. global floor = 100 (min over all samples).
+    # bin1 latest: path10=150, path20=200.
+    # C_spray(global) = max(150,200)-min(150,200) = 50  (independent of baseline)
+    # C_cc(global)    = min(150,200)-100         = 50
+    rows = [(1000,0,10,100),(2000,0,20,100),
+            (12000,0,10,150),(13000,0,20,200)]
+    p = _csv(rows); data = A.parse_csv(p); os.unlink(p)
+    mp = A.rtt_min_per_path(data); mf = A.rtt_min_per_flow(data)
+    t, cs, cc = A.decompose(data, mp, 0, bin_ns=10000, t0=0, t1=20000,
+                            baseline="global", rtt_min_flow=mf)
+    assert cs == [0, 50], cs   # bin0 qs(0,0); bin1 qs(50,100) -> spray 50
+    assert cc == [0, 50], cc
+    print("ok global baseline cancels")
+
+def test_global_vs_own_structural_slow():
+    # path10 fast: min 100, latest 110.  path20 structurally slow: min 300, latest 320.
+    # own:    q10=10, q20=20  -> C_spray=10  (slow path's slowness hidden in its own min)
+    # global: B=100; q10=10, q20=220 -> C_spray=210  (slow path now shows in C_spray) = iv-a fix
+    rows = [(1000,0,10,100),(2000,0,20,300),
+            (12000,0,10,110),(13000,0,20,320)]
+    p = _csv(rows); data = A.parse_csv(p); os.unlink(p)
+    mp = A.rtt_min_per_path(data); mf = A.rtt_min_per_flow(data)
+    _, cs_own, _  = A.decompose(data, mp, 0, bin_ns=10000, t0=10000, t1=20000)
+    _, cs_glob, _ = A.decompose(data, mp, 0, bin_ns=10000, t0=10000, t1=20000,
+                                baseline="global", rtt_min_flow=mf)
+    assert cs_own == [10], cs_own
+    assert cs_glob == [210], cs_glob
+    print("ok global vs own structural slow (iv-a fix)")
 
 if __name__ == "__main__":
     test_rtt_min_per_path()
@@ -97,4 +136,7 @@ if __name__ == "__main__":
     test_p95_nearest_rank()
     test_single_path_zero_spray()
     test_aggregate_cross_flow_median()
+    test_rtt_min_per_flow()
+    test_global_baseline_cancels()
+    test_global_vs_own_structural_slow()
     print("ALL PASS")
