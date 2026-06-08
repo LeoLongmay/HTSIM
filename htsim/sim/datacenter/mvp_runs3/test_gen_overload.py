@@ -10,8 +10,8 @@ def test_counts_and_placement():
     assert len(conns) == 8, conns
     # every sender is OUTSIDE pod0; every dest is INSIDE pod0
     for s, d in conns:
-        assert s // 16 != 0, (s, d)
-        assert 0 <= d < 4, (s, d)
+        assert s // 16 != 0, (s, d)            # sender outside pod0
+        assert d // 16 == 0 and d < 4, (s, d)  # dest inside pod0, within n_dests
     # round-robin over the 4 dests -> each dest used exactly twice
     used = sorted(d for _, d in conns)
     assert used == [0, 0, 1, 1, 2, 2, 3, 3], used

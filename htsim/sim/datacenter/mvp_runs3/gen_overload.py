@@ -9,6 +9,8 @@ bottleneck. Usage:
 import sys
 
 def build(n_senders=32, dest_pod=0, n_dests=8, size=20_000_000, nodes=128, hpp=16):
+    if n_dests < 1:
+        raise ValueError(f"n_dests must be >= 1, got {n_dests}")
     if n_dests > hpp:
         raise ValueError(f"n_dests {n_dests} > hosts_per_pod {hpp}")
     dests = [dest_pod * hpp + j for j in range(n_dests)]
