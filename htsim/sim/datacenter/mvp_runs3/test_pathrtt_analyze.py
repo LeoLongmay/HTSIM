@@ -129,6 +129,32 @@ def test_global_vs_own_structural_slow():
     assert cs_glob == [210], cs_glob
     print("ok global vs own structural slow (iv-a fix)")
 
+def test_const_baseline():
+    # const_base = 100 (a fixed external floor). After consuming all samples,
+    # latest path10=150, path20=200.
+    # C_spray = max(50,100)-min(50,100) = 50  (= max rtt - min rtt, baseline cancels)
+    # C_cc    = min(50,100) = 50              (= min path rtt 150 - 100)
+    rows = [(1000,0,10,140),(2000,0,20,140),
+            (12000,0,10,150),(13000,0,20,200)]
+    p = _csv(rows); data = A.parse_csv(p); os.unlink(p)
+    mp = A.rtt_min_per_path(data)
+    t, cs, cc = A.decompose(data, mp, 0, bin_ns=10000, t0=10000, t1=20000,
+                            baseline="const", const_base=100)
+    assert cs == [50], cs
+    assert cc == [50], cc
+    print("ok const baseline")
+
+def test_const_requires_base():
+    rows = [(1000,0,10,140),(12000,0,10,150)]
+    p = _csv(rows); data = A.parse_csv(p); os.unlink(p)
+    mp = A.rtt_min_per_path(data)
+    try:
+        A.decompose(data, mp, 0, baseline="const")  # const_base missing
+        assert False, "expected ValueError for const without const_base"
+    except ValueError:
+        pass
+    print("ok const requires base")
+
 if __name__ == "__main__":
     test_rtt_min_per_path()
     test_decompose_bins_and_carryforward()
@@ -139,4 +165,6 @@ if __name__ == "__main__":
     test_rtt_min_per_flow()
     test_global_baseline_cancels()
     test_global_vs_own_structural_slow()
+    test_const_baseline()
+    test_const_requires_base()
     print("ALL PASS")

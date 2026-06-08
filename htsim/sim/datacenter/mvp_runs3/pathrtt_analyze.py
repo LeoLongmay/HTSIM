@@ -46,11 +46,12 @@ def rtt_min_per_flow(rows):
     return m
 
 def decompose(rows, rtt_min, flow_id, bin_ns=BIN_NS, t0=None, t1=None,
-              baseline="own", rtt_min_flow=None):
+              baseline="own", rtt_min_flow=None, const_base=None):
     """For one flow: (times_ns, c_spray_ns, c_cc_ns), one entry per bin in [t0,t1).
     baseline='own':    q_i = rtt_i - rtt_min[(flow,i)]   (per-path own historical min)
     baseline='global': q_i = rtt_i - rtt_min_flow[flow]  (one floor for all paths; then
                        C_spray = max_i rtt_i - min_i rtt_i, the baseline cancels).
+    baseline='const':  q_i = rtt_i - const_base   (one fixed external floor for all paths/flows)
     Per bin, latest raw_rtt carried forward per path. Empty path-set bins are skipped."""
     fr = [r for r in rows if r[1] == flow_id]
     if not fr:
@@ -64,6 +65,10 @@ def decompose(rows, rtt_min, flow_id, bin_ns=BIN_NS, t0=None, t1=None,
             raise ValueError("baseline='global' requires rtt_min_flow")
         base = rtt_min_flow[flow_id]
         base_of = lambda p: base
+    elif baseline == "const":
+        if const_base is None:
+            raise ValueError("baseline='const' requires const_base")
+        base_of = lambda p: const_base
     else:
         base_of = lambda p: rtt_min[(flow_id, p)]
     latest = {}        # path -> latest raw_rtt seen
@@ -127,7 +132,7 @@ def analyze_tag(tag, baseline="own"):
           f"C_cc mean={cc_s['mean']:6.2f} p95={cc_s['p95']:6.2f}us")
     return {"tag": tag, "cspray": cs_s, "ccc": cc_s, "flow": flow, "npaths": npaths}
 
-def aggregate_tag(tag, min_samples=200, baseline="own", win=WIN):
+def aggregate_tag(tag, min_samples=200, baseline="own", win=WIN, const_base=None):
     """Cross-flow robust statistic. For every flow with >= min_samples ACKs INSIDE the
     steady window `win`, compute its steady-window mean C_spray and C_cc; return the
     MEDIAN across flows. baseline selects 'own' (per-path min) or 'global' (flow floor).
@@ -144,7 +149,8 @@ def aggregate_tag(tag, min_samples=200, baseline="own", win=WIN):
     for flow in inwin:
         if inwin[flow] < min_samples:
             continue
-        t_ns, cs_ns, cc_ns = decompose(rows, mins, flow, baseline=baseline, rtt_min_flow=minf)
+        t_ns, cs_ns, cc_ns = decompose(rows, mins, flow, baseline=baseline,
+                                       rtt_min_flow=minf, const_base=const_base)
         t_us = [t/1000.0 for t in t_ns]
         ssp = steady_stats(t_us, [x/1000.0 for x in cs_ns], win[0], win[1])
         scc = steady_stats(t_us, [x/1000.0 for x in cc_ns], win[0], win[1])
