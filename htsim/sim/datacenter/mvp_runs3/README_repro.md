@@ -88,5 +88,6 @@ figG/figH 的度量来自**纯日志、零 C++ 改动**:`-log sink`(UEC_SINK RAT
 
 ## 复现注意
 
-- 原始 `*.cm / *.csv / *.stdout` 被 `.gitignore` 忽略(可由本流程完全再生);仓库只跟踪脚本、README 与最终 png。
-- `figA/B/C` 的底层结论已多种子、稳态复核;**已废弃**的 `fig2_lb_contrast`(incast LB 对比,仅 END=2 暂态成立)、`fig3_sym_vs_asym`(`own`-min 伪信号)**不要**用于论文,原因见上级 `discussion.md` 与 `assessment.txt`。
+- 所有原始/中间数据(`*.cm *.dat *.csv *.stdout *.idmap *.sink.txt *.q.txt` 等)都被 `.gitignore` 忽略,且**已从磁盘删除以节省空间**——它们由 `repro.sh` 完全再生。本目录只保留:**运行脚本**(`repro.sh`、`run_one.sh`、`run_meas.sh`、`gen_incast.py`、`gen_overload.py`)、**绘图脚本**(`make_paper_figs.py`→figA–F、`make_cc_figs.py`→figG/H、`make_coupling_fig.py`→figI,依赖 `pathrtt_analyze.py`;自检 `test_pathrtt_analyze.py`、`test_gen_overload.py`)、`README_repro.md`,以及 **figA–figI 的 png+pdf**。
+- 复现方法:`bash mvp_runs3/repro.sh`(从干净状态重新生成全部数据并产出 figA–figI)。
+- 更早的探索版图与脚本(fig1–fig8、`make_figures*.py`、各 round 的 `*.txt`/`discussion.md` 记录)已删除以保持目录整洁,如需可从 git 历史取回。

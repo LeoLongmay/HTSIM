@@ -1,1 +1,0 @@
-reps_a8        flow1000000045 npaths=  8 samples=  5674  C_spray mean=  5.46 p95=  7.35us  C_cc mean=  1.81 p95=  3.03us
