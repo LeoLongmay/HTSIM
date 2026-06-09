@@ -71,7 +71,7 @@ def main():
     GREEN, RED = "tab:green", "tab:red"
     # paper styling: 24pt text + a figure big enough that the 24pt y-label never clips.
     # Set figsize via rcParams (not inline on plt.subplots) so it survives edits to that call.
-    plt.rcParams.update({"font.size": 24, "figure.figsize": (10, 6)})
+    plt.rcParams.update({"font.size": 24})
 
     # ---- figG: goodput / underutilization ----
     gm_r, gs_r = across_seeds(goodput_gbps, "reps")
@@ -86,9 +86,11 @@ def main():
                 fontsize=18, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
     ax.set_xlabel("Number of failed links")
     ax.set_ylabel("Aggregate goodput (Gbps)")
+    ax.yaxis.set_label_coords(-0.16, 0.45)
     # legend drawn in its own file (figGH_legend), not in the panel
     ax.set_xticks(FAILED); ax.set_ylim(bottom=50); ax.grid(alpha=0.3)
-    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.png"), dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.pdf"), bbox_inches="tight", pad_inches=0.05); plt.close()
+    plt.tight_layout(); plt.subplots_adjust(top=0.82)   # reserve top whitespace so the rotated y-label's top isn't clipped (figsize unchanged)
+    plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.png"), dpi=140); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.pdf")); plt.close()
 
     # ---- figH: retransmission / congestion storm ----
     rm_r, rs_r = across_seeds(retx_pct, "reps")
@@ -103,9 +105,11 @@ def main():
                 fontsize=18, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
     ax.set_xlabel("Number of failed links")
     ax.set_ylabel(r"Retransmitted packets (%)")
+    ax.yaxis.set_label_coords(-0.12, 0.45)
     # legend drawn in its own file (figGH_legend), not in the panel
     ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.grid(alpha=0.3)
-    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.pdf"), bbox_inches="tight", pad_inches=0.05); plt.close()
+    plt.tight_layout(); plt.subplots_adjust(top=0.82)   # reserve top whitespace so the rotated y-label's top isn't clipped (figsize unchanged)
+    plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.pdf")); plt.close()
 
     # shared legend (identical for figG & figH) as its own image file
     from matplotlib.lines import Line2D
