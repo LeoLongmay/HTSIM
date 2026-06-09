@@ -76,16 +76,16 @@ Ns = [16, 32, 64]
 a_reps = [ms(f"mp_inc_reps_n{n}", "const", WIN_INC, "ccc_med", const_base=BPROP) for n in Ns]
 a_obl  = [ms(f"mp_inc_obl_n{n}",  "const", WIN_INC, "ccc_med", const_base=BPROP) for n in Ns]
 xpos = list(range(len(Ns)))            # categorical x -> 16/32/64 drawn evenly spaced
-with plt.rc_context({"font.size": 24}):    # paper styling: all text in figA at 24pt
-    plt.figure(figsize=(12, 7))
+with plt.rc_context({"font.size": 24}):    # paper styling: all text in figA at 24pt figsize=(12, 7)
+    plt.figure()
     plt.errorbar(xpos, [m for m,_,_ in a_reps], yerr=[s for _,s,_ in a_reps], fmt="s-",  lw=2.5, ms=11, capsize=6, label="REPS")
     plt.errorbar(xpos, [m for m,_,_ in a_obl],  yerr=[s for _,s,_ in a_obl],  fmt="o--", lw=2.5, ms=11, capsize=6, label="OBLIVIOUS")
     plt.xlabel("Incast degree N")
-    plt.ylabel(r"$C_{cc}$ cross-flow median (us)", y=0.45)
+    plt.ylabel(r"$C_{cc}$ (us)")
     # no in-figure title (paper convention: describe in \caption); keeps all text at 24pt unclipped
     plt.legend(fontsize=18); plt.grid(alpha=0.3)
     plt.xticks(xpos, [str(n) for n in Ns]); plt.ylim(10, 12); plt.yticks([10, 10.5, 11, 11.5, 12])
-    plt.tight_layout(); plt.savefig(f"{HERE}/figA_floor_vs_load.png", dpi=140); plt.savefig(f"{HERE}/figA_floor_vs_load.pdf"); plt.close()
+    plt.tight_layout(); plt.savefig(f"{HERE}/figA_floor_vs_load.png", dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(f"{HERE}/figA_floor_vs_load.pdf", bbox_inches="tight", pad_inches=0.05); plt.close()
 
 # ---- FigB: C_spray removed by LB when path diversity exists (whole-pod) -> need LB ----
 fails = [0, 4, 8, 12]
@@ -106,18 +106,19 @@ ic_r = ms("mp_inc_reps_n32", "global", WIN_INC, "cspray_med")
 ic_o = ms("mp_inc_obl_n32",  "global", WIN_INC, "cspray_med")
 wp_r = ms("mp_wp_reps_f0",   "global", WIN_WP,  "cspray_med")
 wp_o = ms("mp_wp_obl_f0",    "global", WIN_WP,  "cspray_med")
-groups = ["incast -> 1 host\n(shared bottleneck)", "whole-pod -> 8 hosts\n(path-diverse)"]
+groups = ["Incast", "8 receivers"]
 reps_v = [ic_r[0], wp_r[0]]; reps_e = [ic_r[1], wp_r[1]]
 obl_v  = [ic_o[0], wp_o[0]]; obl_e  = [ic_o[1], wp_o[1]]
-x = range(len(groups)); w = 0.35
-plt.figure(figsize=(7, 4.5))
-plt.bar([i-w/2 for i in x], reps_v, w, yerr=reps_e, capsize=4, label="REPS")
-plt.bar([i+w/2 for i in x], obl_v,  w, yerr=obl_e,  capsize=4, label="OBLIVIOUS")
-plt.xticks(list(x), groups); plt.ylabel("C_spray cross-flow median (us)")
-plt.title("FigC. LB only removes C_spray where path diversity exists\n"
-          "(symmetric load): incast REPS~=OBL; whole-pod REPS<OBL -> need both, context-aware")
-plt.legend(); plt.grid(alpha=0.3, axis="y")
-plt.tight_layout(); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.png", dpi=140); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.pdf"); plt.close()
+x = range(len(groups)); w = 0.25
+with plt.rc_context({"font.size": 24}):
+    plt.figure() # figsize=(7, 4.5)
+    plt.bar([i-w/2 for i in x], reps_v, w, yerr=reps_e, capsize=4, label="REPS")
+    plt.bar([i+w/2 for i in x], obl_v,  w, yerr=obl_e,  capsize=4, label="OBLIVIOUS")
+    plt.xticks(list(x), groups); plt.ylabel(r"$C_{spray}$ (us)")
+    # plt.title("FigC. LB only removes C_spray where path diversity exists\n"
+    #           "(symmetric load): incast REPS~=OBL; whole-pod REPS<OBL -> need both, context-aware")
+    plt.legend(fontsize=18); plt.grid(alpha=0.3, axis="y")
+    plt.tight_layout(); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.png", dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.pdf", bbox_inches="tight", pad_inches=0.05); plt.close()
 
 # ---- FigD: REPS time series, low vs high load (asymmetric) -> LB alone limited ----
 # whole-pod overload into a partly-degraded pod (failed=12, good-path cap ~400G < 800G
