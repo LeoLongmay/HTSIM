@@ -70,9 +70,22 @@ for f in 0 4 8 12; do
   done
 done
 
-echo "== 8. figures =="
+echo "== 8. figures (figA-figH) =="
 python3 mvp_runs3/make_paper_figs.py
 python3 mvp_runs3/make_cc_figs.py
+
+echo "== 9. CC/LB tuning-coupling (REPS fixed; sweep target_q_delay) for figI, seeds $SEEDS =="
+python3 mvp_runs3/gen_overload.py mvp_runs3/overload_cpA.cm 8  0 16                 # Regime A: spray-removable, NA=8
+python3 mvp_runs3/gen_incast.py   mvp_runs3/incast_cpB.cm   32 0 20000000 128 16    # Regime B: path-wide 32-sender incast
+for q in 2 4 6 8 12 16; do for s in $SEEDS; do
+  SEED=$s END=2 TQD=$q          bash mvp_runs3/run_meas.sh reps 12 cpA_tqd$q.s$s mvp_runs3/overload_cpA.cm sink
+  SEED=$s END=2 TQD=$q LOGTIME=1 bash mvp_runs3/run_meas.sh reps 0  cpB_tqd$q.s$s mvp_runs3/incast_cpB.cm  queue
+done; done
+SEED=13 END=8 bash mvp_runs3/run_one.sh reps 12 cpA_decomp mvp_runs3/overload_cpA.cm
+SEED=13 END=8 bash mvp_runs3/run_one.sh reps 0  cpB_decomp mvp_runs3/incast_cpB.cm
+python3 mvp_runs3/make_coupling_fig.py
+
 echo "== done: figA_floor_vs_load.png figB_spray_lb_removable.png figC_lb_depends_on_bottleneck.png =="
 echo "==       figD_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png figF_cc_strength_sets_floor.png =="
 echo "==       figG_cc_alone_underutilization.png figH_cc_alone_congestion.png =="
+echo "==       figI_cc_lb_tuning_coupled.png =="
