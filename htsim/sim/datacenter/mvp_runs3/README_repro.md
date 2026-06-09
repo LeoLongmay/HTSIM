@@ -1,4 +1,4 @@
-# 可复现的 paper motivation 图(figA / figB / figC)
+# 可复现的 paper motivation 图(figA–figH)
 
 本目录下进论文的图**全部按可复现标准产出**。任何人从干净 checkout 出发,跑一条命令即可复现。
 
@@ -9,16 +9,17 @@
 cd /home/leo/htsim/htsim/sim
 cmake -S . -B build && cmake --build build -j      # 产物 build/datacenter/htsim_uec(./htsim_uec 软链)
 
-# 1. 跑出全部数据 + 生成三张图
+# 1. 跑出全部数据 + 生成八张图(figA–figH)
 cd datacenter
 bash mvp_runs3/repro.sh
 ```
 
-产物:`figA_floor_vs_load.png`、`figB_spray_lb_removable.png`、`figC_lb_depends_on_bottleneck.png`。
+产物:`figA`–`figH`(共八张 png,见下表)。
 
-## 六张图说明(及诚实作用域)
+## 八张图说明(及诚实作用域)
 
-论点:**CC 与 spraying 两种机制都必要**(因此值得协同设计)。
+论点:**CC 与 spraying 两种机制都必要**(因此值得协同设计)。两半对称:
+**figA–figF** 证明"**仅靠 spraying 不够,必须 CC**";**figG–figH** 证明"**仅靠 CC 不够,必须 spraying**"。
 
 - **figA**:对称 incast,`C_cc`(真实传播基线)随 incast 度 N 上升,且 **REPS 与 OBL 几乎重合** → floor 是 LB 消不掉、随负载增长的不可约拥塞 → **必须 CC**。
 - **figB**:whole-pod overload(多目的 host,有路径多样性),`C_spray` 在每个非对称档 **REPS < OBL** → 好 LB 能消除可重路由的不均衡 → **必须 spraying/LB**。
@@ -28,7 +29,14 @@ bash mvp_runs3/repro.sh
   - 容量算账:`failed=12` 降 US0–US2(各剩 100G)、US3 健康(400G)→ 好路径容量 ≈400G;8 接收端 =800G。需求 <400G 时 REPS 全走 US3(C_cc≈0),>400G 时被迫外溢/好路径饱和(C_cc>0)。**单流到单 host 永远逼不出(被接收端 100G 封顶),必须多流聚合需求超过好路径容量。**
 - **figF**:固定 figD 高负载场景(REPS,failed=12,32 发送端),扫 **NSCC `target_q_delay`(CC 激进程度)**。`C_cc(const)` 随 target 单调升(2µs→**0.33µs**,16µs→**5.49µs**)、`C_spray` 基本不随之降 → **floor 由 CC 直接控制,收紧 CC 把 floor 压向 0;C_spray 不是 CC 的活(是 LB 的)**。这把"只能 CC 消 C_cc"从推理变成**实测**。
 
-**作用域(必须在论文里写清)**:以上仅论证"**两种机制各自必要**";**未**证明"**联合 co-design 优于各自独立运行**"——本实验没有测量联合方案的性能,不对 PRISM 机制性能做任何声称。
+**——下面两张证明反方向:仅靠 CC 不够,必须 spraying——**(`make_cc_figs.py`,whole-pod overload 64→16,NSCC,failed 扫描,REPS vs **OBLIVIOUS=CC alone:不换路**,5 种子)
+
+- **figG(链路利用率不足)**:聚合 goodput vs 不对称度。failed=0 两者接近,随不对称增大 **OBLIVIOUS 越落越多**(failed=12:REPS 86.8 vs OBL 68.2 Gbps,差 **27%**)→ CC-alone 不能把流挪离降速路,只能对整条流降速,**把健康路径的容量闲置**。同一对 CC 完全相同,差距纯粹来自"没有自适应 LB"。
+- **figH(拥塞/重传风暴)**:同一批 run 的**重传比例**(Rtx/New,= trim 风暴代理)vs 不对称度。**OBLIVIOUS 远高于 REPS**(failed=12:OBL **32%** vs REPS **21%**,差随不对称扩大)→ CC 对它无法换路缓解的降速路持续反应不过来,这些路不断溢出 → 被 trim/重传。这是 CC-alone 的**第二个、与利用率不同的代价**:不仅丢吞吐,还制造拥塞风暴;自适应 LB 通过换路消除它。
+
+**诚实记录(figH 的设计经过 + 一个被证伪的直觉)**:最初设想的 fig2 是"机灵的 LB(REPS)把'真·全路径拥塞'误判成不均衡 → 让 NSCC 反应滞后 → 大规模拥塞"。**实测不成立**:(1) 单接收端 incast(最干净的"真·全路径拥塞")下,NSCC 把瓶颈队列稳稳压在 target,且 **REPS 与 OBLIVIOUS 三位有效数字完全一致**(N=16/64/112 的 peakQ/steadyQ/Rtx% 都相等)——末跳被所有路共享时**没有路径多样性**,REPS 无事可做,也就无从"误判不均衡";(2) NSCC 是 **delay+trim** 控制,对"聚合信号误判"这一失效本就大体免疫——该失效是 **STrack 式聚合-ECN-标记**控制器的问题(见 `prompt2.md`),不是 delay-based NSCC 的。因此 figH 改为诚实可测的版本:**CC-alone(OBLIVIOUS)在有路径多样性的不对称过载下产生重传风暴,自适应 LB 消除之**。
+
+**作用域(必须在论文里写清)**:以上仅论证"**两种机制各自必要**"(figA–F:floor 需 CC;figG/H:不对称下需 LB);**未**证明"**联合 co-design 优于各自独立运行**"——本实验没有测量联合方案的性能,不对 PRISM 机制性能做任何声称。figG/H 用 OBLIVIOUS 代表"CC alone"(关掉自适应换路),REPS 代表"CC+spraying";二者 CC 完全相同,差异只在 LB。
 
 ## 度量定义
 
@@ -56,8 +64,12 @@ bash mvp_runs3/repro.sh
 | figD | REPS whole-pod failed=12,低/高负载(4 vs 32 发送端) | 2 ms | [500,1500] | `mp_load_reps_n{4,32}`(时序用 seed 13) | `const`(C_cc)/`global`(C_spray) |
 | figE | REPS whole-pod failed=12,负载扫描 N∈{2,4,8,16,32} 发送端 | 2 ms | [500,1500] | `mp_load_reps_n{N}` | `const`(C_cc) |
 | figF | REPS whole-pod failed=12,32 发送端,扫 CC `target_q_delay`∈{2,4,6,8,12,16}µs | 2 ms | [500,1500] | `mp_cc_tqd{Q}`(env `TQD`) | `const`(C_cc)/`global`(C_spray) |
+| figG | whole-pod overload 64→16,failed∈{0,4,8,12},REPS vs **OBLIVIOUS** | 2 ms | [500,1500] | `cc_{reps,obl}_f{F}.s{S}`(`run_meas.sh … sink`) | — (聚合 goodput Gbps) |
+| figH | 与 figG **同一批 run** | 2 ms | 全程累计 | 同上;读 stdout 的 `New`/`Rtx` | — (重传% = Rtx/New) |
 
 真实传播 floor `B_prop` = `mp_inc_reps_n1.s13` 的 min raw RTT(空载单流;拓扑决定、与种子无关)。
+
+figG/figH 的度量来自**纯日志、零 C++ 改动**:`-log sink`(UEC_SINK RATE 记录,接收端 goodput,bits/s)给 figG;每个 run 的 stdout 末行 `New:/Rtx:` 给 figH。封装在 `run_meas.sh`(与 figA–F 的 `run_one.sh` 分开,后者保持逐字节不变);出图在 `make_cc_figs.py`。
 
 ## 今后所有进论文的图的可复现标准(模板)
 

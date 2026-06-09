@@ -61,7 +61,18 @@ for q in 2 4 6 8 12 16; do
   done
 done
 
-echo "== 7. figures =="
+echo "== 7. CC-alone necessity (whole-pod overload 64->16, failed sweep, REPS vs OBL) for figG/figH, seeds $SEEDS =="
+python3 mvp_runs3/gen_overload.py mvp_runs3/overload_n64_d16.cm 64 0 16
+for f in 0 4 8 12; do
+  for s in $SEEDS; do
+    SEED=$s END=2 bash mvp_runs3/run_meas.sh reps      $f cc_reps_f$f.s$s mvp_runs3/overload_n64_d16.cm sink
+    SEED=$s END=2 bash mvp_runs3/run_meas.sh oblivious $f cc_obl_f$f.s$s  mvp_runs3/overload_n64_d16.cm sink
+  done
+done
+
+echo "== 8. figures =="
 python3 mvp_runs3/make_paper_figs.py
+python3 mvp_runs3/make_cc_figs.py
 echo "== done: figA_floor_vs_load.png figB_spray_lb_removable.png figC_lb_depends_on_bottleneck.png =="
 echo "==       figD_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png figF_cc_strength_sets_floor.png =="
+echo "==       figG_cc_alone_underutilization.png figH_cc_alone_congestion.png =="

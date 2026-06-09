@@ -3,5 +3,10 @@
 *.stdout
 *.png
 *.dat
+*.sink.txt
+*.q.txt
+*.idmap
+*.time
+*.sinkrate.txt
 _hooktest*
 _off*
