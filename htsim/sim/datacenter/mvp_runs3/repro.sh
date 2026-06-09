@@ -86,6 +86,6 @@ SEED=13 END=8 bash mvp_runs3/run_one.sh reps 0  cpB_decomp mvp_runs3/incast_cpB.
 python3 mvp_runs3/make_coupling_fig.py
 
 echo "== done: figA_floor_vs_load.png figB_spray_lb_removable.png figC_lb_depends_on_bottleneck.png =="
-echo "==       figD_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png figF_cc_strength_sets_floor.png =="
+echo "==       figD1_reps_floor_emerges.png figD2_reps_floor_emerges.png figE_floor_vs_load_reps_asym.png figF_cc_strength_sets_floor.png =="
 echo "==       figG_cc_alone_underutilization.png figH_cc_alone_congestion.png =="
 echo "==       figI_cc_lb_tuning_coupled.png =="

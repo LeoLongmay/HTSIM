@@ -120,24 +120,27 @@ with plt.rc_context({"font.size": 24}):
     plt.legend(fontsize=18); plt.grid(alpha=0.3, axis="y")
     plt.tight_layout(); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.png", dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.pdf", bbox_inches="tight", pad_inches=0.05); plt.close()
 
-# ---- FigD: REPS time series, low vs high load (asymmetric) -> LB alone limited ----
-# whole-pod overload into a partly-degraded pod (failed=12, good-path cap ~400G < 800G
-# receivers). At low load REPS dodges congestion (C_cc floor ~0); at high load it cannot
-# (floor sustained > 0) -> spraying alone is exhausted, CC must slow the sender.
-fig, (axL, axR) = plt.subplots(1, 2, figsize=(12, 4.2), sharey=True)
-for ax, n, tag in ((axL, 4, "low load (4 senders): LB alone handles it"),
-                   (axR, 32, "high load (32 senders): LB exhausted")):
+# ---- FigD1/FigD2: REPS time series, low vs high load (asymmetric) -> LB alone limited ----
+# whole-pod overload into a partly-degraded pod (failed=12). At low load REPS dodges congestion
+# (C_cc floor ~0); at high load it cannot (floor sustained > 0) -> spraying alone is exhausted,
+# CC must slow the sender. Two standalone figures (figD1 = low load, figD2 = high load), shared
+# y-scale so the lifted floor is comparable; each with its own legend.
+for suffix, n in (("figD1", 4), ("figD2", 32)):
     csv = os.path.join(HERE, f"mp_load_reps_n{n}.s13.pathrtt.csv")
-    if os.path.exists(csv):
-        t, cs, cc = timeseries_median(csv, const_base=BPROP)
-        ax.plot(t, cs, label="C_spray = max_i q_i - min_i q_i (LB-removable)")
-        ax.plot(t, cc, "--", label="C_cc = min_i q_i vs true floor (CC-only)")
-    ax.axvspan(500, 1500, color="grey", alpha=0.12)
-    ax.set_xlabel("time (us)"); ax.set_title(tag); ax.grid(alpha=0.3); ax.set_xlim(0, 2000)
-axL.set_ylabel("per-path queueing delay (us)\ncross-flow median"); axL.legend(fontsize=8)
-fig.suptitle("FigD. REPS under asymmetry (failed=12): floor C_cc stays ~0 at low load but "
-             "emerges at high load -> spraying alone is limited, CC is required")
-plt.tight_layout(); plt.savefig(f"{HERE}/figD_reps_floor_emerges.png", dpi=140); plt.savefig(f"{HERE}/figD_reps_floor_emerges.pdf"); plt.close()
+    with plt.rc_context({"font.size": 24}):
+        plt.figure(figsize=(10, 6))
+        if os.path.exists(csv):
+            t, cs, cc = timeseries_median(csv, const_base=BPROP)
+            plt.plot(t, cs, lw=2, label=r"$C_{spray}$ (LB-removable)")
+            plt.plot(t, cc, "--", lw=2, label=r"$C_{cc}$ (CC-only)")
+        plt.axvspan(500, 1500, color="grey", alpha=0.12)
+        plt.xlabel("time (us)"); plt.ylabel("per-path queueing delay (us)")
+        plt.ylim(0, 26); plt.xlim(0, 2000)
+        plt.legend(fontsize=18); plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(f"{HERE}/{suffix}_reps_floor_emerges.png", dpi=140, bbox_inches="tight", pad_inches=0.05)
+        plt.savefig(f"{HERE}/{suffix}_reps_floor_emerges.pdf", bbox_inches="tight", pad_inches=0.05)
+        plt.close()
 
 # ---- FigE: C_cc floor vs load under REPS+asymmetry -> the 0->positive transition ----
 loads = [2, 4, 8, 16, 32]
