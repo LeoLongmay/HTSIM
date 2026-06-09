@@ -96,44 +96,39 @@ def render():
     qA_best = TQD[gm.index(max(gm))]                  # lenient end expected
     qB_best = TQD[lm.index(min(lm))]                  # aggressive end expected
 
-    XLBL = "NSCC target_q_delay (us)\n[left = aggressive, right = lenient]"
+    XLBL = "NSCC target_q_delay (us)"
+    default_w, default_h = plt.rcParams["figure.figsize"]
 
-    # figI1 -- Regime A (spray-removable): goodput, lenient CC wins
+    # One figure, two stacked panels (figI1 top = Regime A goodput, figI2 bottom = Regime B latency),
+    # sharing the x-axis so the top panel's x-ticks + x-label are dropped; small gap between panels.
+    # Width and per-panel height kept as before (default_w+2.0 wide, 4 tall each -> 8 total).
     with plt.rc_context({"font.size": 24}):
-        fig, ax = plt.subplots(figsize=(9.5, 6.5))
-        ax.errorbar(TQD, gm, yerr=gs, marker='o', lw=2.5, ms=10, capsize=5, color='tab:green')
-        ax.fill_between(TQD, gm, max(gm), color='tab:red', alpha=0.10)
-        ax.axvline(DEFAULT_TQD, color='gray', ls='--', lw=1.5)
-        ax.scatter([qA_best], [max(gm)], s=260, facecolors='none', edgecolors='tab:green', lw=2.5, zorder=5)
-        ax.annotate("optimum:\nlenient CC", xy=(qA_best, max(gm)), xytext=(9, max(gm)),
-                    va='center', ha='center', arrowprops=dict(arrowstyle='->', color='tab:green'))
-        ax.annotate("default", xy=(DEFAULT_TQD, min(gm)), color='gray', rotation=90, va='bottom', ha='right')
-        ax.set_xlabel(XLBL); ax.set_ylabel("Goodput (Gbps)")
-        ax.set_xticks(TQD); ax.grid(alpha=0.3)
-        if dA:
-            ax.set_title(f"Regime A: $C_{{spray}}$ = {dA[0]:.1f} $\\gg$ $C_{{cc}}$ = {dA[1]:.1f} us")
-        plt.tight_layout()
-        fig.savefig(os.path.join(HERE, "figI1_regimeA_goodput.png"), dpi=140, bbox_inches="tight", pad_inches=0.05)
-        fig.savefig(os.path.join(HERE, "figI1_regimeA_goodput.pdf"), bbox_inches="tight", pad_inches=0.05)
-        plt.close(fig)
-
-    # figI2 -- Regime B (path-wide): mean queue latency, aggressive CC wins
-    with plt.rc_context({"font.size": 24}):
-        fig, ax = plt.subplots(figsize=(9.5, 6.5))
-        ax.errorbar(TQD, lm, yerr=ls, marker='s', lw=2.5, ms=10, capsize=5, color='tab:purple')
-        ax.fill_between(TQD, lm, max(lm), color='tab:red', alpha=0.10)
-        ax.axvline(DEFAULT_TQD, color='gray', ls='--', lw=1.5)
-        ax.scatter([qB_best], [min(lm)], s=260, facecolors='none', edgecolors='tab:purple', lw=2.5, zorder=5)
-        ax.annotate("optimum:\naggressive CC", xy=(qB_best, min(lm)), xytext=(9, min(lm)),
-                    va='center', ha='center', arrowprops=dict(arrowstyle='->', color='tab:purple'))
-        ax.annotate("default", xy=(DEFAULT_TQD, max(lm)), color='gray', rotation=90, va='top', ha='right')
-        ax.set_xlabel(XLBL); ax.set_ylabel("Mean queue latency (us)")
-        ax.set_xticks(TQD); ax.grid(alpha=0.3)
-        if dB:
-            ax.set_title(f"Regime B: $C_{{cc}}$ = {dB[1]:.1f} $\\gg$ $C_{{spray}}$ = {dB[0]:.1f} us")
-        plt.tight_layout()
-        fig.savefig(os.path.join(HERE, "figI2_regimeB_latency.png"), dpi=140, bbox_inches="tight", pad_inches=0.05)
-        fig.savefig(os.path.join(HERE, "figI2_regimeB_latency.pdf"), bbox_inches="tight", pad_inches=0.05)
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(default_w + 2.0, 8), sharex=True)
+        # ---- figI1 (top): Regime A (spray-removable) -- goodput, lenient CC wins ----
+        ax1.errorbar(TQD, gm, yerr=gs, marker='o', lw=2.5, ms=10, capsize=5, color='tab:green')
+        ax1.fill_between(TQD, gm, max(gm), color='tab:red', alpha=0.10)
+        ax1.axvline(DEFAULT_TQD, color='gray', ls='--', lw=1.5)
+        ax1.scatter([qA_best], [max(gm)], s=260, facecolors='none', edgecolors='tab:green', lw=2.5, zorder=5)
+        ax1.annotate("optimum:\nlenient CC", xy=(qA_best, max(gm)), xytext=(11, 30),
+                     va='center', ha='center', arrowprops=dict(arrowstyle='->', color='tab:green'))
+        ax1.annotate("default", xy=(DEFAULT_TQD, min(gm)), color='gray', rotation=90, va='bottom', ha='right')
+        ax1.set_ylabel("Goodput (Gbps)")
+        ax1.yaxis.set_label_coords(-0.12, 0.45)
+        ax1.grid(alpha=0.3)
+        # ---- figI2 (bottom): Regime B (path-wide) -- mean queue latency, aggressive CC wins ----
+        ax2.errorbar(TQD, lm, yerr=ls, marker='s', lw=2.5, ms=10, capsize=5, color='tab:purple')
+        ax2.fill_between(TQD, lm, max(lm), color='tab:red', alpha=0.10)
+        ax2.axvline(DEFAULT_TQD, color='gray', ls='--', lw=1.5)
+        ax2.scatter([qB_best], [min(lm)], s=260, facecolors='none', edgecolors='tab:purple', lw=2.5, zorder=5)
+        ax2.annotate("optimum:\naggressive CC", xy=(qB_best, min(lm)), xytext=(10, 10),
+                     va='center', ha='center', arrowprops=dict(arrowstyle='->', color='tab:purple'))
+        ax2.annotate("default", xy=(DEFAULT_TQD, max(lm)), color='gray', rotation=90, va='top', ha='right')
+        ax2.set_xlabel(XLBL); ax2.set_ylabel("Queue latency (us)")
+        ax2.yaxis.set_label_coords(-0.12, 0.35)
+        ax2.set_xticks(TQD); ax2.grid(alpha=0.3)
+        plt.tight_layout(h_pad=0.3)   # small h_pad -> reduced gap between the two panels
+        fig.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.png"), dpi=140, bbox_inches="tight", pad_inches=0.05)
+        fig.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.pdf"), bbox_inches="tight", pad_inches=0.05)
         plt.close(fig)
     print("figI: RegimeA goodput vs tqd =", [round(x,1) for x in gm], "argmax tqd", qA_best)
     print("figI: RegimeB mean-lat vs tqd =", [round(x,1) for x in lm], "argmin tqd", qB_best)
