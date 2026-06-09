@@ -103,13 +103,13 @@ def render():
     # sharing the x-axis so the top panel's x-ticks + x-label are dropped; small gap between panels.
     # Width and per-panel height kept as before (default_w+2.0 wide, 4 tall each -> 8 total).
     with plt.rc_context({"font.size": 24}):
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(default_w + 2.0, 8), sharex=True)
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(default_w + 2.0, 6.5), sharex=True)
         # ---- figI1 (top): Regime A (spray-removable) -- goodput, lenient CC wins ----
         ax1.errorbar(TQD, gm, yerr=gs, marker='o', lw=2.5, ms=10, capsize=5, color='tab:green')
         ax1.fill_between(TQD, gm, max(gm), color='tab:red', alpha=0.10)
         ax1.axvline(DEFAULT_TQD, color='gray', ls='--', lw=1.5)
         ax1.scatter([qA_best], [max(gm)], s=260, facecolors='none', edgecolors='tab:green', lw=2.5, zorder=5)
-        ax1.annotate("optimum:\nlenient CC", xy=(qA_best, max(gm)), xytext=(11, 30),
+        ax1.annotate("Best", xy=(qA_best, max(gm)), xytext=(11, 30),
                      va='center', ha='center', arrowprops=dict(arrowstyle='->', color='tab:green'))
         ax1.annotate("default", xy=(DEFAULT_TQD, min(gm)), color='gray', rotation=90, va='bottom', ha='right')
         ax1.set_ylabel("Goodput (Gbps)")
@@ -120,11 +120,11 @@ def render():
         ax2.fill_between(TQD, lm, max(lm), color='tab:red', alpha=0.10)
         ax2.axvline(DEFAULT_TQD, color='gray', ls='--', lw=1.5)
         ax2.scatter([qB_best], [min(lm)], s=260, facecolors='none', edgecolors='tab:purple', lw=2.5, zorder=5)
-        ax2.annotate("optimum:\naggressive CC", xy=(qB_best, min(lm)), xytext=(10, 10),
+        ax2.annotate("Best", xy=(qB_best, min(lm)), xytext=(10, 10),
                      va='center', ha='center', arrowprops=dict(arrowstyle='->', color='tab:purple'))
         ax2.annotate("default", xy=(DEFAULT_TQD, max(lm)), color='gray', rotation=90, va='top', ha='right')
-        ax2.set_xlabel(XLBL); ax2.set_ylabel("Queue latency (us)")
-        ax2.yaxis.set_label_coords(-0.12, 0.35)
+        ax2.set_xlabel(XLBL); ax2.set_ylabel("Latency (us)")
+        ax2.yaxis.set_label_coords(-0.12, 0.45)
         ax2.set_xticks(TQD); ax2.grid(alpha=0.3)
         plt.tight_layout(h_pad=0.3)   # small h_pad -> reduced gap between the two panels
         fig.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.png"), dpi=140, bbox_inches="tight", pad_inches=0.05)
