@@ -70,7 +70,7 @@ bash mvp_runs3/repro.sh
 | figF | REPS whole-pod failed=12,32 发送端,扫 CC `target_q_delay`∈{2,4,6,8,12,16}µs | 2 ms | [500,1500] | `mp_cc_tqd{Q}`(env `TQD`) | `const`(C_cc)/`global`(C_spray) |
 | figG | whole-pod overload 64→16,failed∈{0,4,8,12},REPS vs **OBLIVIOUS** | 2 ms | [500,1500] | `cc_{reps,obl}_f{F}.s{S}`(`run_meas.sh … sink`) | — (聚合 goodput Gbps) |
 | figH | 与 figG **同一批 run** | 2 ms | 全程累计 | 同上;读 stdout 的 `New`/`Rtx` | — (重传% = Rtx/New) |
-| figI | REPS 固定;Regime A=overload 8→16(failed12)取 goodput、Regime B=incast 32→1(failed0)取 mean 队列时延;各扫 `target_q_delay`∈{2,4,6,8,12,16}µs | 2 ms | [500,1500] | `cp{A,B}_tqd{Q}.s{S}`;分解 `cp{A,B}_decomp`(END=8) | A:goodput / B:mean lat;分解用 `const` |
+| figI1/figI2 | REPS 固定;Regime A=overload 8→16(failed12)取 goodput、Regime B=incast 32→1(failed0)取 mean 队列时延;各扫 `target_q_delay`∈{2,4,6,8,12,16}µs。**两张独立图**:figI1=Regime A goodput、figI2=Regime B latency | 2 ms | [500,1500] | `cp{A,B}_tqd{Q}.s{S}`;分解 `cp{A,B}_decomp`(END=8) | A:goodput / B:mean lat;分解用 `const` |
 
 真实传播 floor `B_prop` = `mp_inc_reps_n1.s13` 的 min raw RTT(空载单流;拓扑决定、与种子无关)。
 
