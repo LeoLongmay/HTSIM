@@ -85,7 +85,7 @@ def main():
     ax.set_ylabel("aggregate goodput (Gbps)")
     ax.set_title("figG: CC alone underutilizes under asymmetry\nwhole-pod overload 64→16, NSCC, mean±std over 5 seeds")
     ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.legend(loc="lower left"); ax.grid(alpha=0.3)
-    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.png"), dpi=140); plt.close()
+    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.png"), dpi=140); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.pdf")); plt.close()
 
     # ---- figH: retransmission / congestion storm ----
     rm_r, rs_r = across_seeds(retx_pct, "reps")
@@ -102,7 +102,7 @@ def main():
     ax.set_ylabel("retransmitted packets  (% of new = trim storm)")
     ax.set_title("figH: CC alone → congestion / retransmission storm\nsame runs as figG; adaptive LB relieves hot paths CC cannot")
     ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.legend(loc="upper left"); ax.grid(alpha=0.3)
-    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140); plt.close()
+    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.pdf")); plt.close()
 
     print("figG goodput (Gbps)  failed -> (REPS, OBL, gap):")
     for i, f in enumerate(FAILED):

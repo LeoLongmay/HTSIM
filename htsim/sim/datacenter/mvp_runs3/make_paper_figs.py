@@ -83,7 +83,7 @@ plt.ylabel(f"C_cc cross-flow median (us)\n[vs true floor {BPROP/1000:.1f}us]")
 plt.title("FigA. Irreducible floor C_cc rises with load and is LB-invariant\n"
           "(symmetric incast) -> only CC can reduce it")
 plt.legend(); plt.grid(alpha=0.3); plt.xticks(Ns); plt.ylim(bottom=0)
-plt.tight_layout(); plt.savefig(f"{HERE}/figA_floor_vs_load.png", dpi=140); plt.close()
+plt.tight_layout(); plt.savefig(f"{HERE}/figA_floor_vs_load.png", dpi=140); plt.savefig(f"{HERE}/figA_floor_vs_load.pdf"); plt.close()
 
 # ---- FigB: C_spray removed by LB when path diversity exists (whole-pod) -> need LB ----
 fails = [0, 4, 8, 12]
@@ -97,7 +97,7 @@ plt.ylabel("C_spray cross-flow median (us)")
 plt.title("FigB. Removable spread C_spray: good LB lowers it (REPS < OBL)\n"
           "(whole-pod overload, path-diverse) -> spraying/LB is necessary")
 plt.legend(); plt.grid(alpha=0.3); plt.xticks(fails); plt.ylim(bottom=0)
-plt.tight_layout(); plt.savefig(f"{HERE}/figB_spray_lb_removable.png", dpi=140); plt.close()
+plt.tight_layout(); plt.savefig(f"{HERE}/figB_spray_lb_removable.png", dpi=140); plt.savefig(f"{HERE}/figB_spray_lb_removable.pdf"); plt.close()
 
 # ---- FigC: does LB help? depends on bottleneck (incast vs whole-pod), symmetric ----
 ic_r = ms("mp_inc_reps_n32", "global", WIN_INC, "cspray_med")
@@ -115,7 +115,7 @@ plt.xticks(list(x), groups); plt.ylabel("C_spray cross-flow median (us)")
 plt.title("FigC. LB only removes C_spray where path diversity exists\n"
           "(symmetric load): incast REPS~=OBL; whole-pod REPS<OBL -> need both, context-aware")
 plt.legend(); plt.grid(alpha=0.3, axis="y")
-plt.tight_layout(); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.png", dpi=140); plt.close()
+plt.tight_layout(); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.png", dpi=140); plt.savefig(f"{HERE}/figC_lb_depends_on_bottleneck.pdf"); plt.close()
 
 # ---- FigD: REPS time series, low vs high load (asymmetric) -> LB alone limited ----
 # whole-pod overload into a partly-degraded pod (failed=12, good-path cap ~400G < 800G
@@ -134,7 +134,7 @@ for ax, n, tag in ((axL, 4, "low load (4 senders): LB alone handles it"),
 axL.set_ylabel("per-path queueing delay (us)\ncross-flow median"); axL.legend(fontsize=8)
 fig.suptitle("FigD. REPS under asymmetry (failed=12): floor C_cc stays ~0 at low load but "
              "emerges at high load -> spraying alone is limited, CC is required")
-plt.tight_layout(); plt.savefig(f"{HERE}/figD_reps_floor_emerges.png", dpi=140); plt.close()
+plt.tight_layout(); plt.savefig(f"{HERE}/figD_reps_floor_emerges.png", dpi=140); plt.savefig(f"{HERE}/figD_reps_floor_emerges.pdf"); plt.close()
 
 # ---- FigE: C_cc floor vs load under REPS+asymmetry -> the 0->positive transition ----
 loads = [2, 4, 8, 16, 32]
@@ -150,7 +150,7 @@ plt.ylabel("cross-flow median (us)")
 plt.title("FigE. REPS + asymmetry (failed=12): C_cc floor rises from ~0 to >0 with load\n"
           "-> LB suffices at low load; beyond good-path capacity only CC can reduce the floor")
 plt.legend(); plt.grid(alpha=0.3); plt.xticks(loads); plt.ylim(bottom=0)
-plt.tight_layout(); plt.savefig(f"{HERE}/figE_floor_vs_load_reps_asym.png", dpi=140); plt.close()
+plt.tight_layout(); plt.savefig(f"{HERE}/figE_floor_vs_load_reps_asym.png", dpi=140); plt.savefig(f"{HERE}/figE_floor_vs_load_reps_asym.pdf"); plt.close()
 
 # ---- FigF: CC strength sets the floor (REPS, failed=12, high load) -> only CC reduces C_cc ----
 # Same high-load asymmetric scenario as figD-right, but sweep NSCC's target_q_delay (CC
@@ -169,7 +169,7 @@ plt.ylabel("cross-flow median (us)")
 plt.title("FigF. CC strength sets the floor: C_cc tracks NSCC target_q_delay\n"
           "(REPS, failed=12, high load) -> tightening CC drives the floor toward 0")
 plt.legend(); plt.grid(alpha=0.3); plt.xticks(TQDS); plt.ylim(bottom=0)
-plt.tight_layout(); plt.savefig(f"{HERE}/figF_cc_strength_sets_floor.png", dpi=140); plt.close()
+plt.tight_layout(); plt.savefig(f"{HERE}/figF_cc_strength_sets_floor.png", dpi=140); plt.savefig(f"{HERE}/figF_cc_strength_sets_floor.pdf"); plt.close()
 
 # ---- console summary (for README / verification) ----
 def fmt(t): return "n/a" if t[0] is None else f"{t[0]:.2f}+/-{t[1]:.2f}(n={t[2]})"

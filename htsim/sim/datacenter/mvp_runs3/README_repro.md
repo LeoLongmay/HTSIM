@@ -9,12 +9,12 @@
 cd /home/leo/htsim/htsim/sim
 cmake -S . -B build && cmake --build build -j      # 产物 build/datacenter/htsim_uec(./htsim_uec 软链)
 
-# 1. 跑出全部数据 + 生成八张图(figA–figH)
+# 1. 跑出全部数据 + 生成九张图(figA–figI)
 cd datacenter
 bash mvp_runs3/repro.sh
 ```
 
-产物:`figA`–`figH`(共八张 png,见下表)。
+产物:`figA`–`figI`(共九张,见下表)。每张图都**同时输出 `.png`(预览)与 `.pdf`(矢量,放论文/LaTeX 用)**。
 
 ## 九张图说明(及诚实作用域)
 

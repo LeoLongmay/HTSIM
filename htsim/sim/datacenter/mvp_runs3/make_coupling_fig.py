@@ -124,7 +124,7 @@ def render():
                  "REPS fixed ON; optimal CC flips ends -> the fixed default is off-optimum in BOTH",
                  fontsize=10.5)
     plt.tight_layout(rect=(0, 0, 1, 0.96))
-    plt.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.png"), dpi=140); plt.close()
+    plt.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.png"), dpi=140); plt.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.pdf")); plt.close()
     print("figI: RegimeA goodput vs tqd =", [round(x,1) for x in gm], "argmax tqd", qA_best)
     print("figI: RegimeB mean-lat vs tqd =", [round(x,1) for x in lm], "argmin tqd", qB_best)
     print("figI: decomp A", dA, " B", dB)
