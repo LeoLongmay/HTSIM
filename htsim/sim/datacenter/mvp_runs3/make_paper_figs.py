@@ -75,15 +75,17 @@ def timeseries_median(csv, const_base, bin_ns=10000, tmax_us=2000, min_samples=2
 Ns = [16, 32, 64]
 a_reps = [ms(f"mp_inc_reps_n{n}", "const", WIN_INC, "ccc_med", const_base=BPROP) for n in Ns]
 a_obl  = [ms(f"mp_inc_obl_n{n}",  "const", WIN_INC, "ccc_med", const_base=BPROP) for n in Ns]
-plt.figure(figsize=(7, 4.5))
-plt.errorbar(Ns, [m for m,_,_ in a_reps], yerr=[s for _,s,_ in a_reps], fmt="s-",  capsize=4, label="REPS")
-plt.errorbar(Ns, [m for m,_,_ in a_obl],  yerr=[s for _,s,_ in a_obl],  fmt="o--", capsize=4, label="OBLIVIOUS")
-plt.xlabel("incast degree N (offered load)")
-plt.ylabel(f"C_cc cross-flow median (us)\n[vs true floor {BPROP/1000:.1f}us]")
-plt.title("FigA. Irreducible floor C_cc rises with load and is LB-invariant\n"
-          "(symmetric incast) -> only CC can reduce it")
-plt.legend(); plt.grid(alpha=0.3); plt.xticks(Ns); plt.ylim(bottom=0)
-plt.tight_layout(); plt.savefig(f"{HERE}/figA_floor_vs_load.png", dpi=140); plt.savefig(f"{HERE}/figA_floor_vs_load.pdf"); plt.close()
+xpos = list(range(len(Ns)))            # categorical x -> 16/32/64 drawn evenly spaced
+with plt.rc_context({"font.size": 24}):    # paper styling: all text in figA at 24pt
+    plt.figure(figsize=(12, 7))
+    plt.errorbar(xpos, [m for m,_,_ in a_reps], yerr=[s for _,s,_ in a_reps], fmt="s-",  lw=2.5, ms=11, capsize=6, label="REPS")
+    plt.errorbar(xpos, [m for m,_,_ in a_obl],  yerr=[s for _,s,_ in a_obl],  fmt="o--", lw=2.5, ms=11, capsize=6, label="OBLIVIOUS")
+    plt.xlabel("incast degree N (offered load)")
+    plt.ylabel(f"C_cc cross-flow median (us)\n[vs true floor {BPROP/1000:.1f}us]")
+    # no in-figure title (paper convention: describe in \caption); keeps all text at 24pt unclipped
+    plt.legend(); plt.grid(alpha=0.3)
+    plt.xticks(xpos, [str(n) for n in Ns]); plt.ylim(10, 14); plt.yticks(range(10, 15))
+    plt.tight_layout(); plt.savefig(f"{HERE}/figA_floor_vs_load.png", dpi=140); plt.savefig(f"{HERE}/figA_floor_vs_load.pdf"); plt.close()
 
 # ---- FigB: C_spray removed by LB when path diversity exists (whole-pod) -> need LB ----
 fails = [0, 4, 8, 12]
