@@ -12,6 +12,8 @@ DC="$(cd "$(dirname "$0")/.." && pwd)"   # .../sim/datacenter
 cd "$DC"
 LB="$1"; FAILED="$2"; TAG="$3"; CM="$4"; LOGSPEC="${5:-both}"
 SEED="${SEED:-13}"; END="${END:-2}"; LOGTIME="${LOGTIME:-2}"
+TQD_ARG=""           # NSCC target_q_delay (us); only passed when TQD env is set (default = binary's 6us)
+[ -n "${TQD:-}" ] && TQD_ARG="-target_q_delay ${TQD}"
 OUT=mvp_runs3
 case "$LOGSPEC" in
   sink)  LOGARGS="-log sink";;
@@ -19,10 +21,10 @@ case "$LOGSPEC" in
   both)  LOGARGS="-log sink -log tor_downqueue";;
   *) echo "bad LOGSPEC $LOGSPEC"; exit 2;;
 esac
-echo "[meas] lb=$LB failed=$FAILED tag=$TAG cm=$CM log=$LOGSPEC seed=$SEED end=$END logtime=${LOGTIME}us"
+echo "[meas] lb=$LB failed=$FAILED tag=$TAG cm=$CM log=$LOGSPEC seed=$SEED end=$END logtime=${LOGTIME}us${TQD:+ tqd=$TQD}"
 ./htsim_uec -topo topologies/fat_tree_128_1os.topo -tm "$CM" -nodes 128 \
     -sender_cc_algo nscc -load_balancing_algo "$LB" -failed "$FAILED" -mtu 4150 \
-    -paths 8 -seed "$SEED" $LOGARGS -logtime_us "$LOGTIME" -end "$END" \
+    -paths 8 -seed "$SEED" $TQD_ARG $LOGARGS -logtime_us "$LOGTIME" -end "$END" \
     -o "$OUT/$TAG.dat" > "$OUT/$TAG.stdout" 2>&1
 cp idmap.txt "$OUT/$TAG.idmap"
 if [ "$LOGSPEC" = sink ] || [ "$LOGSPEC" = both ]; then
