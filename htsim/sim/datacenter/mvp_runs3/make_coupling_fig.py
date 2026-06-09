@@ -102,8 +102,8 @@ def render():
     # One figure, two stacked panels (figI1 top = Regime A goodput, figI2 bottom = Regime B latency),
     # sharing the x-axis so the top panel's x-ticks + x-label are dropped; small gap between panels.
     # Width and per-panel height kept as before (default_w+2.0 wide, 4 tall each -> 8 total).
-    with plt.rc_context({"font.size": 24}):
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(default_w + 2.0, 6.5), sharex=True)
+    with plt.rc_context({"font.size": 18}):
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(default_w + 2.0, 5.0), sharex=True)
         # ---- figI1 (top): Regime A (spray-removable) -- goodput, lenient CC wins ----
         ax1.errorbar(TQD, gm, yerr=gs, marker='o', lw=2.5, ms=10, capsize=5, color='tab:green')
         ax1.fill_between(TQD, gm, max(gm), color='tab:red', alpha=0.10)
@@ -111,9 +111,9 @@ def render():
         ax1.scatter([qA_best], [max(gm)], s=260, facecolors='none', edgecolors='tab:green', lw=2.5, zorder=5)
         ax1.annotate("Best", xy=(qA_best, max(gm)), xytext=(11, 30),
                      va='center', ha='center', arrowprops=dict(arrowstyle='->', color='tab:green'))
-        ax1.annotate("default", xy=(DEFAULT_TQD, min(gm)), color='gray', rotation=90, va='bottom', ha='right')
+        ax1.annotate("default", xy=(DEFAULT_TQD, min(gm) - 3), color='gray', rotation=90, va='bottom', ha='right')
         ax1.set_ylabel("Goodput (Gbps)")
-        ax1.yaxis.set_label_coords(-0.12, 0.45)
+        ax1.yaxis.set_label_coords(-0.08, 0.45)
         ax1.grid(alpha=0.3)
         # ---- figI2 (bottom): Regime B (path-wide) -- mean queue latency, aggressive CC wins ----
         ax2.errorbar(TQD, lm, yerr=ls, marker='s', lw=2.5, ms=10, capsize=5, color='tab:purple')
@@ -124,11 +124,11 @@ def render():
                      va='center', ha='center', arrowprops=dict(arrowstyle='->', color='tab:purple'))
         ax2.annotate("default", xy=(DEFAULT_TQD, max(lm)), color='gray', rotation=90, va='top', ha='right')
         ax2.set_xlabel(XLBL); ax2.set_ylabel("Latency (us)")
-        ax2.yaxis.set_label_coords(-0.12, 0.45)
+        ax2.yaxis.set_label_coords(-0.08, 0.4)
         ax2.set_xticks(TQD); ax2.grid(alpha=0.3)
         plt.tight_layout(h_pad=0.3)   # small h_pad -> reduced gap between the two panels
-        fig.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.png"), dpi=140, bbox_inches="tight", pad_inches=0.05)
-        fig.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.pdf"), bbox_inches="tight", pad_inches=0.05)
+        fig.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.png"), dpi=140, bbox_inches="tight", pad_inches=0.12)
+        fig.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.pdf"), bbox_inches="tight", pad_inches=0.12)
         plt.close(fig)
     print("figI: RegimeA goodput vs tqd =", [round(x,1) for x in gm], "argmax tqd", qA_best)
     print("figI: RegimeB mean-lat vs tqd =", [round(x,1) for x in lm], "argmin tqd", qB_best)

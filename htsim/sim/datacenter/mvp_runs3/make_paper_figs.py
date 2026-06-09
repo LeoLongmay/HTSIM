@@ -79,7 +79,7 @@ xpos = list(range(len(Ns)))            # categorical x -> 16/32/64 drawn evenly 
 with plt.rc_context({"font.size": 24}):    # paper styling: all text in figA at 24pt figsize=(12, 7)
     plt.figure()
     plt.errorbar(xpos, [m for m,_,_ in a_reps], yerr=[s for _,s,_ in a_reps], fmt="s-",  lw=2.5, ms=11, capsize=6, label="REPS")
-    plt.errorbar(xpos, [m for m,_,_ in a_obl],  yerr=[s for _,s,_ in a_obl],  fmt="o--", lw=2.5, ms=11, capsize=6, label="OBLIVIOUS")
+    plt.errorbar(xpos, [m for m,_,_ in a_obl],  yerr=[s for _,s,_ in a_obl],  fmt="o--", lw=2.5, ms=11, capsize=6, label="Oblivious")
     plt.xlabel("Incast degree N")
     plt.ylabel(r"$C_{cc}$ (us)")
     # no in-figure title (paper convention: describe in \caption); keeps all text at 24pt unclipped
@@ -93,7 +93,7 @@ b_reps = [ms(f"mp_wp_reps_f{f}", "global", WIN_WP, "cspray_med") for f in fails]
 b_obl  = [ms(f"mp_wp_obl_f{f}",  "global", WIN_WP, "cspray_med") for f in fails]
 plt.figure(figsize=(7, 4.5))
 plt.errorbar(fails, [m for m,_,_ in b_reps], yerr=[s for _,s,_ in b_reps], fmt="s-",  capsize=4, label="REPS (adaptive)")
-plt.errorbar(fails, [m for m,_,_ in b_obl],  yerr=[s for _,s,_ in b_obl],  fmt="o--", capsize=4, label="OBLIVIOUS (non-adaptive)")
+plt.errorbar(fails, [m for m,_,_ in b_obl],  yerr=[s for _,s,_ in b_obl],  fmt="o--", capsize=4, label="Oblivious (non-adaptive)")
 plt.xlabel("-failed (link asymmetry)")
 plt.ylabel("C_spray cross-flow median (us)")
 plt.title("FigB. Removable spread C_spray: good LB lowers it (REPS < OBL)\n"
@@ -113,7 +113,7 @@ x = range(len(groups)); w = 0.25
 with plt.rc_context({"font.size": 24}):
     plt.figure() # figsize=(7, 4.5)
     plt.bar([i-w/2 for i in x], reps_v, w, yerr=reps_e, capsize=4, label="REPS")
-    plt.bar([i+w/2 for i in x], obl_v,  w, yerr=obl_e,  capsize=4, label="OBLIVIOUS")
+    plt.bar([i+w/2 for i in x], obl_v,  w, yerr=obl_e,  capsize=4, label="Oblivious")
     plt.xticks(list(x), groups); plt.ylabel(r"$C_{spray}$ (us)")
     # plt.title("FigC. LB only removes C_spray where path diversity exists\n"
     #           "(symmetric load): incast REPS~=OBL; whole-pod REPS<OBL -> need both, context-aware")
@@ -128,7 +128,7 @@ with plt.rc_context({"font.size": 24}):
 for suffix, n, show_ylabel in (("figD1", 4, True), ("figD2", 32, False)):
     csv = os.path.join(HERE, f"mp_load_reps_n{n}.s13.pathrtt.csv")
     with plt.rc_context({"font.size": 24}):
-        plt.figure(figsize=(10, 6))
+        plt.figure()
         if os.path.exists(csv):
             t, cs, cc = timeseries_median(csv, const_base=BPROP)
             plt.plot(t, cs, lw=2, label=r"$C_{spray}$ (LB-removable)")
@@ -149,7 +149,7 @@ with plt.rc_context({"font.size": 18}):
     figL = plt.figure(figsize=(8, 0.6))
     _h = [Line2D([], [], color="C0", lw=2,            label=r"$C_{spray}$ (LB-removable)"),
           Line2D([], [], color="C1", lw=2, ls="--",  label=r"$C_{cc}$ (CC-only)")]
-    figL.legend(handles=_h, loc="center", ncol=2, frameon=True)
+    figL.legend(handles=_h, loc="center", ncol=2, frameon=False)
     figL.savefig(f"{HERE}/figD_legend.png", dpi=140, bbox_inches="tight", pad_inches=0.05)
     figL.savefig(f"{HERE}/figD_legend.pdf", bbox_inches="tight", pad_inches=0.05)
     plt.close(figL)

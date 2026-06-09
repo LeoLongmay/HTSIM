@@ -67,7 +67,7 @@ def across_seeds(fn, lb):
 
 def main():
     REPS_LBL = "REPS  (CC + adaptive spraying)"
-    OBL_LBL = "OBLIVIOUS  (CC alone, no adaptive spraying)"
+    OBL_LBL = "Oblivious  (CC alone, no adaptive spraying)"
     GREEN, RED = "tab:green", "tab:red"
     # paper styling: 24pt text + a figure big enough that the 24pt y-label never clips.
     # Set figsize via rcParams (not inline on plt.subplots) so it survives edits to that call.
@@ -81,16 +81,17 @@ def main():
     ax.errorbar(FAILED, gm_o, yerr=gs_o, marker='s', capsize=3, lw=2, label=OBL_LBL, color=RED)
     ax.fill_between(FAILED, gm_o, gm_r, color=RED, alpha=0.12)
     gap = gm_r[-1] - gm_o[-1]
-    ax.annotate(f"capacity CC-alone leaves idle\n{gap:.0f} Gbps ({100*gap/gm_o[-1]:.0f}%)",
+    ax.annotate(f"CC-alone leaves idle\n{gap:.0f} Gbps ({100*gap/gm_o[-1]:.0f}%)",
                 xy=(12, (gm_r[-1] + gm_o[-1]) / 2), xytext=(5.2, (gm_r[-1] + gm_o[-1]) / 2 - 16),
                 fontsize=18, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
     ax.set_xlabel("Number of failed links")
-    ax.set_ylabel("Aggregate goodput (Gbps)")
+    ax.set_ylabel("Goodput (Gbps)")
     ax.yaxis.set_label_coords(-0.16, 0.45)
     # legend drawn in its own file (figGH_legend), not in the panel
     ax.set_xticks(FAILED); ax.set_ylim(bottom=50); ax.grid(alpha=0.3)
-    plt.tight_layout(); plt.subplots_adjust(top=0.82)   # reserve top whitespace so the rotated y-label's top isn't clipped (figsize unchanged)
-    plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.png"), dpi=140); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.pdf")); plt.close()
+    plt.tight_layout(); plt.subplots_adjust(top=0.89)   # reserve top whitespace so the rotated y-label's top isn't clipped (figsize unchanged)
+    plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.png"), dpi=140, bbox_inches="tight", pad_inches=0.03); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.pdf"),
+            bbox_inches="tight", pad_inches=0.03); plt.close()
 
     # ---- figH: retransmission / congestion storm ----
     rm_r, rs_r = across_seeds(retx_pct, "reps")
@@ -100,26 +101,26 @@ def main():
     ax.errorbar(FAILED, rm_o, yerr=rs_o, marker='s', capsize=3, lw=2, label=OBL_LBL, color=RED)
     ax.fill_between(FAILED, rm_r, rm_o, color=RED, alpha=0.12)
     dr = rm_o[-1] - rm_r[-1]
-    ax.annotate(f"extra trim/retransmit storm\nunder CC-alone  (+{dr:.0f} pts)",
+    ax.annotate(f"extra retransmit storm\nunder CC-alone  (+{dr:.0f}%)",
                 xy=(11.7, (rm_r[-1] + rm_o[-1]) / 2), xytext=(7.6, 2.5),
                 fontsize=18, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
     ax.set_xlabel("Number of failed links")
-    ax.set_ylabel(r"Retransmitted packets (%)")
-    ax.yaxis.set_label_coords(-0.12, 0.45)
+    ax.set_ylabel(r"Retransmitted ratio (%)")
+    ax.yaxis.set_label_coords(-0.12, 0.38)
     # legend drawn in its own file (figGH_legend), not in the panel
     ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.grid(alpha=0.3)
-    plt.tight_layout(); plt.subplots_adjust(top=0.82)   # reserve top whitespace so the rotated y-label's top isn't clipped (figsize unchanged)
-    plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.pdf")); plt.close()
+    plt.tight_layout(); plt.subplots_adjust(top=0.89)   # reserve top whitespace so the rotated y-label's top isn't clipped (figsize unchanged)
+    plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140, bbox_inches="tight", pad_inches=0.03); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.pdf"), bbox_inches="tight", pad_inches=0.03); plt.close()
 
     # shared legend (identical for figG & figH) as its own image file
     from matplotlib.lines import Line2D
     _h = [Line2D([], [], color=GREEN, marker='o', lw=2, label=REPS_LBL),
           Line2D([], [], color=RED,   marker='s', lw=2, label=OBL_LBL)]
-    with plt.rc_context({"font.size": 18}):
+    with plt.rc_context({"font.size": 24}):
         figL = plt.figure(figsize=(13, 0.8))
         figL.legend(handles=_h, loc="center", ncol=2, frameon=False)
-        figL.savefig(os.path.join(HERE, "figGH_legend.png"), dpi=140, bbox_inches="tight", pad_inches=0.05)
-        figL.savefig(os.path.join(HERE, "figGH_legend.pdf"), bbox_inches="tight", pad_inches=0.05)
+        figL.savefig(os.path.join(HERE, "figGH_legend.png"), dpi=140, bbox_inches="tight", pad_inches=0.01)
+        figL.savefig(os.path.join(HERE, "figGH_legend.pdf"), bbox_inches="tight", pad_inches=0.01)
         plt.close(figL)
 
     print("figG goodput (Gbps)  failed -> (REPS, OBL, gap):")
