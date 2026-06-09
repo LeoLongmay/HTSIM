@@ -84,7 +84,7 @@ with plt.rc_context({"font.size": 24}):    # paper styling: all text in figA at 
     plt.ylabel(f"C_cc cross-flow median (us)\n[vs true floor {BPROP/1000:.1f}us]")
     # no in-figure title (paper convention: describe in \caption); keeps all text at 24pt unclipped
     plt.legend(); plt.grid(alpha=0.3)
-    plt.xticks(xpos, [str(n) for n in Ns]); plt.ylim(10, 14); plt.yticks(range(10, 15))
+    plt.xticks(xpos, [str(n) for n in Ns]); plt.ylim(10, 12); plt.yticks([10, 10.5, 11, 11.5, 12])
     plt.tight_layout(); plt.savefig(f"{HERE}/figA_floor_vs_load.png", dpi=140); plt.savefig(f"{HERE}/figA_floor_vs_load.pdf"); plt.close()
 
 # ---- FigB: C_spray removed by LB when path diversity exists (whole-pod) -> need LB ----
