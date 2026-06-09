@@ -78,11 +78,14 @@ def main():
     ax.errorbar(FAILED, gm_r, yerr=gs_r, marker='o', capsize=3, lw=2, label=REPS_LBL, color=GREEN)
     ax.errorbar(FAILED, gm_o, yerr=gs_o, marker='s', capsize=3, lw=2, label=OBL_LBL, color=RED)
     ax.fill_between(FAILED, gm_o, gm_r, color=RED, alpha=0.12)
-    # in-figure gap callout removed for the paper (shaded band shows it; magnitude in caption)
-    ax.set_xlabel("topological asymmetry (Number of failed links)")
-    ax.set_ylabel("aggregate goodput (Gbps)")
-    # ax.set_title("figG: CC alone underutilizes under asymmetry\nwhole-pod overload 64→16, NSCC, mean±std over 5 seeds")
-    ax.set_xticks(FAILED); ax.set_ylim(bottom=50); ax.legend(loc="lower left", fontsize=18); ax.grid(alpha=0.3)
+    gap = gm_r[-1] - gm_o[-1]
+    ax.annotate(f"capacity CC-alone leaves idle\n{gap:.0f} Gbps ({100*gap/gm_o[-1]:.0f}%)",
+                xy=(12, (gm_r[-1] + gm_o[-1]) / 2), xytext=(6.2, (gm_r[-1] + gm_o[-1]) / 2 - 16),
+                fontsize=18, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
+    ax.set_xlabel("Number of failed links")
+    ax.set_ylabel("Aggregate goodput (Gbps)")
+    # legend drawn in its own file (figGH_legend), not in the panel
+    ax.set_xticks(FAILED); ax.set_ylim(bottom=50); ax.grid(alpha=0.3)
     plt.tight_layout(); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.png"), dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.pdf"), bbox_inches="tight", pad_inches=0.05); plt.close()
 
     # ---- figH: retransmission / congestion storm ----
@@ -92,12 +95,26 @@ def main():
     ax.errorbar(FAILED, rm_r, yerr=rs_r, marker='o', capsize=3, lw=2, label=REPS_LBL, color=GREEN)
     ax.errorbar(FAILED, rm_o, yerr=rs_o, marker='s', capsize=3, lw=2, label=OBL_LBL, color=RED)
     ax.fill_between(FAILED, rm_r, rm_o, color=RED, alpha=0.12)
-    # in-figure callout removed for the paper (shaded band shows it; magnitude in caption)
-    ax.set_xlabel("topological asymmetry (Number of failed links)")
-    ax.set_ylabel(r"retransmitted packets ($\%$)")
-    # ax.set_title("figH: CC alone → congestion / retransmission storm\nsame runs as figG; adaptive LB relieves hot paths CC cannot")
-    ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.legend(loc="upper left", fontsize=18); ax.grid(alpha=0.3)
+    dr = rm_o[-1] - rm_r[-1]
+    ax.annotate(f"extra trim/retransmit storm\nunder CC-alone  (+{dr:.0f} pts)",
+                xy=(11.7, (rm_r[-1] + rm_o[-1]) / 2), xytext=(8.6, 7.5),
+                fontsize=18, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
+    ax.set_xlabel("Number of failed links")
+    ax.set_ylabel(r"Retransmitted packets ($\%$)")
+    # legend drawn in its own file (figGH_legend), not in the panel
+    ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.grid(alpha=0.3)
     plt.tight_layout(); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.pdf"), bbox_inches="tight", pad_inches=0.05); plt.close()
+
+    # shared legend (identical for figG & figH) as its own image file
+    from matplotlib.lines import Line2D
+    _h = [Line2D([], [], color=GREEN, marker='o', lw=2, label=REPS_LBL),
+          Line2D([], [], color=RED,   marker='s', lw=2, label=OBL_LBL)]
+    with plt.rc_context({"font.size": 18}):
+        figL = plt.figure(figsize=(13, 0.8))
+        figL.legend(handles=_h, loc="center", ncol=2, frameon=True)
+        figL.savefig(os.path.join(HERE, "figGH_legend.png"), dpi=140, bbox_inches="tight", pad_inches=0.05)
+        figL.savefig(os.path.join(HERE, "figGH_legend.pdf"), bbox_inches="tight", pad_inches=0.05)
+        plt.close(figL)
 
     print("figG goodput (Gbps)  failed -> (REPS, OBL, gap):")
     for i, f in enumerate(FAILED):
