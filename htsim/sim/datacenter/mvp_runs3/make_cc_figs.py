@@ -67,42 +67,37 @@ def across_seeds(fn, lb):
 
 def main():
     REPS_LBL = "REPS  (CC + adaptive spraying)"
-    OBL_LBL = "OBLIVIOUS  (CC alone: no reroute)"
+    OBL_LBL = "OBLIVIOUS  (CC alone, no adaptive spraying)"
     GREEN, RED = "tab:green", "tab:red"
+    plt.rcParams.update({"font.size": 24})   # paper styling: axes/ticks/labels 24pt (legend & callouts set to 18 below)
 
     # ---- figG: goodput / underutilization ----
     gm_r, gs_r = across_seeds(goodput_gbps, "reps")
     gm_o, gs_o = across_seeds(goodput_gbps, "obl")
-    fig, ax = plt.subplots(figsize=(7, 4.5))
+    fig, ax = plt.subplots(figsize=(10, 6))
     ax.errorbar(FAILED, gm_r, yerr=gs_r, marker='o', capsize=3, lw=2, label=REPS_LBL, color=GREEN)
     ax.errorbar(FAILED, gm_o, yerr=gs_o, marker='s', capsize=3, lw=2, label=OBL_LBL, color=RED)
     ax.fill_between(FAILED, gm_o, gm_r, color=RED, alpha=0.12)
-    gap = gm_r[-1] - gm_o[-1]
-    ax.annotate(f"capacity CC-alone leaves idle\n{gap:.0f} Gbps ({100*gap/gm_o[-1]:.0f}%)",
-                xy=(12, (gm_r[-1] + gm_o[-1]) / 2), xytext=(6.2, (gm_r[-1] + gm_o[-1]) / 2 - 16),
-                fontsize=8.5, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
-    ax.set_xlabel("topological asymmetry   (-failed = # degraded pod-ingress aggs)")
+    # in-figure gap callout removed for the paper (shaded band shows it; magnitude in caption)
+    ax.set_xlabel("topological asymmetry (Number of failed links)")
     ax.set_ylabel("aggregate goodput (Gbps)")
-    ax.set_title("figG: CC alone underutilizes under asymmetry\nwhole-pod overload 64→16, NSCC, mean±std over 5 seeds")
-    ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.legend(loc="lower left"); ax.grid(alpha=0.3)
-    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.png"), dpi=140); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.pdf")); plt.close()
+    # ax.set_title("figG: CC alone underutilizes under asymmetry\nwhole-pod overload 64→16, NSCC, mean±std over 5 seeds")
+    ax.set_xticks(FAILED); ax.set_ylim(bottom=50); ax.legend(loc="lower left", fontsize=18); ax.grid(alpha=0.3)
+    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.png"), dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(os.path.join(HERE, "figG_cc_alone_underutilization.pdf"), bbox_inches="tight", pad_inches=0.05); plt.close()
 
     # ---- figH: retransmission / congestion storm ----
     rm_r, rs_r = across_seeds(retx_pct, "reps")
     rm_o, rs_o = across_seeds(retx_pct, "obl")
-    fig, ax = plt.subplots(figsize=(7, 4.5))
+    fig, ax = plt.subplots(figsize=(10, 6))
     ax.errorbar(FAILED, rm_r, yerr=rs_r, marker='o', capsize=3, lw=2, label=REPS_LBL, color=GREEN)
     ax.errorbar(FAILED, rm_o, yerr=rs_o, marker='s', capsize=3, lw=2, label=OBL_LBL, color=RED)
     ax.fill_between(FAILED, rm_r, rm_o, color=RED, alpha=0.12)
-    dr = rm_o[-1] - rm_r[-1]
-    ax.annotate(f"extra trim/retransmit storm\nunder CC-alone  (+{dr:.0f} pts)",
-                xy=(11.7, (rm_r[-1] + rm_o[-1]) / 2), xytext=(8.6, 7.5),
-                fontsize=8.5, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
-    ax.set_xlabel("topological asymmetry   (-failed = # degraded pod-ingress aggs)")
-    ax.set_ylabel("retransmitted packets  (% of new = trim storm)")
-    ax.set_title("figH: CC alone → congestion / retransmission storm\nsame runs as figG; adaptive LB relieves hot paths CC cannot")
-    ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.legend(loc="upper left"); ax.grid(alpha=0.3)
-    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.pdf")); plt.close()
+    # in-figure callout removed for the paper (shaded band shows it; magnitude in caption)
+    ax.set_xlabel("topological asymmetry (Number of failed links)")
+    ax.set_ylabel(r"retransmitted packets ($\%$)")
+    # ax.set_title("figH: CC alone → congestion / retransmission storm\nsame runs as figG; adaptive LB relieves hot paths CC cannot")
+    ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.legend(loc="upper left", fontsize=18); ax.grid(alpha=0.3)
+    plt.tight_layout(); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.pdf"), bbox_inches="tight", pad_inches=0.05); plt.close()
 
     print("figG goodput (Gbps)  failed -> (REPS, OBL, gap):")
     for i, f in enumerate(FAILED):
