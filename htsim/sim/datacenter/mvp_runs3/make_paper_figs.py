@@ -125,7 +125,7 @@ with plt.rc_context({"font.size": 24}):
 # (C_cc floor ~0); at high load it cannot (floor sustained > 0) -> spraying alone is exhausted,
 # CC must slow the sender. Two standalone figures (figD1 = low load, figD2 = high load), shared
 # y-scale so the lifted floor is comparable; each with its own legend.
-for suffix, n in (("figD1", 4), ("figD2", 32)):
+for suffix, n, show_ylabel in (("figD1", 4, True), ("figD2", 32, False)):
     csv = os.path.join(HERE, f"mp_load_reps_n{n}.s13.pathrtt.csv")
     with plt.rc_context({"font.size": 24}):
         plt.figure(figsize=(10, 6))
@@ -134,13 +134,25 @@ for suffix, n in (("figD1", 4), ("figD2", 32)):
             plt.plot(t, cs, lw=2, label=r"$C_{spray}$ (LB-removable)")
             plt.plot(t, cc, "--", lw=2, label=r"$C_{cc}$ (CC-only)")
         plt.axvspan(500, 1500, color="grey", alpha=0.12)
-        plt.xlabel("time (us)"); plt.ylabel("per-path queueing delay (us)")
-        plt.ylim(0, 26); plt.xlim(0, 2000)
-        plt.legend(fontsize=18); plt.grid(alpha=0.3)
+        plt.xlabel("time (us)")
+        if show_ylabel:                          # figD2 omits it (identical y-axis to figD1)
+            plt.ylabel("queueing delay (us)")
+        plt.ylim(0, 26); plt.xlim(0, 2000); plt.xticks([0, 500, 1000, 1500, 2000]); plt.grid(alpha=0.3)
         plt.tight_layout()
         plt.savefig(f"{HERE}/{suffix}_reps_floor_emerges.png", dpi=140, bbox_inches="tight", pad_inches=0.05)
         plt.savefig(f"{HERE}/{suffix}_reps_floor_emerges.pdf", bbox_inches="tight", pad_inches=0.05)
         plt.close()
+
+# shared legend as its own image file (place above/beside figD1+figD2 in the paper)
+from matplotlib.lines import Line2D
+with plt.rc_context({"font.size": 18}):
+    figL = plt.figure(figsize=(8, 0.6))
+    _h = [Line2D([], [], color="C0", lw=2,            label=r"$C_{spray}$ (LB-removable)"),
+          Line2D([], [], color="C1", lw=2, ls="--",  label=r"$C_{cc}$ (CC-only)")]
+    figL.legend(handles=_h, loc="center", ncol=2, frameon=True)
+    figL.savefig(f"{HERE}/figD_legend.png", dpi=140, bbox_inches="tight", pad_inches=0.05)
+    figL.savefig(f"{HERE}/figD_legend.pdf", bbox_inches="tight", pad_inches=0.05)
+    plt.close(figL)
 
 # ---- FigE: C_cc floor vs load under REPS+asymmetry -> the 0->positive transition ----
 loads = [2, 4, 8, 16, 32]
