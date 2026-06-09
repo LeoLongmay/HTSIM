@@ -203,8 +203,10 @@ Build the two metric parsers with inline assert-based self-checks (same no-pytes
 Spraying fixed ON (REPS). Sweep NSCC target_q_delay; the optimal setting flips between:
   Regime A (spray-removable, high C_spray / ~0 C_cc): metric = aggregate goodput (Gbps);
             lenient CC wins (aggressive CC needlessly throttles -> underutilization).
-  Regime B (path-wide, high C_cc / ~0 C_spray):        metric = p99 bottleneck-queue latency (us);
+  Regime B (path-wide, high C_cc / ~0 C_spray):        metric = MEAN bottleneck-queue latency (us);
             aggressive CC wins (lenient CC lets the floor balloon; goodput is capped).
+            (MEAN not p99: NSCC trims to bound the queue, so the tail is pinned at the buffer
+             ceiling regardless of CC; the mean tracks the sustained floor = what C_cc measures.)
 No single fixed target_q_delay is optimal in both -> CC must coordinate with the regime
 the LB produces. Reads mvp_runs3/cp{A,B}_tqd{Q}.s{S}.{sink.txt,q.txt,idmap}. Run:
   python3 make_coupling_fig.py            # render figI
@@ -239,8 +241,13 @@ def _qid_ls0dst0(tag):
                 return int(ps[0])
     return None
 
-def p99_latency_us(tag):
-    """Steady-window p99 queueing latency (us) at the receiver bottleneck (nearest-rank)."""
+def mean_latency_us(tag):
+    """Steady-window MEAN queueing latency (us) at the receiver bottleneck.
+
+    MEAN, not p99: NSCC trims to bound the queue, so the tail (p99/p90) is pinned at the
+    buffer ceiling regardless of CC aggressiveness; the MEAN tracks the sustained floor,
+    which is exactly what C_cc represents and what a lenient CC inflates.
+    """
     qid = _qid_ls0dst0(tag)
     vals = []
     with open(os.path.join(HERE, f"{tag}.q.txt")) as fh:
@@ -250,10 +257,7 @@ def p99_latency_us(tag):
                 t_us = float(p[0]) * 1e6
                 if WIN_US[0] <= t_us <= WIN_US[1]:
                     vals.append(int(p[8]) * BYTES_TO_US)
-    if not vals:
-        return 0.0
-    vals.sort()
-    return vals[min(len(vals) - 1, int(0.99 * len(vals)))]
+    return st.mean(vals) if vals else 0.0
 
 def _selftest():
     import tempfile
@@ -266,18 +270,18 @@ def _selftest():
             f.write(f"{t} Type UEC_SINK ID 10 Ev RATE CAck 1 ReorderBuffer 0 Rate 40000000000\n")
             f.write(f"{t} Type UEC_SINK ID 11 Ev RATE CAck 1 ReorderBuffer 0 Rate 10000000000\n")
     assert abs(goodput_gbps("_g") - 50.0) < 1e-9, goodput_gbps("_g")
-    # p99 latency: idmap maps qid 164 -> LS0->DST0; q.txt LastQ values in window
+    # mean latency: idmap maps qid 164 -> LS0->DST0; q.txt LastQ bytes in window
     with open(os.path.join(d, "_p.idmap"), "w") as f:
         f.write("164 LS0->DST0(0)\n165 LS0->DST1(0)\n")
     with open(os.path.join(d, "_p.q.txt"), "w") as f:
-        # 100 in-window samples on qid 164: 99 of 1000 bytes (=0.08us) + 1 of 100000 bytes (=8us)
-        for i in range(99):
-            f.write(f"0.000{600+i:03d}000 Type QUEUE_APPROX ID 164 Ev RANGE LastQ 1000 MinQ 0 MaxQ 0\n")
-        f.write("0.000700500 Type QUEUE_APPROX ID 164 Ev RANGE LastQ 100000 MinQ 0 MaxQ 0\n")
+        # 3 in-window samples on qid 164: 1000,2000,3000 bytes -> 0.08,0.16,0.24 us -> mean 0.16
+        f.write("0.000600000 Type QUEUE_APPROX ID 164 Ev RANGE LastQ 1000 MinQ 0 MaxQ 0\n")
+        f.write("0.000700000 Type QUEUE_APPROX ID 164 Ev RANGE LastQ 2000 MinQ 0 MaxQ 0\n")
+        f.write("0.000800000 Type QUEUE_APPROX ID 164 Ev RANGE LastQ 3000 MinQ 0 MaxQ 0\n")
         f.write("0.000650000 Type QUEUE_APPROX ID 165 Ev RANGE LastQ 999999 MinQ 0 MaxQ 0\n")  # other queue ignored
-    got = p99_latency_us("_p")
-    assert abs(got - 8.0) < 1e-9, got    # nearest-rank p99 of 100 samples = the 1 big one
-    print("ok goodput_gbps + p99_latency_us")
+    got = mean_latency_us("_p")
+    assert abs(got - 0.16) < 1e-9, got
+    print("ok goodput_gbps + mean_latency_us")
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
@@ -349,7 +353,7 @@ Insert the `render()` function before `if __name__ == "__main__":`:
 def render():
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     gm, gs = across_seeds(goodput_gbps, "cpA")        # Regime A goodput
-    lm, ls = across_seeds(p99_latency_us, "cpB")      # Regime B p99 latency
+    lm, ls = across_seeds(mean_latency_us, "cpB")     # Regime B mean queue latency
     dA, dB = decomp("cpA_decomp"), decomp("cpB_decomp")
     qA_best = TQD[gm.index(max(gm))]                  # lenient end expected
     qB_best = TQD[lm.index(min(lm))]                  # aggressive end expected
@@ -374,7 +378,7 @@ def render():
                  fontsize=8.5, va='center', ha='left')
     annB = f"Regime B (path-wide)\nmeasured C_cc={dB[1]:.1f} ≫ C_spray={dB[0]:.1f} us" if dB else "Regime B (path-wide)"
     ax2.set_title(annB, fontsize=9)
-    ax2.set_ylabel("p99 queue latency (us)\n↓ better"); ax2.grid(alpha=0.3)
+    ax2.set_ylabel("mean queue latency (us)\n↓ better"); ax2.grid(alpha=0.3)
     ax2.fill_between(TQD, lm, max(lm), color='tab:red', alpha=0.10)
     ax2.set_xlabel("CC aggressiveness  —  NSCC target_q_delay (us)   [left = aggressive, right = lenient]")
     ax2.set_xticks(TQD)
@@ -384,7 +388,7 @@ def render():
     plt.tight_layout(rect=(0, 0, 1, 0.96))
     plt.savefig(os.path.join(HERE, "figI_cc_lb_tuning_coupled.png"), dpi=140); plt.close()
     print("figI: RegimeA goodput vs tqd =", [round(x,1) for x in gm], "argmax tqd", qA_best)
-    print("figI: RegimeB p99lat vs tqd =", [round(x,1) for x in lm], "argmin tqd", qB_best)
+    print("figI: RegimeB mean-lat vs tqd =", [round(x,1) for x in lm], "argmin tqd", qB_best)
     print("figI: decomp A", dA, " B", dB)
 ```
 
@@ -416,10 +420,17 @@ Uses the NA chosen in Task 2. Substitute the real NA value (this plan shows the 
 **Files:**
 - Create (data, gitignored): `mvp_runs3/cpA_tqd{Q}.s{S}.sink.txt`, `mvp_runs3/cpB_tqd{Q}.s{S}.q.txt`, `mvp_runs3/cp{A,B}_decomp.pathrtt.csv`.
 
-- [ ] **Step 1: Regime A production — goodput, 6 tqd × 5 seeds (30 runs)**
+- [ ] **Step 0: Regenerate the locked traffic matrices (scout-chosen params: NA=8, Regime B = 32-sender incast)**
 
 ```bash
 cd /home/leo/htsim/htsim/sim/datacenter
+python3 mvp_runs3/gen_overload.py mvp_runs3/overload_cpA.cm 8  0 16                 # Regime A: NA=8 (spray-removable)
+python3 mvp_runs3/gen_incast.py   mvp_runs3/incast_cpB.cm  32 0 20000000 128 16     # Regime B: 32-sender path-wide incast
+```
+
+- [ ] **Step 1: Regime A production — goodput, 6 tqd × 5 seeds (30 runs)**
+
+```bash
 for q in 2 4 6 8 12 16; do for s in 13 14 15 16 17; do
   SEED=$s END=2 TQD=$q bash mvp_runs3/run_meas.sh reps 12 cpA_tqd$q.s$s mvp_runs3/overload_cpA.cm sink
 done; done
@@ -465,7 +476,7 @@ Expected stdout: RegimeA argmax tqd ≥ 8 (lenient), RegimeB argmin tqd ≤ 4 (a
 
 - [ ] **Step 2: Visually inspect the figure**
 
-Open `mvp_runs3/figI_cc_lb_tuning_coupled.png` (or Read it). Confirm: panel A goodput rises toward the lenient (right) end with the optimum circled there; panel B p99 latency rises toward the lenient end with the minimum circled at the aggressive (left) end; the dashed 6µs line sits visibly off-optimum in both; regime annotations present.
+Open `mvp_runs3/figI_cc_lb_tuning_coupled.png` (or Read it). Confirm: panel A goodput rises toward the lenient (right) end with the optimum circled there; panel B mean latency rises toward the lenient end with the minimum circled at the aggressive (left) end; the dashed 6µs line sits visibly off-optimum in both; regime annotations present.
 
 - [ ] **Step 3: Validate the success criteria (spec §9)**
 
@@ -491,8 +502,8 @@ In `mvp_runs3/repro.sh`, after the figures block (the `python3 mvp_runs3/make_cc
 
 ```bash
 echo "== 9. CC/LB tuning-coupling (REPS fixed; sweep target_q_delay) for figI, seeds $SEEDS =="
-python3 mvp_runs3/gen_overload.py mvp_runs3/overload_cpA.cm NA 0 16      # Regime A: spray-removable, moderate load
-python3 mvp_runs3/gen_incast.py   mvp_runs3/incast_cpB.cm   64 0 20000000 128 16   # Regime B: path-wide incast
+python3 mvp_runs3/gen_overload.py mvp_runs3/overload_cpA.cm 8  0 16                 # Regime A: spray-removable, NA=8
+python3 mvp_runs3/gen_incast.py   mvp_runs3/incast_cpB.cm   32 0 20000000 128 16    # Regime B: path-wide 32-sender incast
 for q in 2 4 6 8 12 16; do for s in $SEEDS; do
   SEED=$s END=2 TQD=$q          bash mvp_runs3/run_meas.sh reps 12 cpA_tqd$q.s$s mvp_runs3/overload_cpA.cm sink
   SEED=$s END=2 TQD=$q LOGTIME=1 bash mvp_runs3/run_meas.sh reps 0  cpB_tqd$q.s$s mvp_runs3/incast_cpB.cm  queue
@@ -503,8 +514,6 @@ python3 mvp_runs3/make_coupling_fig.py
 echo "==       figI_cc_lb_tuning_coupled.png =="
 ```
 
-(Replace the literal `NA` token with the chosen integer, e.g. `16`.)
-
 - [ ] **Step 2: Add the figI section to README_repro.md**
 
 In `mvp_runs3/README_repro.md`, after the figG/figH bullets (before the scope paragraph beginning `**作用域(必须在论文里写清)**`), add:
@@ -512,16 +521,16 @@ In `mvp_runs3/README_repro.md`, after the figG/figH bullets (before the scope pa
 ```markdown
 **——第三条腿:即使两者都开,但独立调优(各自为战)仍次优——**(`make_coupling_fig.py`,REPS 固定 ON,扫 NSCC `target_q_delay`)
 
-- **figI(调优耦合)**:两面板,横轴 = `target_q_delay`(左激进/右宽松)。上=**Regime A(可换路消除,实测 C_spray≫C_cc)**的 goodput:**宽松端最优**(过激进 CC 无谓降速→利用率不足);下=**Regime B(真·全路径,实测 C_cc≫C_spray)**的 p99 队列时延:**激进端最优**(过宽松 CC 让 floor 膨胀,goodput 已封顶)。最优值在两端**翻转**,默认 6µs 在两 regime 都偏离最优 → **CC 的最优设置与 LB 产生的 regime 耦合**,独立调 CC(不知 spraying 处理了什么)无法两头都赢 → 必须协同。
+- **figI(调优耦合)**:两面板,横轴 = `target_q_delay`(左激进/右宽松)。上=**Regime A(可换路消除,实测 C_spray≫C_cc)**的 goodput:**宽松端最优**(过激进 CC 无谓降速→利用率不足);下=**Regime B(真·全路径,实测 C_cc≫C_spray)**的 mean 队列时延:**激进端最优**(过宽松 CC 让 floor 膨胀,goodput 已封顶)。最优值在两端**翻转**,默认 6µs 在两 regime 都偏离最优 → **CC 的最优设置与 LB 产生的 regime 耦合**,独立调 CC(不知 spraying 处理了什么)无法两头都赢 → 必须协同。(度量说明:Regime B 用 **mean** 队列时延而非 p99——NSCC 靠 trim 封住队列,p99/p90 被钉在缓冲上限、对 CC 不敏感;mean 反映被宽松 CC 抬高的持续 floor,正是 C_cc 所指。)
 ```
 
 Then add a config-table row after the figH row:
 
 ```markdown
-| figI | REPS 固定;Regime A=overload NA→16(failed12)取 goodput、Regime B=incast 64→1(failed0)取 p99 队列时延;各扫 `target_q_delay`∈{2,4,6,8,12,16}µs | 2 ms | [500,1500] | `cp{A,B}_tqd{Q}.s{S}`;分解 `cp{A,B}_decomp` | A:goodput / B:p99 lat;分解用 `const` |
+| figI | REPS 固定;Regime A=overload 8→16(failed12)取 goodput、Regime B=incast 32→1(failed0)取 mean 队列时延;各扫 `target_q_delay`∈{2,4,6,8,12,16}µs | 2 ms | [500,1500] | `cp{A,B}_tqd{Q}.s{S}`;分解 `cp{A,B}_decomp` | A:goodput / B:mean lat;分解用 `const` |
 ```
 
-(Replace `NA` with the chosen integer. Also update the intro line "## 八张图说明" → "## 九张图说明" and the two-half framing sentence to mention the third leg: "figI:即便都开,各自为战仍次优".)
+(Also update the intro line "## 八张图说明" → "## 九张图说明" and the two-half framing sentence to mention the third leg: "figI:即便都开,各自为战仍次优".)
 
 - [ ] **Step 3: Confirm raw data is gitignored, figure is not**
 
