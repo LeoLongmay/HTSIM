@@ -69,18 +69,20 @@ def main():
     REPS_LBL = "REPS  (CC + adaptive spraying)"
     OBL_LBL = "OBLIVIOUS  (CC alone, no adaptive spraying)"
     GREEN, RED = "tab:green", "tab:red"
-    plt.rcParams.update({"font.size": 24})   # paper styling: axes/ticks/labels 24pt (legend & callouts set to 18 below)
+    # paper styling: 24pt text + a figure big enough that the 24pt y-label never clips.
+    # Set figsize via rcParams (not inline on plt.subplots) so it survives edits to that call.
+    plt.rcParams.update({"font.size": 24, "figure.figsize": (10, 6)})
 
     # ---- figG: goodput / underutilization ----
     gm_r, gs_r = across_seeds(goodput_gbps, "reps")
     gm_o, gs_o = across_seeds(goodput_gbps, "obl")
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots()
     ax.errorbar(FAILED, gm_r, yerr=gs_r, marker='o', capsize=3, lw=2, label=REPS_LBL, color=GREEN)
     ax.errorbar(FAILED, gm_o, yerr=gs_o, marker='s', capsize=3, lw=2, label=OBL_LBL, color=RED)
     ax.fill_between(FAILED, gm_o, gm_r, color=RED, alpha=0.12)
     gap = gm_r[-1] - gm_o[-1]
     ax.annotate(f"capacity CC-alone leaves idle\n{gap:.0f} Gbps ({100*gap/gm_o[-1]:.0f}%)",
-                xy=(12, (gm_r[-1] + gm_o[-1]) / 2), xytext=(6.2, (gm_r[-1] + gm_o[-1]) / 2 - 16),
+                xy=(12, (gm_r[-1] + gm_o[-1]) / 2), xytext=(5.2, (gm_r[-1] + gm_o[-1]) / 2 - 16),
                 fontsize=18, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
     ax.set_xlabel("Number of failed links")
     ax.set_ylabel("Aggregate goodput (Gbps)")
@@ -91,16 +93,16 @@ def main():
     # ---- figH: retransmission / congestion storm ----
     rm_r, rs_r = across_seeds(retx_pct, "reps")
     rm_o, rs_o = across_seeds(retx_pct, "obl")
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots()
     ax.errorbar(FAILED, rm_r, yerr=rs_r, marker='o', capsize=3, lw=2, label=REPS_LBL, color=GREEN)
     ax.errorbar(FAILED, rm_o, yerr=rs_o, marker='s', capsize=3, lw=2, label=OBL_LBL, color=RED)
     ax.fill_between(FAILED, rm_r, rm_o, color=RED, alpha=0.12)
     dr = rm_o[-1] - rm_r[-1]
     ax.annotate(f"extra trim/retransmit storm\nunder CC-alone  (+{dr:.0f} pts)",
-                xy=(11.7, (rm_r[-1] + rm_o[-1]) / 2), xytext=(8.6, 7.5),
+                xy=(11.7, (rm_r[-1] + rm_o[-1]) / 2), xytext=(7.6, 2.5),
                 fontsize=18, ha='center', arrowprops=dict(arrowstyle='->', color='gray'))
     ax.set_xlabel("Number of failed links")
-    ax.set_ylabel(r"Retransmitted packets ($\%$)")
+    ax.set_ylabel(r"Retransmitted packets (%)")
     # legend drawn in its own file (figGH_legend), not in the panel
     ax.set_xticks(FAILED); ax.set_ylim(bottom=0); ax.grid(alpha=0.3)
     plt.tight_layout(); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.png"), dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(os.path.join(HERE, "figH_cc_alone_congestion.pdf"), bbox_inches="tight", pad_inches=0.05); plt.close()
@@ -111,7 +113,7 @@ def main():
           Line2D([], [], color=RED,   marker='s', lw=2, label=OBL_LBL)]
     with plt.rc_context({"font.size": 18}):
         figL = plt.figure(figsize=(13, 0.8))
-        figL.legend(handles=_h, loc="center", ncol=2, frameon=True)
+        figL.legend(handles=_h, loc="center", ncol=2, frameon=False)
         figL.savefig(os.path.join(HERE, "figGH_legend.png"), dpi=140, bbox_inches="tight", pad_inches=0.05)
         figL.savefig(os.path.join(HERE, "figGH_legend.pdf"), bbox_inches="tight", pad_inches=0.05)
         plt.close(figL)
