@@ -15,54 +15,54 @@ failed=8, seed=13) **plus `EXTRA_ARGS="-disable_trim"` on every run**.
 - `figs/figA2dd_mechanism` -- signal (REPS+NSCC avg/floor vs PRISM C_cc vs target) + cwnd(t);
   prints fair per-ACK cut counts and the **floor-MD fraction** (decisive: trimming baseline ~0.05).
 
-## Result (128-node many2many, 5 seeds, `-disable_trim`; END=2 ms)
+## Result (128-node many2many, 5 seeds, `-disable_trim`; END=8 ms)
 
-**Lands on the POSITIVE pre-registered branch: the recipe made control delay-driven, and PRISM
-now beats REPS+NSCC under asymmetry — but with honest caveats.**
+**POSITIVE pre-registered branch. END=8 ms (the 5×BDP no-trim regime needs time to drain; an
+earlier END=2 ms pass, commit 9c841ae, was completion-stressed). At END=8 every cell completes
+fully (completion_rate = 1.00 everywhere), so FCT is unconfounded — and PRISM wins on BOTH
+goodput and FCT under asymmetry.**
 
 1. **Recipe worked (decisive check).** Floor-MD fraction = PRISM epoch-MDs / PRISM per-ACK
-   cwnd-decreases @failed=8 = **316/651 = 0.485**, up from the trimming baseline **~0.05**. The
+   cwnd-decreases @failed=8 = **316/651 = 0.485**, up from the trimming baseline **~0.05** — the
    floor decomposition now governs ~half of PRISM's rate control (loss/NACK no longer dominates).
 
-2. **PRISM beats REPS+NSCC under asymmetry (failed≥2).** Goodput (Gbps) / completion:
+2. **PRISM beats REPS+NSCC under asymmetry (all completion = 1.00).** Goodput (Gbps) / avg-FCT (µs):
 
-   | -failed | OPS+NSCC | REPS+NSCC | PRISM |
-   |---|---|---|---|
-   | 0  | 906 / 1.00 | **997** / 1.00 | 869 / 1.00 |
-   | 2  | 451 / 0.83 | 524 / 0.96 | **585** / 0.99 |
-   | 4  | 314 / 0.60 | 474 / 0.92 | **574** / 1.00 |
-   | 8  | 195 / 0.37 | 402 / 0.78 | **518** / 0.96 |
-   | 12 | 121 / 0.23 | 308 / 0.59 | **392** / 0.76 |
+   | -failed | OPS+NSCC | REPS+NSCC | PRISM | PRISM vs REPS |
+   |---|---|---|---|---|
+   | 0  | 906 / 788  | **997 / 737** | 869 / 945  | worse (symmetric penalty) |
+   | 2  | 411 / 1374 | 533 / 1202   | 572 / 1305 | goodput +7%, FCT +9% (mixed) |
+   | 4  | 373 / 1762 | 483 / 1450   | **574 / 1401** | goodput +19%, FCT −3% |
+   | 8  | 311 / 2260 | 431 / 1694   | **504 / 1518** | goodput +17%, FCT −10% |
+   | 12 | 287 / 2522 | 379 / 1856   | **434 / 1725** | goodput +15%, FCT −7% |
 
-   PRISM goodput is +12% (f2), +21% (f4), **+29% (f8)**, +27% (f12) over REPS+NSCC, and PRISM
-   **completes far more flows** (e.g. f8: 0.96 vs 0.78; f12: 0.76 vs 0.59). PRISM's P99-FCT is
-   also lower (better tail) at f4/f8 (see figA1dd).
+   Under meaningful asymmetry (failed ≥ 4) PRISM wins on **both** goodput (+15–19%) **and** avg-FCT
+   (3–10% lower); P99-FCT is also clearly lowest for PRISM at failed ≥ 2 (see figA1dd). Both beat
+   OPS+NSCC by a wide margin.
 
 **Honest caveats:**
 - **Symmetric penalty:** at failed=0 PRISM is *worse* (goodput 869 vs 997, avg-FCT 945 vs 737 µs)
   — holding when there is no reroutable benefit costs throughput. The advantage is asymmetry-specific.
-- **avg-FCT is confounded by completion:** FCT is over *completed* flows; PRISM completes 20–30%
-  more flows (including slower ones REPS+NSCC abandons), so its avg-FCT includes stragglers and is
-  not lower than REPS+NSCC despite more work done. **Goodput + completion are the clean headline.**
-- **Completion-stressed regime:** `-disable_trim` gives 5×BDP buffers + no drops, so queues build
-  and many flows do not finish within END=2 ms (REPS f12=0.59). A longer END would clarify FCT;
-  the goodput/completion *advantage* is robust to this (it is a relative comparison at fixed END).
+- **Mild asymmetry (failed=2) is mixed:** PRISM goodput +7% but avg-FCT ~9% higher; the clear
+  two-metric win emerges at failed ≥ 4.
 - **Mechanism figure is messy** (figA2dd): at failed=8 even PRISM's floor C_cc spikes well above
   target, so the win is not a clean "floor stays below target" — it is PRISM making fewer,
-  better-targeted floor-driven cuts that net higher delivered work.
+  better-targeted floor-driven cuts (651 vs REPS+NSCC's 2208 per-ACK cwnd decreases) that net
+  higher delivered work.
 
 **Thesis (sharpened):** *PRISM's decomposition helps when congestion is reroutable AND
-delay-driven (not loss/NACK-driven): under asymmetric fabric it preserves goodput (+12–29%) and
-completes far more flows than decoupled REPS+NSCC, at the cost of slightly lower throughput when
-the fabric is symmetric.* The earlier P2 tie is explained: with trimming, loss/NACK dominated
-cwnd control (floor-MD ~5%), masking the decomposition; removing trimming surfaces it.
+delay-driven (not loss/NACK-driven): under asymmetric fabric (failed ≥ 4) it improves both
+goodput (+15–19%) and FCT (3–10%) over decoupled REPS+NSCC, at the cost of slightly worse
+throughput/FCT when the fabric is symmetric.* The earlier P2 tie is explained: with trimming,
+loss/NACK dominated cwnd control (floor-MD ~5%), masking the decomposition; removing trimming
+surfaces it.
 
 ## Honest scope
-- Pre-registered: floor-MD fraction up + PRISM wins -> "reroutable AND delay-driven" thesis;
-  still tied -> accept negative/scoping. No tuning to force a win. FCT over completed flows
-  (completion_rate surfaced); goodput window-free.
-- 128-node many2many only; if `-disable_trim` alone doesn't raise the floor-MD fraction, a
-  larger buffer (`-queue_size_bdp_factor`) is the documented next lever.
+- Pre-registered: floor-MD fraction up + PRISM wins -> "reroutable AND delay-driven" thesis
+  (this branch). No tuning to force a win. completion_rate = 1.00 everywhere at END=8 (FCT
+  unconfounded); goodput is window-free aggregate.
+- 128-node many2many only; default END is 8 ms (override `EXP_END`). Next: scale (1024) and add
+  STrack + permutation in this regime.
 
 ## Reproduce
 ```
