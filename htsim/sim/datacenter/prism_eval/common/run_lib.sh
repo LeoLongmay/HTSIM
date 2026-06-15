@@ -19,6 +19,7 @@
 # Env knobs: PATHS(8) END_MS(2) MTU(4150) NODES(128) TQD(unset) KEEPDAT(unset)
 #            PRISM_PATHRTT / PRISM_EPOCH (unset; export a path and the binary reads it via getenv,
 #            since these env vars inherit through to htsim_uec -- e.g. PRISM controller logs)
+#            EXTRA_ARGS (unset; extra raw flags appended to htsim_uec, e.g. "-disable_trim")
 set -euo pipefail
 [ "$#" -eq 9 ] || { echo "usage: run_lib.sh CC LB FAILED TOPO SEED CM LOGSPEC TAG OUTDIR" >&2; exit 2; }
 CC="$1"; LB="$2"; FAILED="$3"; TOPO="$4"; SEED="$5"; CM="$6"; LOGSPEC="$7"; TAG="$8"; OUTDIR="$9"
@@ -37,7 +38,7 @@ case ",$LOGSPEC," in *,queue,*) LOGARGS="$LOGARGS -log tor_downqueue";; esac
 echo "[run_lib] cc=$CC lb=$LB failed=$FAILED topo=$TOPO seed=$SEED cm=$CM log=$LOGSPEC tag=$TAG"
 $BIN -topo "topologies/$TOPO" -tm "$CM" -nodes "$NODES" \
      -sender_cc_algo "$CC" -load_balancing_algo "$LB" -failed "$FAILED" -mtu "$MTU" \
-     -paths "$PATHS" -seed "$SEED" $TQD_ARG $LOGARGS -end "$END_MS" \
+     -paths "$PATHS" -seed "$SEED" $TQD_ARG $LOGARGS ${EXTRA_ARGS:-} -end "$END_MS" \
      -o "$OUTDIR/$TAG.dat" > "$OUTDIR/$TAG.stdout" 2>&1
 ASCII="$OUTDIR/$TAG.ascii.tmp"
 "$DECODER" "$OUTDIR/$TAG.dat" -ascii > "$ASCII" 2>/dev/null || true
