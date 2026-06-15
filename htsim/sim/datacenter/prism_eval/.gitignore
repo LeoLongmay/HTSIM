@@ -1,0 +1,9 @@
+# regenerable simulation data — figures are force-added per group with `git add -f`
+*.dat
+*.txt
+*.cm
+*.stdout
+*.idmap
+*.ascii.tmp
+*.csv
+__pycache__/
