@@ -56,6 +56,83 @@ def fct_stats(flow_path):
         "max_s": fcts[-1] if fcts else float("nan"),
     }
 
+def aggregate_goodput_gbps(flow_path):
+    """Window-free aggregate goodput (Gbps) for a finite workload: total bytes of COMPLETED
+    flows * 8 / makespan, where makespan = last finish - first start of the COMPLETED flows
+    (seconds). Robust for finite flows (no steady-window choice needed) and for staggered
+    starts / partial completion (the span covers only flows that actually finished, so an
+    early flow that never completes does not stretch the denominator). 0.0 if nothing completed.
+    Pair with completion_rate to surface incomplete-flow skew."""
+    starts, finishes = parse_flow_events(flow_path)
+    if not finishes or not starts:
+        return 0.0
+    done = [k for k in finishes if k in starts]
+    if not done:
+        return 0.0
+    total_bytes = sum(finishes[k][1] for k in done)
+    first_start = min(starts[k] for k in done)
+    last_finish = max(finishes[k][0] for k in done)
+    span = last_finish - first_start
+    if span <= 0:
+        return 0.0
+    return total_bytes * 8.0 / span / 1e9
+
+def count_cwnd_cuts_from_pathrtt(pathrtt_path):
+    """Count window-cut events across all flows from a PRISM_PATHRTT csv
+    (time_ns,flow,path,raw_rtt_ns,ecn,cwnd): per flow, in time order, a 'cut' is any sample
+    whose cwnd is strictly less than the previous sample's cwnd. Returns the total count."""
+    per_flow = collections.defaultdict(list)
+    with open(pathrtt_path) as fh:
+        for ln in fh:
+            p = ln.strip().split(",")
+            if len(p) < 6:
+                continue
+            per_flow[int(p[1])].append((int(p[0]), int(p[5])))   # (time, cwnd)
+    cuts = 0
+    for rows in per_flow.values():
+        rows.sort(key=lambda r: r[0])   # by time only; stable -> ties keep logged order
+        for i in range(1, len(rows)):
+            if rows[i][1] < rows[i - 1][1]:
+                cuts += 1
+    return cuts
+
+def parse_prism_epoch(epoch_path):
+    """Parse a PRISM_EPOCH csv into a list of dicts (time order preserved as written).
+    Columns: time_ns,flow_id,base_rtt_ns,c_cc_ns,c_spray_ns,region,cwnd_bytes,samples,cut."""
+    cols = ["time_ns", "flow_id", "base_rtt_ns", "c_cc_ns", "c_spray_ns",
+            "region", "cwnd_bytes", "samples", "cut"]
+    rows = []
+    with open(epoch_path) as fh:
+        for ln in fh:
+            p = ln.strip().split(",")
+            if len(p) < 9:
+                continue
+            rows.append({c: int(p[i]) for i, c in enumerate(cols)})
+    return rows
+
+def qdelay_bins(pathrtt_path, base_ns=13945, bin_us=20):
+    """Bin per-ACK queuing delay q=max(raw_rtt-base,0) (from a PRISM_PATHRTT csv) into fixed
+    time bins; return [(t_mid_us, min_q_us, mean_q_us), ...] sorted by time. Used for the
+    mechanism figure (the 'avg the controller reacts to' vs the 'floor it ignores')."""
+    bin_ns = bin_us * 1000
+    acc = collections.defaultdict(list)
+    with open(pathrtt_path) as fh:
+        for ln in fh:
+            p = ln.strip().split(",")
+            if len(p) < 6:
+                continue
+            t = int(p[0]); raw = int(p[3])
+            q = raw - base_ns
+            if q < 0:
+                q = 0
+            acc[t // bin_ns].append(q)
+    out = []
+    for b in sorted(acc):
+        qs = acc[b]
+        t_mid_us = (b * bin_ns + bin_ns / 2) / 1000.0
+        out.append((t_mid_us, min(qs) / 1000.0, (sum(qs) / len(qs)) / 1000.0))
+    return out
+
 def goodput_gbps(sink_path, window_s=(0.5e-3, 1.5e-3)):
     """Steady-window aggregate goodput (Gbps) = mean over in-window timestamps of the
     summed UEC_SINK Rate (bits/s). Line format (decoded):

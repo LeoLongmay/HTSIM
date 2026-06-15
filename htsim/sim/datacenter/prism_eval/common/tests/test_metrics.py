@@ -39,7 +39,57 @@ def test_goodput():
     assert abs(g - 50.0) < 1e-9, g
     print("ok goodput")
 
+def test_aggregate_goodput():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "g.flow.txt")
+    with open(p, "w") as fh:
+        # two flows: start 0; finish at 0.001s carrying 1,000,000 and 3,000,000 bytes.
+        # makespan = 0.001 - 0.0 = 0.001s; total = 4,000,000 B * 8 / 0.001 / 1e9 = 32 Gbps
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 1000000\n")
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 2 Ev START FlowID 2 Flowsize 3000000\n")
+        fh.write("0.001000000 Type FLOW_EVENT SrcID 1 Ev FINISH FlowID 1 Bytes 1000000 Pkts 1\n")
+        fh.write("0.001000000 Type FLOW_EVENT SrcID 2 Ev FINISH FlowID 2 Bytes 3000000 Pkts 1\n")
+    assert abs(metrics.aggregate_goodput_gbps(p) - 32.0) < 1e-6, metrics.aggregate_goodput_gbps(p)
+    print("ok aggregate_goodput")
+
+def test_count_cwnd_cuts():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "c.pathrtt.csv")
+    with open(p, "w") as fh:
+        # flow 5 cwnd: 100,120,90,90,80 -> two decreases (120->90, 90->80)
+        for t, cw in [(1,100),(2,120),(3,90),(4,90),(5,80)]:
+            fh.write(f"{t},5,0,14000,0,{cw}\n")
+        # flow 6 cwnd: 50,60,70 -> zero decreases
+        for t, cw in [(1,50),(2,60),(3,70)]:
+            fh.write(f"{t},6,0,14000,0,{cw}\n")
+    assert metrics.count_cwnd_cuts_from_pathrtt(p) == 2, metrics.count_cwnd_cuts_from_pathrtt(p)
+    print("ok count_cwnd_cuts")
+
+def test_parse_prism_epoch_and_qbins():
+    d = tempfile.mkdtemp()
+    ep = os.path.join(d, "e.epoch.csv")
+    with open(ep, "w") as fh:
+        # time,flow,base,ccc,cspray,region,cwnd,samples,cut
+        fh.write("1000,7,14000,2000,5000,1,100000,4,0\n")
+        fh.write("2000,7,14000,9000,1000,2,80000,4,1\n")
+    rows = metrics.parse_prism_epoch(ep)
+    assert len(rows) == 2 and rows[1]["cut"] == 1 and rows[0]["c_cc_ns"] == 2000, rows
+    assert sum(r["cut"] for r in rows) == 1, rows
+    pr = os.path.join(d, "q.pathrtt.csv")
+    with open(pr, "w") as fh:
+        # base 14000ns; bin 0-20us: raw 15000(q=1000ns=1us) and 19000(q=5us) -> min 1, mean 3 (us)
+        fh.write("1000,7,0,15000,0,0\n")    # t=1us
+        fh.write("5000,7,0,19000,0,0\n")    # t=5us
+    bins = metrics.qdelay_bins(pr, base_ns=14000, bin_us=20)
+    assert len(bins) == 1, bins
+    tmid, minq, meanq = bins[0]
+    assert abs(minq - 1.0) < 1e-9 and abs(meanq - 3.0) < 1e-9, bins
+    print("ok parse_prism_epoch + qdelay_bins")
+
 if __name__ == "__main__":
     test_fct_stats()
     test_goodput()
+    test_aggregate_goodput()
+    test_count_cwnd_cuts()
+    test_parse_prism_epoch_and_qbins()
     print("ALL PASS")

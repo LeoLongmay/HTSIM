@@ -17,7 +17,8 @@
 #   TAG      output basename
 #   OUTDIR   output dir, relative to the datacenter dir (created if absent)
 # Env knobs: PATHS(8) END_MS(2) MTU(4150) NODES(128) TQD(unset) KEEPDAT(unset)
-#            PRISM_PATHRTT(unset -> path "$OUTDIR/$TAG.pathrtt.csv" if you export it)
+#            PRISM_PATHRTT / PRISM_EPOCH (unset; export a path and the binary reads it via getenv,
+#            since these env vars inherit through to htsim_uec -- e.g. PRISM controller logs)
 set -euo pipefail
 [ "$#" -eq 9 ] || { echo "usage: run_lib.sh CC LB FAILED TOPO SEED CM LOGSPEC TAG OUTDIR" >&2; exit 2; }
 CC="$1"; LB="$2"; FAILED="$3"; TOPO="$4"; SEED="$5"; CM="$6"; LOGSPEC="$7"; TAG="$8"; OUTDIR="$9"
