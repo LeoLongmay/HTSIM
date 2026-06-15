@@ -133,12 +133,19 @@ def render_fig2():
     plot_style.save(fig, "figA2_mechanism", FIGS)
     plt.close(fig)
 
-    # window-cut counts (supporting number): PRISM from epoch 'cut'; REPS+NSCC from pathrtt cwnd drops.
+    # cwnd-decrease events. FAIR comparison = same measure (pathrtt cwnd drops) for BOTH. We also
+    # report PRISM's floor-driven epoch-MD count separately: it is NOT comparable to the per-ACK
+    # cwnd-drop count, and most of PRISM's cwnd drops actually come from the reused NACK/loss/
+    # quick_adapt machinery, not the floor decision -- so the fair counts are close.
     if not ep:
-        print("[fig2] WARNING: prism epoch log empty -- PRISM cut count unreliable")
-    prism_cuts = sum(r["cut"] for r in ep)
-    reps_cuts = metrics.count_cwnd_cuts_from_pathrtt(reps_pr)
-    print(f"[fig2] window cuts @failed={MECH_FAILED}: PRISM={prism_cuts}  REPS+NSCC={reps_cuts}")
+        print("[fig2] WARNING: prism epoch log empty -- PRISM epoch-MD count unreliable")
+    reps_dec = metrics.count_cwnd_cuts_from_pathrtt(reps_pr)
+    prism_dec = metrics.count_cwnd_cuts_from_pathrtt(prism_pr) if os.path.exists(prism_pr) else -1
+    prism_epoch_md = sum(r["cut"] for r in ep)
+    print(f"[fig2] cwnd-decrease events @failed={MECH_FAILED} (FAIR, per-ACK pathrtt): "
+          f"PRISM={prism_dec}  REPS+NSCC={reps_dec}")
+    print(f"[fig2] (PRISM floor-driven epoch MDs only: {prism_epoch_md} -- not comparable to the "
+          f"per-ACK counts; most PRISM cwnd drops come from reused NACK/loss, not the floor)")
 
 def _selftest():
     import tempfile, shutil

@@ -35,16 +35,24 @@ Goodput (Gbps) / avg FCT (µs) / completion vs `-failed` (`figA1_main_perf`):
 - **Both beat OPS+NSCC** substantially as asymmetry grows (e.g. f8 goodput 710 vs 471). OPS also
   collapses on completion (cr 0.91@f8, 0.60@f12) — its FCT is over only the flows that finished,
   so it understates OPS's true cost; the goodput + completion together show OPS struggling.
-- **Mechanism (`figA2_mechanism`, failed=8): PRISM cut its window 141 times vs REPS+NSCC's 3155
-  (~22× fewer).** So the decomposition demonstrably suppresses cutting (epoch-granular floor
-  decision vs NSCC's per-ACK avg-delay cut). BUT at failed=8 the floor `C_cc` is frequently
-  *above* the 6 µs target (congestion is not purely reroutable when 8 of the ingress links are
-  degraded), so PRISM does decrease at times, and its cwnd tracks slightly *below* REPS+NSCC.
+- **Mechanism (`figA2_mechanism`, failed=8).** PRISM's *floor-driven epoch MD* fires only 141
+  times, but that is NOT the right cross-baseline measure. Counting cwnd-decrease events the
+  **same way for both** (per-ACK, from PRISM_PATHRTT): PRISM **2687** vs REPS+NSCC **3155** —
+  only ~15% fewer, and PRISM's cwnd CV (0.45) is if anything slightly *higher* than REPS+NSCC's
+  (0.42). The reason: PRISM reuses NSCC's NACK/loss/quick_adapt machinery, which produces most of
+  the cwnd decreases regardless of the floor decision. So PRISM's net cwnd behaviour ≈ NSCC here.
+  (An earlier draft compared PRISM's 141 epoch-MDs against REPS's 3155 per-ACK drops and wrongly
+  reported "~22× fewer cuts" — that was apples-to-oranges; corrected here.)
+- **Data-mining for a non-throughput advantage (cwnd jitter, per-flow FCT dispersion): none
+  found.** Per-flow FCT dispersion (CV, P99/P50) is tied between PRISM and REPS+NSCC at every
+  failed level; cwnd jitter is tied. (retransmit counts are not currently logged.)
 
-**Why no win, honestly:** REPS+NSCC's many small per-ACK cuts evidently do not cost it
-throughput here — adaptive spraying keeps it well utilized, and the few-vs-many cut distinction
-does not translate into goodput/FCT at this scale/load. PRISM's advantage thesis (avoid cuts
-when reroutable → preserve utilization) is not demonstrated in this 128-node many2many slice.
+**Why no win, honestly:** PRISM's only distinctive action is "hold instead of cut when floor is
+low and spread is high" (the reroutable regime). In this slice that action is masked twice over:
+(1) adaptive spraying (REPS) keeps NSCC well utilized so its cuts cost no throughput, and (2) on
+this trimming/lossy fabric most cwnd control comes from the reused NACK/loss machinery, not the
+delay-based MD the decomposition governs. So PRISM is performance- AND behaviour-equivalent to
+REPS+NSCC here; the asymmetric-fabric advantage thesis is not demonstrated.
 
 **Implication / next:** finding a regime where reduced cutting actually translates to throughput
 needs either (a) a more cleanly *reroutable* setting where the floor stays below target (lighter
