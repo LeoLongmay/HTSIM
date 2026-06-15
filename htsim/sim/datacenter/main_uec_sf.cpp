@@ -104,6 +104,8 @@ int main(int argc, char** argv) {
                 UecSrc::_sender_cc_algo = UecSrc::NSCC;
             else if (!strcmp(argv[i + 1], "constant"))
                 UecSrc::_sender_cc_algo = UecSrc::CONSTANT;
+            else if (!strcmp(argv[i + 1], "prism"))
+                UecSrc::_sender_cc_algo = UecSrc::PRISM;
             else
                 throw std::logic_error("CC not recognized");
             i++;
@@ -170,6 +172,14 @@ int main(int argc, char** argv) {
             i++;
         } else if (!strcmp(argv[i], "-tm")) {
             tm_file = argv[i + 1];
+            i++;
+        } else if (!strcmp(argv[i], "-prism_t_spray")) {
+            UecSrc::_prism_T_spray = timeFromUs(atof(argv[i + 1]));
+            cout << "prism_t_spray " << atof(argv[i + 1]) << " us" << endl;
+            i++;
+        } else if (!strcmp(argv[i], "-prism_kappa")) {
+            UecSrc::_prism_kappa = atof(argv[i + 1]);
+            cout << "prism_kappa " << UecSrc::_prism_kappa << endl;
             i++;
         } else if (!strcmp(argv[i], "-cwnd")) {
             cwnd_b = (mem_b)std::stoi(argv[i + 1]);

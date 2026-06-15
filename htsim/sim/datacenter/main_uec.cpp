@@ -190,6 +190,14 @@ int main(int argc, char **argv) {
             target_Qdelay = timeFromUs(atof(argv[i+1]));
             cout << "target_q_delay" << atof(argv[i+1]) << " us"<< endl;
             i++;
+        } else if (!strcmp(argv[i],"-prism_t_spray")) {
+            UecSrc::_prism_T_spray = timeFromUs(atof(argv[i+1]));
+            cout << "prism_t_spray " << atof(argv[i+1]) << " us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_kappa")) {
+            UecSrc::_prism_kappa = atof(argv[i+1]);
+            cout << "prism_kappa " << UecSrc::_prism_kappa << endl;
+            i++;
         } else if (!strcmp(argv[i],"-queue_size_bdp_factor")) {
             queue_size_bdp_factor = atoi(argv[i+1]);
             cout << "Setting queue size to "<< queue_size_bdp_factor << "x BDP." << endl;
@@ -202,12 +210,14 @@ int main(int argc, char **argv) {
                 UecSrc::_sender_cc_algo = UecSrc::DCTCP;
             else if (!strcmp(argv[i+1],"nscc")) 
                 UecSrc::_sender_cc_algo = UecSrc::NSCC;
-            else if (!strcmp(argv[i+1],"constant")) 
+            else if (!strcmp(argv[i+1],"constant"))
                 UecSrc::_sender_cc_algo = UecSrc::CONSTANT;
+            else if (!strcmp(argv[i+1],"prism"))
+                UecSrc::_sender_cc_algo = UecSrc::PRISM;
             else {
                 cout << "UNKNOWN CC ALGO " << argv[i+1] << endl;
                 exit(1);
-            }    
+            }
             cout << "sender based algo "<< argv[i+1] << endl;
             i++;
         } else if (!strcmp(argv[i],"-sender_cc")) {

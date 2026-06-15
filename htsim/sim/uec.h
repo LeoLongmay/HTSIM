@@ -216,7 +216,7 @@ public:
     static bool _sender_based_cc;
     static bool _receiver_based_cc;
 
-    enum Sender_CC { DCTCP, NSCC, CONSTANT};
+    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM};
     static Sender_CC _sender_cc_algo;
 
     static bool _disable_quick_adapt;
@@ -308,6 +308,7 @@ public:
     mem_b getNextPacketSize();
     void quick_adapt(bool trimmed);
     void updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnNack_NSCC(bool skip, mem_b nacked_bytes, bool last_hop);
 
     void updateCwndOnAck_DCTCP(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
@@ -364,6 +365,9 @@ public:
     static mem_b _min_cwnd; 
     static uint32_t _qa_scaling; 
     static simtime_picosec _target_Qdelay;
+    // PRISM params. T_cc IS _target_Qdelay (reused, not a separate knob).
+    static simtime_picosec _prism_T_spray;  // tolerated spread; 0 = follow _target_Qdelay
+    static double          _prism_kappa;    // epoch length = kappa * base_rtt; default 1.0
     static double _gamma;
     static double _alpha;
     // static double _scaling_c;
@@ -450,6 +454,17 @@ private:
     uint32_t _bytes_ignored = 0;
     uint32_t _inc_bytes = 0;
     simtime_picosec _avg_delay = 0;
+
+    // PRISM epoch state (O(1) scalars). region: 0=INCREASE,1=HOLD,2=DECREASE (prism::Region).
+    simtime_picosec _prism_epoch_start   = 0;
+    simtime_picosec _prism_epoch_min     = 0;
+    simtime_picosec _prism_epoch_max     = 0;
+    uint32_t        _prism_epoch_samples = 0;
+    int             _prism_region        = 0;  // 0 = INCREASE (cold-start ramp)
+    simtime_picosec _prism_ccc           = 0;  // last epoch's C_cc (increase headroom + log)
+    simtime_picosec _prism_cspray        = 0;  // last epoch's C_spray (log)
+    bool            _prism_genuine_sample = false;  // set in processAck: true iff this ACK gave a
+                                                    // genuine raw_rtt-base sample (not avg fallback)
 
     simtime_picosec _last_eta_time = 0;
     simtime_picosec _last_adjust_time = 0;

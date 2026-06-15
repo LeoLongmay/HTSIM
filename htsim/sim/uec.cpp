@@ -9,6 +9,7 @@
 #include "data_collector.h"
 #include "uec_logger.h"
 #include "pciemodel.h"
+#include "prism_decompose.h"  // PRISM decomposition logic (used by updateCwndOnAck_PRISM)
 
 using namespace std;
 
@@ -93,6 +94,8 @@ double UecSrc::_delay_alpha = 0.0125;//0.125;
 
 simtime_picosec UecSrc::_adjust_period_threshold = timeFromUs(12u);
 simtime_picosec UecSrc::_target_Qdelay = timeFromUs(6u);
+simtime_picosec UecSrc::_prism_T_spray = 0;   // 0 sentinel: follow _target_Qdelay
+double UecSrc::_prism_kappa = 1.0;
 uint32_t UecSrc::_adjust_bytes_threshold = (simtime_picosec)32000*_target_Qdelay/timeFromUs(12u);
 double UecSrc::_qa_threshold = 4 * UecSrc::_target_Qdelay; 
 
@@ -594,6 +597,10 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 updateCwndOnAck = &UecSrc::dontUpdateCwndOnAck;
                 updateCwndOnNack = &UecSrc::dontUpdateCwndOnNack;
                 break;
+            case PRISM:
+                updateCwndOnAck = &UecSrc::updateCwndOnAck_PRISM;
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;  // reuse NSCC NACK/loss handling
+                break;
             default:
                 cout << "Unknown CC algo specified " << _sender_cc_algo << endl;
                 assert(0);
@@ -1048,7 +1055,7 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
 
         // PRISM: read-only per-path RTT log, gated by env var PRISM_PATHRTT.
         // No simulation-behavior change. Emits one CSV row per valid data ACK:
-        //   time_ns,flow_id,path_id,raw_rtt_ns
+        //   time_ns,flow_id,path_id,raw_rtt_ns,ecn_echo,cwnd_bytes
         {
             static std::ofstream* prism_pathrtt_log = [](){
                 const char* p = getenv("PRISM_PATHRTT");
@@ -1057,7 +1064,9 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             if (prism_pathrtt_log) {
                 (*prism_pathrtt_log) << (uint64_t)timeAsNs(eventlist().now()) << ','
                                      << flowId() << ',' << i->second.path_id << ','
-                                     << (uint64_t)timeAsNs(raw_rtt) << '\n';
+                                     << (uint64_t)timeAsNs(raw_rtt) << ','
+                                     << (pkt.ecn_echo() ? 1 : 0) << ','
+                                     << (uint64_t)_cwnd << '\n';
                 prism_pathrtt_log->flush();
             }
         }
@@ -1068,11 +1077,14 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         
         if (raw_rtt >= _base_rtt) {
             update_delay(raw_rtt, true, pkt.ecn_echo());
-            delay = raw_rtt - _base_rtt; 
+            delay = raw_rtt - _base_rtt;
+            _prism_genuine_sample = true;   // genuine per-path RTT sample (PRISM accumulates only these)
         } else {
             delay = get_avg_delay();
+            _prism_genuine_sample = false;  // smoothed fallback, not a per-path sample
         }
     } else {
+        _prism_genuine_sample = false;      // no send record (probe / late ACK): fallback, not a sample
         // this can happen when the ACK arrives later than a cumulative ACK covering the NACKed
         // packet.
         if (UecSrc::_debug)
@@ -1452,6 +1464,109 @@ void UecSrc::updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_
 
     if (_flow.flow_id() == _debug_flowid)
         cout << timeAsUs(eventlist().now()) <<" flowid " << _flow.flow_id()<< " final _nscc_cwnd " << _cwnd << " _basertt " << timeAsUs(_base_rtt)<< endl;
+}
+
+// PRISM: epoch-based floor-driven control. Reuses NSCC's increase/decrease formulas, driven
+// by the (C_cc, C_spray) decomposition instead of avg_delay/ECN. See prism_decompose.h.
+static constexpr uint32_t PRISM_MIN_SAMPLES = 3;  // don't decide on a near-empty epoch
+
+void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
+    if (quick_adapt(false, skip, delay))   // reuse NSCC loss/quick adaptation
+        return;
+
+    simtime_picosec q = (delay > 0) ? delay : 0;
+
+    // (a) accumulate epoch min/max of q -- ONLY genuine per-path samples (raw_rtt-base). ACKs
+    //     whose delay is the get_avg_delay() fallback (RTS / no-send-record) are skipped: a
+    //     smoothed value is not a per-path sample and would pollute the floor/spread. Among
+    //     genuine samples we DO include ECN-marked (skip==true) ones: the min picks the
+    //     least-congested path (unaffected by high samples), and the max must include congested
+    //     paths or C_spray would under-count reroutable congestion. The epoch only DECIDES once
+    //     it has >= PRISM_MIN_SAMPLES genuine samples (boundary check below); otherwise it extends.
+    if (_prism_genuine_sample) {
+        if (_prism_epoch_samples == 0) {
+            _prism_epoch_start = eventlist().now();
+            _prism_epoch_min = q;
+            _prism_epoch_max = q;
+        } else {
+            _prism_epoch_min = min(_prism_epoch_min, q);
+            _prism_epoch_max = max(_prism_epoch_max, q);
+        }
+        _prism_epoch_samples++;
+    }
+
+    // (b) in-epoch action: only the INCREASE region runs NSCC's per-ACK increase machinery,
+    //     fed the decided floor (< _target_Qdelay by construction; clamped defensively).
+    //     Cold start: _prism_ccc == 0 -> inc_delay 0 -> NSCC fast_increase ramps (intended).
+    if (_prism_region == prism::INCREASE) {
+        simtime_picosec inc_delay = _prism_ccc;
+        if (_target_Qdelay > 0 && inc_delay > _target_Qdelay - 1)
+            inc_delay = _target_Qdelay - 1;
+        proportional_increase(newly_acked_bytes, inc_delay);
+    }
+
+    // (c) epoch boundary: decide region from the decomposition; floor-driven cut at the boundary
+    simtime_picosec t_spray = _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
+    bool cut = false;
+    if (eventlist().now() - _prism_epoch_start >= (simtime_picosec)(_prism_kappa * _base_rtt)
+            && _prism_epoch_samples >= PRISM_MIN_SAMPLES) {
+        simtime_picosec c_cc = _prism_epoch_min;
+        simtime_picosec c_spray = _prism_epoch_max - _prism_epoch_min;
+        int region = prism::decide_region(c_cc, c_spray, _target_Qdelay, t_spray);
+        if (region == prism::DECREASE && c_cc > _target_Qdelay
+                && eventlist().now() - _last_dec_time > _base_rtt) {
+            mem_b before = _cwnd;
+            _cwnd = (mem_b)(_cwnd * prism::md_factor(c_cc, _target_Qdelay, _gamma));
+            _cwnd = max(_cwnd, _min_cwnd);
+            _last_dec_time = eventlist().now();
+            cut = (_cwnd < before);
+        }
+        _prism_region = region;
+        _prism_ccc = c_cc;
+        _prism_cspray = c_spray;
+        if (region != prism::INCREASE) {
+            // HOLD/DECREASE must not grow cwnd: drop any increase budget accumulated in the
+            // prior INCREASE epoch and clear NSCC's fast-increase state, so the gated
+            // fulfill_adjustment() below (which also adds _eta) does not creep cwnd upward.
+            _inc_bytes = 0;
+            _increase = false;
+            _fi_count = 0;
+        }
+        // PRISM: read-only per-epoch log, gated by env var PRISM_EPOCH. One CSV row per epoch:
+        //   time_ns,flow_id,base_rtt_ns,c_cc_ns,c_spray_ns,region,cwnd_bytes,epoch_samples,cut
+        {
+            static std::ofstream* prism_epoch_log = [](){
+                const char* p = getenv("PRISM_EPOCH");
+                return (p && *p) ? new std::ofstream(p) : nullptr;
+            }();
+            if (prism_epoch_log) {
+                (*prism_epoch_log)
+                    << (uint64_t)timeAsNs(eventlist().now()) << ','
+                    << flowId() << ','
+                    << (uint64_t)timeAsNs(_base_rtt) << ','
+                    << (uint64_t)timeAsNs(c_cc) << ','
+                    << (uint64_t)timeAsNs(c_spray) << ','
+                    << region << ','
+                    << (uint64_t)_cwnd << ','
+                    << _prism_epoch_samples << ','
+                    << (cut ? 1 : 0) << '\n';
+                prism_epoch_log->flush();
+            }
+        }
+        _prism_epoch_samples = 0;  // next ACK starts a fresh epoch (sets min=max=q)
+    }
+
+    // (d) reuse NSCC: apply accumulated _inc_bytes to _cwnd -- ONLY in the INCREASE region.
+    // fulfill_adjustment() also adds the periodic _eta term, so running it in HOLD/DECREASE
+    // would creep cwnd up regardless of the floor; gating it keeps HOLD holding and the
+    // floor-driven cut intact.
+    set_cwnd_bounds();
+    if (_prism_region == prism::INCREASE
+            && (_received_bytes > _adjust_bytes_threshold
+                || eventlist().now() - _last_adjust_time > _adjust_period_threshold)) {
+        fulfill_adjustment();
+    }
+    set_cwnd_bounds();
 }
 
 void UecSrc::updateCwndOnNack_NSCC(bool skip, mem_b nacked_bytes, bool last_hop) {
