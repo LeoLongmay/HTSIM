@@ -84,7 +84,7 @@ with plt.rc_context({"font.size": 24}):    # paper styling: all text in figA at 
     plt.ylabel(r"$C_{cc}$ (us)")
     # no in-figure title (paper convention: describe in \caption); keeps all text at 24pt unclipped
     plt.legend(fontsize=18); plt.grid(alpha=0.3)
-    plt.xticks(xpos, [str(n) for n in Ns]); plt.ylim(10, 12); plt.yticks([10, 10.5, 11, 11.5, 12])
+    plt.xticks(xpos, [str(n) for n in Ns]); plt.ylim(10, 11.5); plt.yticks([10, 10.5, 11, 11.5])
     plt.tight_layout(); plt.savefig(f"{HERE}/figA_floor_vs_load.png", dpi=140, bbox_inches="tight", pad_inches=0.05); plt.savefig(f"{HERE}/figA_floor_vs_load.pdf", bbox_inches="tight", pad_inches=0.05); plt.close()
 
 # ---- FigB: C_spray removed by LB when path diversity exists (whole-pod) -> need LB ----

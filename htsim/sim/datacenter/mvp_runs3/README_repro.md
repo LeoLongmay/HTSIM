@@ -42,6 +42,12 @@ bash mvp_runs3/repro.sh
 
 **作用域(必须在论文里写清)**:以上论证"**两种机制各自必要**"(figA–F:floor 需 CC;figG/H:不对称下需 LB)**以及"独立调优次优、最优设置与 regime 耦合"**(figI);**未**证明"**联合 co-design 优于最佳固定独立设置**"——figI 证的是"没有单一固定 CC 设置能跨 regime 最优"(实测),"协同自适应更优"仍是**推断**,本实验没有实现/测量协同控制器,不对 PRISM 机制性能做任何声称。figG/H 用 OBLIVIOUS 代表"CC alone"(关掉自适应换路);figI 中 REPS 始终 ON,变的只是 CC 激进程度。
 
+**评估已补上这个口子(motivation→eval 闭合)**:上面"协同更优仍是**推断**、本实验未实现协同控制器"这一处,Evaluation 已用 **PRISM**(协同控制器,分解 floor/spread)**实测**兑现,且边界与本动机一致 —— 因为 figS/figI 是**延迟信号**故事,只在**延迟驱动 regime** 成立:
+- **延迟驱动 / 大缓冲 / 不裁包**(figI 的 Regime A 类条件):PRISM 在非对称下击败最佳固定独立设置 REPS+NSCC **与**耦合-SOTA STrack(`../prism_eval/expA_delaydriven/`、`../prism_eval/expA_tspray_tuning/`:goodput **+25–33%**),正是 figI/figS 的预测;对称档(failed=0)有小幅代价。
+- **trimming 默认 regime**:队列被裁浅、控制转为丢包驱动,figS/figI 所讲的延迟信号基本消失,PRISM **打平**(`../prism_eval/expA_asymmetric/`、`../prism_eval/expA_lossdecomp/`,即便把分解延伸到丢包信号亦然)。
+
+**故 PRISM 的优势是 regime-specific 的:它赢的边界条件正是本动机的前提(可重路由且延迟驱动);trimming-打平是该作用域的推论,而非反例。** 完整叙事见 `../prism_eval/NARRATIVE.md`。
+
 ## 度量定义
 
 每条流第 i 条路径 `q_i = rtt_i − 基线`;**C_spray = max_i q_i − min_i q_i**(可被 LB 消除的不均衡)、**C_cc = min_i q_i**(LB 消不掉的共有下界)。基线:`global`=该流所有路径/时刻 min(C_spray 用,基线在 max−min 抵消);`const`=固定真实传播 floor(C_cc 用,取自下文 N=1 空载 run 的 min raw RTT)。统计量:每个种子先取**跨流中位数**,再在**5 个种子上取均值 ± 标准差**(误差棒)。

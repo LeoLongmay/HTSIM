@@ -14,12 +14,13 @@ BIN_NS = 10_000          # 10 us bins
 WIN = (500.0, 1500.0)    # steady window, us
 
 def parse_csv(path):
-    """-> list of (t_ns, flow, path, rtt_ns), all ints, sorted by time."""
+    """-> list of (t_ns, flow, path, rtt_ns), all ints, sorted by time.
+    Tolerates >=4 columns (new 6-col format adds ecn_echo,cwnd); extras ignored."""
     rows = []
     with open(path) as f:
         for line in f:
             p = line.split(",")
-            if len(p) != 4:
+            if len(p) < 4:
                 continue
             try:
                 rows.append((int(p[0]), int(p[1]), int(p[2]), int(p[3])))

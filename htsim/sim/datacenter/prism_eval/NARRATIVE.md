@@ -1,0 +1,85 @@
+# PRISM: one thread from motivation to evaluation
+
+This note ties the motivation figures (`../mvp_runs3/`) to the evaluation results
+(`expA_*/` here) so the whole story reads as one argument with a precisely characterized
+boundary. Every number below is traceable to a committed result; the regime where PRISM does
+**not** help is stated as plainly as where it does.
+
+## 1. Premise — the motivation (delay-signal conflation + CC/LB coupling)
+
+- **figS (`../mvp_runs3/README_signal.md`).** A *decoupled* spraying+CC controller decides
+  whether to slow down from the **average** queuing delay, and `avg = floor + reroutable
+  spread`. Whenever multipath spray creates path diversity, the mean is inflated by spread the
+  load balancer could remove. figS1 shows the per-path delay is bimodal with the mean sitting
+  in the empty valley; figS2 shows the mean stays above the slow-down target while the floor
+  (`min_i q_i`) stays below it across light-to-moderate load. A single average cannot represent
+  the floor — the quantity that says whether *even the best path* is congested.
+- **figI (`../mvp_runs3/README_repro.md`).** The optimal static CC aggressiveness **flips**
+  between two regimes: Regime A (reroutable, `C_spray ≫ C_cc`) prefers a loose target; Regime B
+  (true all-path congestion, `C_cc ≫ C_spray`) prefers a tight one. No single fixed target is
+  best in both → CC's optimum is **coupled** to the regime the LB produces.
+
+Both are **delay-signal** statements: they are defined on queuing delay (`rtt − base`).
+
+**The motivation deliberately stopped short of a cost/co-design claim.** README_signal: *"a
+signal-representation result, not a cost claim … establishing a cost requires running both
+controllers head-to-head, which is Evaluation."* README_repro: *"co-design > best fixed
+independent remains an inference; this experiment implements no coordinated controller."* The
+evaluation closes exactly these two open ends.
+
+## 2. Mechanism — PRISM
+
+PRISM decomposes the delay signal per epoch into **`C_cc = floor = min_i q_i`** (does even the
+best path need slowing? → drives CC) and **`C_spray = max−min`** (is the congestion reroutable?
+→ let spraying rebalance, hold the window). It is the coordinated controller the motivation
+only inferred. (`../../uec.cpp` `updateCwndOnAck_PRISM`; pure logic `../../prism_decompose.h`.)
+
+## 3. Evaluation — the cost, measured, and its boundary
+
+- **Reroutable AND delay-driven → PRISM wins.** `expA_delaydriven/` (no-trim, 5×BDP buffers,
+  delay-MD): under asymmetry (failed ≥ 4) PRISM beats the *decoupled* REPS+NSCC **and** the
+  *coupled-SOTA* STrack on both goodput (+19–22%) and FCT (7–12% lower). Crucially STrack
+  (coupled, but averaging) does **not** beat REPS+NSCC — so the win is from *decomposing the
+  signal*, not from coupling per se. `expA_tspray_tuning/` sharpens it: tightening `T_spray`
+  (the spread tolerance) below the ~14 µs default widens the lead to **+25–33%** over both, at
+  no symmetric cost. This is the head-to-head cost the motivation said it had not yet run.
+- **Symmetric fabric → small penalty.** At failed=0 PRISM is slightly worse (holds when there
+  is no reroutable benefit). The advantage is asymmetry-specific (`expA_delaydriven/`,
+  `expA_tspray_tuning/`).
+- **Trimming default → PRISM ties.** `expA_asymmetric/` (P2) and `expA_lossdecomp/`: in the
+  UEC-default trimming regime PRISM ties REPS+NSCC. Extending the decomposition to the
+  **loss/NACK** signal (`-prism_loss_decomp`) *activates* — PRISM holds ~18% of fabric
+  trim-NACKs (loss-HOLD fraction 0.177, vs the delay floor-MD fraction ~0.05) — but still does
+  not produce a win.
+
+## 4. Closure — the boundary IS the premise
+
+The boundary condition where PRISM wins is the same condition the motivation requires. The
+motivation is a **delay-signal** phenomenon, so it exists only when the controller is
+**delay-driven**:
+
+- In a **delay-driven / large-buffer / no-trim** fabric, queues build, the floor-vs-spread
+  structure of figS is real and acted upon, and PRISM's decomposition recovers the performance a
+  decoupled averaging controller loses — exactly figS/figI's prediction, now measured (+25–33%).
+- Under **trimming**, queues are capped shallow and the controller is loss-driven, not
+  delay-driven. The delay signal figS is about is largely absent (the floor-MD fraction stays
+  ~0.05), so the conflation does not bite — and even decomposing the loss signal instead finds
+  no headroom (REPS already reroutes on every trim-NACK). PRISM ties.
+
+So **the trimming-tie is a corollary of the motivation's scope, not a counterexample.** This is
+the honest framing: *characterize when signal conflation matters — reroutable and delay-driven —
+and show PRISM recovers the lost performance there*, rather than claiming PRISM improves
+performance universally. (Consistent detail: README_signal already flagged that STrack's target
+is ~1 base RTT ≈ 14 µs; the eval confirms the runtime `_target_Qdelay` ≈ 14 µs — see
+`expA_tspray_tuning/`.)
+
+## Map
+
+| Stage | Artifact | Claim |
+|---|---|---|
+| Motivation | `../mvp_runs3/README_signal.md` (figS) | avg conflates floor + reroutable spread (delay signal) |
+| Motivation | `../mvp_runs3/README_repro.md` (figA–figI) | both mechanisms necessary; CC optimum coupled to LB regime |
+| Mechanism | `../../prism_decompose.h`, `../../uec.cpp` | PRISM decomposes floor (CC) vs spread (spraying) |
+| Eval (win) | `expA_delaydriven/`, `expA_tspray_tuning/` | reroutable + delay-driven: +25–33% over REPS+NSCC & STrack |
+| Eval (cost) | `expA_delaydriven/` (f0) | symmetric fabric: small penalty |
+| Eval (boundary) | `expA_asymmetric/` (P2), `expA_lossdecomp/` | trimming default: ties (delay signal absent; loss-decomp no headroom) |

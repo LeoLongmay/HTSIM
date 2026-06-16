@@ -134,6 +134,65 @@ def render():
     print("figI: RegimeB mean-lat vs tqd =", [round(x,1) for x in lm], "argmin tqd", qB_best)
     print("figI: decomp A", dA, " B", dB)
 
+def render_dualaxis():
+    """figI2 -- compact single-panel twin-axis variant of figI (Option A).
+
+    Same data as figI (Regime A goodput from cpA, Regime B mean latency from cpB), but both
+    curves share ONE panel on a twin y-axis. The right (latency) axis is INVERTED so that
+    "better" is UP for both axes; goodput then rises to the right while latency rises to the
+    left, so the two curves cross in an X -- the optimum of the *same* knob flips between
+    regimes. Halves the vertical footprint and removes the sparse whitespace of the 2-panel
+    layout. Writes figI2_cc_lb_tuning_coupled.{png,pdf}; does NOT touch figI.
+    """
+    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    gm, gs = across_seeds(goodput_gbps, "cpA")        # Regime A goodput
+    lm, ls = across_seeds(mean_latency_us, "cpB")     # Regime B mean queue latency
+    qA_best = TQD[gm.index(max(gm))]                  # lenient end (right) wins goodput
+    qB_best = TQD[lm.index(min(lm))]                  # aggressive end (left) wins latency
+    GREEN, PURPLE = "tab:green", "tab:purple"
+
+    with plt.rc_context({"font.size": 12}):
+        fig, axg = plt.subplots(figsize=(5.6, 2))
+        axl = axg.twinx()
+        # Regime A goodput (left, green, ascending ->)
+        axg.errorbar(TQD, gm, yerr=gs, marker="o", lw=2.0, ms=6, capsize=3, color=GREEN, zorder=3)
+        # Regime B mean latency (right, purple); invert axis -> "better" is UP for both -> X-cross
+        axl.errorbar(TQD, lm, yerr=ls, marker="s", lw=2.0, ms=6, capsize=3, color=PURPLE, zorder=3)
+        axl.invert_yaxis()
+        axg.margins(y=0.11); axl.margins(y=0.13)   # headroom so the "Best" markers/labels aren't clipped
+        # default target_q_delay (label at top, away from the legend in the lower-center free zone)
+        axg.axvline(DEFAULT_TQD, color="gray", ls="--", lw=1.2, zorder=1)
+        axg.annotate("default", xy=(DEFAULT_TQD - 0.03, 0.47), xycoords=axg.get_xaxis_transform(),
+                     color="gray", rotation=90, va="top", ha="right", fontsize=10)
+        # "Best" markers at the two opposite ends (both plot near the TOP under the inverted axis)
+        axg.scatter([qA_best], [max(gm)], s=150, facecolors="none", edgecolors=GREEN, lw=2.0, zorder=5)
+        axl.scatter([qB_best], [min(lm)], s=150, facecolors="none", edgecolors=PURPLE, lw=2.0, zorder=5)
+        axg.annotate("Best", xy=(qA_best - 1, max(gm) + 3.5), xytext=(-2, -14), textcoords="offset points",
+                     color=GREEN, ha="center", va="top", fontsize=10)
+        axl.annotate("Best", xy=(qB_best + 0.7, min(lm) + 1), xytext=(1, 14), textcoords="offset points",
+                     color=PURPLE, ha="left", fontsize=10) # va="bottom"
+        # color-coded axes; "(^better)" makes the inverted latency axis self-explanatory
+        axg.set_xlabel("NSCC target_q_delay (us)")
+        axg.set_ylabel("Goodput (Gbps)")
+        axg.yaxis.set_label_coords(-0.08, 0.45)
+        axl.set_ylabel("Latency (us)")
+        axg.tick_params(axis="y")
+        axl.tick_params(axis="y")
+        axg.set_xticks(TQD)
+        axg.grid(alpha=0.3)
+        handles = [Line2D([0], [0], color=GREEN, marker="o", lw=2.0, label="Goodput"),
+                   Line2D([0], [0], color=PURPLE, marker="s", lw=2.0, label="Latency")]
+        axg.legend(handles=handles, loc="center right", bbox_to_anchor=(1.0, 0.42), fontsize=10, framealpha=0.9, handlelength=1.6)
+        plt.tight_layout()
+        fig.savefig(os.path.join(HERE, "figI2_cc_lb_tuning_coupled.png"), dpi=160,
+                    bbox_inches="tight", pad_inches=0.04)
+        fig.savefig(os.path.join(HERE, "figI2_cc_lb_tuning_coupled.pdf"),
+                    bbox_inches="tight", pad_inches=0.04)
+        plt.close(fig)
+    print("figI2: dual-axis | goodput-best tqd", qA_best, "| latency-best tqd", qB_best)
+
+
 def _selftest():
     import tempfile
     d = tempfile.mkdtemp()
@@ -162,3 +221,4 @@ if __name__ == "__main__":
         _selftest()
     else:
         render()
+        render_dualaxis()
