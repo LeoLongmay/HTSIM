@@ -43,8 +43,14 @@ only inferred. (`../../uec.cpp` `updateCwndOnAck_PRISM`; pure logic `../../prism
   signal*, not from coupling per se. `expA_tspray_tuning/` sharpens it: tightening `T_spray`
   (the spread tolerance) below the ~14 µs default widens the lead to **+25–33%** over both, at
   no symmetric cost. This is the head-to-head cost the motivation said it had not yet run.
-- **Symmetric fabric → small penalty.** At failed=0 PRISM is slightly worse (holds when there
-  is no reroutable benefit). The advantage is asymmetry-specific (`expA_delaydriven/`,
+- **Symmetric fabric → small penalty (diagnosed, and a fix tried + refuted).** At failed=0 PRISM is
+  slightly worse: it under-grows because it HOLDs on a cross-path spread that is real but a
+  self-resolving *startup transient* (the incast drains to uniformly-low queue), whereas at f8 the
+  spread is structural and persistent so the same HOLD pays off (`expA_f0_diagnosis/`). The natural
+  fix — a persistence-aware spread signal — was prototyped (flag-gated, not shipped) and **backfired**
+  (smoothing also lagged the floor `C_cc` → more cutting; f0 −18%, f4 −15%), so it was removed and
+  **PRISM kept O(1)**. The symmetric penalty therefore stands as a *characterized cost* of the O(1)
+  decomposition, not a defect — the advantage is asymmetry-specific (`expA_delaydriven/`,
   `expA_tspray_tuning/`).
 - **Trimming default → PRISM ties.** `expA_asymmetric/` (P2) and `expA_lossdecomp/`: in the
   UEC-default trimming regime PRISM ties REPS+NSCC. Extending the decomposition to the
