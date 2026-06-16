@@ -311,16 +311,17 @@ public:
     void updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_STRACK(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void starvation_increase();
-    void updateCwndOnNack_NSCC(bool skip, mem_b nacked_bytes, bool last_hop);
+    void updateCwndOnNack_NSCC(uint32_t ev, mem_b nacked_bytes, bool last_hop);
+    void updateCwndOnNack_PRISM(uint32_t ev, mem_b nacked_bytes, bool last_hop);
 
     void updateCwndOnAck_DCTCP(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
-    void updateCwndOnNack_DCTCP(bool skip, mem_b nacked_bytes, bool last_hop);
+    void updateCwndOnNack_DCTCP(uint32_t ev, mem_b nacked_bytes, bool last_hop);
 
     void dontUpdateCwndOnAck(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
-    void dontUpdateCwndOnNack(bool skip, mem_b nacked_bytes, bool last_hop);
+    void dontUpdateCwndOnNack(uint32_t ev, mem_b nacked_bytes, bool last_hop);
 
     void (UecSrc::*updateCwndOnAck)(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
-    void (UecSrc::*updateCwndOnNack)(bool skip, mem_b nacked_bytes, bool last_hop);
+    void (UecSrc::*updateCwndOnNack)(uint32_t ev, mem_b nacked_bytes, bool last_hop);
 
     bool checkFinished(UecDataPacket::seq_t cum_ack);
 
@@ -373,6 +374,8 @@ public:
     // STrack (coupled-SOTA baseline) params. CC core reuses NSCC's _gamma/_eta/_target_Qdelay.
     static double _strack_beta;   // starvation-bump scale (Table 1 beta; dimensionless, default 5.0)
     static double _strack_h;      // per-hop target scale; default 0 (fixed target, see spec §3) (arg-parse symmetry in Task 3; not consumed while h=0)
+    static bool     _prism_loss_decomp;       // -prism_loss_decomp; default false (== today's PRISM)
+    static uint32_t _prism_loss_streak_cap;   // -prism_loss_streak_cap; consecutive HOLD epochs -> force cut
     static double _gamma;
     static double _alpha;
     // static double _scaling_c;
@@ -470,6 +473,12 @@ private:
     simtime_picosec _prism_cspray        = 0;  // last epoch's C_spray (log)
     bool            _prism_genuine_sample = false;  // set in processAck: true iff this ACK gave a
                                                     // genuine raw_rtt-base sample (not avg fallback)
+
+    // PRISM loss/NACK decomposition (flag-gated). Per-epoch distinct entropies that ACK'd-good
+    // vs fabric-NACK'd; the safety valve is time-based (epoch-closure-independent). See prism::decide_loss.
+    std::set<uint32_t> _prism_loss_evs_good;
+    std::set<uint32_t> _prism_loss_evs_nacked;
+    simtime_picosec _prism_loss_hold_since = 0;  // start of the current continuous HOLD run; 0 = not holding
 
     simtime_picosec _last_eta_time = 0;
     simtime_picosec _last_adjust_time = 0;

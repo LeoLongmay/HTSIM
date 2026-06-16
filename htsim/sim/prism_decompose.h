@@ -1,7 +1,7 @@
 #ifndef PRISM_DECOMPOSE_H
 #define PRISM_DECOMPOSE_H
 // PRISM congestion decomposition — pure logic, no htsim dependencies (uint64_t times).
-// Used by UecSrc::updateCwndOnAck_PRISM and unit-tested standalone. Times in picoseconds.
+// Delay decomposition (decide_region/md_factor, picosecond times) + loss/NACK decision (decide_loss). Used by UecSrc::updateCwndOnAck_PRISM / updateCwndOnNack_PRISM; unit-tested standalone.
 #include <cstdint>
 #include <algorithm>
 
@@ -27,6 +27,20 @@ inline double md_factor(uint64_t c_cc, uint64_t t_cc, double gamma) {
     if (c_cc <= t_cc) return 1.0;
     double f = 1.0 - gamma * (double)(c_cc - t_cc) / (double)c_cc;
     return std::max(f, 0.5);
+}
+
+// Loss four-quadrant rule -- the loss/NACK analog of decide_region, used by
+// UecSrc::updateCwndOnNack_PRISM. Holds the window when loss is reroutable (a clean path is
+// still ACKing) and cuts when loss is uniform or not reroutable. See spec 2026-06-16-prism-loss-decomp.
+enum LossAction { LOSS_CUT = 0, LOSS_HOLD = 1 };
+
+inline LossAction decide_loss(bool last_hop, bool enough_evidence,
+                              bool clean_path_exists, bool streak_exceeded) {
+    if (last_hop)          return LOSS_CUT;   // last-hop receiver incast -> not reroutable
+    if (!enough_evidence)  return LOSS_CUT;   // too few good-ACK paths seen yet -> safe default
+    if (streak_exceeded)   return LOSS_CUT;   // safety valve: held too long -> force a cut
+    if (clean_path_exists) return LOSS_HOLD;  // concentrated loss, clean path exists -> hold, let REPS reroute
+    return LOSS_CUT;                          // uniform loss across paths -> genuine congestion
 }
 
 }  // namespace prism

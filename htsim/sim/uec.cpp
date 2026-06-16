@@ -99,6 +99,8 @@ simtime_picosec UecSrc::_prism_T_spray = 0;   // 0 sentinel: follow _target_Qdel
 double UecSrc::_prism_kappa = 1.0;
 double UecSrc::_strack_beta = 5.0;   // STrack Table 1 beta scale; tuned in P5 sensitivity
 double UecSrc::_strack_h    = 0.0;   // fixed target (no live hop_count plumbing); see spec §3
+bool     UecSrc::_prism_loss_decomp     = false;
+uint32_t UecSrc::_prism_loss_streak_cap = 4;
 uint32_t UecSrc::_adjust_bytes_threshold = (simtime_picosec)32000*_target_Qdelay/timeFromUs(12u);
 double UecSrc::_qa_threshold = 4 * UecSrc::_target_Qdelay; 
 
@@ -602,7 +604,7 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 break;
             case PRISM:
                 updateCwndOnAck = &UecSrc::updateCwndOnAck_PRISM;
-                updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;  // reuse NSCC NACK/loss handling
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_PRISM;
                 break;
             case STRACK:
                 updateCwndOnAck = &UecSrc::updateCwndOnAck_STRACK;
@@ -1086,6 +1088,9 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             update_delay(raw_rtt, true, pkt.ecn_echo());
             delay = raw_rtt - _base_rtt;
             _prism_genuine_sample = true;   // genuine per-path RTT sample (PRISM accumulates only these)
+            // bounded by distinct ev's (<= path count); cleared at the epoch boundary (may be briefly stale across a quick_adapt window).
+            if (_sender_cc_algo == PRISM && _prism_loss_decomp && !pkt.ecn_echo())
+                _prism_loss_evs_good.insert(pkt.ev());   // a genuinely clean (non-ECN) path this epoch
         } else {
             delay = get_avg_delay();
             _prism_genuine_sample = false;  // smoothed fallback, not a per-path sample
@@ -1234,7 +1239,7 @@ void UecSrc::updateCwndOnAck_DCTCP(bool skip, simtime_picosec rtt, mem_b newly_a
     }
 }
 
-void UecSrc::updateCwndOnNack_DCTCP(bool skip, mem_b nacked_bytes, bool last_hop) {
+void UecSrc::updateCwndOnNack_DCTCP(uint32_t ev, mem_b nacked_bytes, bool last_hop) {
     _cwnd -= nacked_bytes;
     _cwnd = max(_cwnd, (mem_b)_mtu);
 }
@@ -1560,6 +1565,10 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
                 prism_epoch_log->flush();
             }
         }
+        if (_prism_loss_decomp) {
+            _prism_loss_evs_good.clear();
+            _prism_loss_evs_nacked.clear();
+        }
         _prism_epoch_samples = 0;  // next ACK starts a fresh epoch (sets min=max=q)
     }
 
@@ -1624,7 +1633,7 @@ void UecSrc::starvation_increase() {
     }
 }
 
-void UecSrc::updateCwndOnNack_NSCC(bool skip, mem_b nacked_bytes, bool last_hop) {
+void UecSrc::updateCwndOnNack_NSCC(uint32_t ev, mem_b nacked_bytes, bool last_hop) {
     bool adjust_cwnd = true;
 
     _bytes_ignored += nacked_bytes;
@@ -1651,7 +1660,58 @@ void UecSrc::updateCwndOnNack_NSCC(bool skip, mem_b nacked_bytes, bool last_hop)
     }
 }
 
-void UecSrc::dontUpdateCwndOnNack(bool skip, mem_b nacked_bytes, bool last_hop) {
+// PRISM loss/NACK decomposition. Flag off -> exactly NSCC. Flag on -> hold the window on
+// reroutable (concentrated) loss, cut on uniform/last-hop loss. Retransmission + REPS rerouting
+// happen in processNack regardless; this only gates the cwnd response. See prism::decide_loss.
+static constexpr uint32_t PRISM_LOSS_MIN_GOOD = 2;  // distinct good-ACK paths before trusting "clean path"
+void UecSrc::updateCwndOnNack_PRISM(uint32_t ev, mem_b nacked_bytes, bool last_hop) {
+    if (!_prism_loss_decomp) {            // off -> byte-identical to today's PRISM (NSCC NACK)
+        updateCwndOnNack_NSCC(ev, nacked_bytes, last_hop);
+        return;
+    }
+    if (!last_hop)
+        _prism_loss_evs_nacked.insert(ev);
+
+    bool enough = _prism_loss_evs_good.size() >= PRISM_LOSS_MIN_GOOD;
+    bool clean  = false;
+    for (uint32_t g : _prism_loss_evs_good)
+        if (_prism_loss_evs_nacked.find(g) == _prism_loss_evs_nacked.end()) { clean = true; break; }
+    // Time-based safety valve (epoch-closure-independent): if we've HELD continuously for longer
+    // than _prism_loss_streak_cap * base_rtt, force a cut so a persistently-lossy fabric cannot
+    // be held forever (the epoch boundary that would otherwise reset state may never close under
+    // sustained loss).
+    bool streak_exceeded = (_prism_loss_hold_since != 0 &&
+        eventlist().now() - _prism_loss_hold_since >= (simtime_picosec)_prism_loss_streak_cap * _base_rtt);
+
+    prism::LossAction action = prism::decide_loss(last_hop, enough, clean, streak_exceeded);
+
+    {
+        static std::ofstream* prism_loss_log = [](){
+            const char* p = getenv("PRISM_LOSS");
+            return (p && *p) ? new std::ofstream(p) : nullptr;
+        }();
+        if (prism_loss_log) {
+            (*prism_loss_log) << (uint64_t)timeAsNs(eventlist().now()) << ',' << flowId() << ','
+                              << ev << ',' << (last_hop ? 1 : 0) << ','
+                              << (action == prism::LOSS_HOLD ? 1 : 0) << '\n';
+        }
+    }
+
+    if (action == prism::LOSS_HOLD) {
+        if (_prism_loss_hold_since == 0)
+            _prism_loss_hold_since = eventlist().now();   // start a continuous-HOLD run
+        return;                                            // no quick_adapt, no cwnd cut
+    }
+    // CUT: end the hold run; if the valve forced this cut, refresh the (possibly stale) evidence sets.
+    _prism_loss_hold_since = 0;
+    if (streak_exceeded) {
+        _prism_loss_evs_good.clear();
+        _prism_loss_evs_nacked.clear();
+    }
+    updateCwndOnNack_NSCC(ev, nacked_bytes, last_hop);
+}
+
+void UecSrc::dontUpdateCwndOnNack(uint32_t ev, mem_b nacked_bytes, bool last_hop) {
 }
 
 void UecSrc::update_base_rtt(simtime_picosec raw_rtt){

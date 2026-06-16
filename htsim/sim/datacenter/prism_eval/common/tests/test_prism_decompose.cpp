@@ -20,6 +20,15 @@ int main() {
     assert(md_factor(1000000, 1, 0.8) == 0.5);      // clamped to 0.5 floor
     printf("ok md_factor\n");
 
+    // decide_loss: loss four-quadrant. args (last_hop, enough_evidence, clean_path_exists, streak_exceeded)
+    assert(decide_loss(true,  true,  true,  false) == LOSS_CUT);   // last_hop incast -> cut
+    assert(decide_loss(false, false, true,  false) == LOSS_CUT);   // not enough evidence yet (clean_path_exists ignored) -> cut
+    assert(decide_loss(false, true,  true,  true)  == LOSS_CUT);   // streak valve tripped -> cut
+    assert(decide_loss(false, true,  false, true)  == LOSS_CUT);   // streak valve tripped even w/o clean path -> cut
+    assert(decide_loss(false, true,  true,  false) == LOSS_HOLD);  // concentrated/reroutable -> hold
+    assert(decide_loss(false, true,  false, false) == LOSS_CUT);   // uniform loss -> cut
+    printf("ok decide_loss\n");
+
     printf("ALL PASS\n");
     return 0;
 }

@@ -206,6 +206,14 @@ int main(int argc, char **argv) {
             UecSrc::_strack_h = atof(argv[i+1]);
             cout << "strack_h " << UecSrc::_strack_h << endl;
             i++;
+        } else if (!strcmp(argv[i],"-prism_loss_decomp")) {
+            UecSrc::_prism_loss_decomp = (atoi(argv[i+1]) != 0);
+            cout << "prism_loss_decomp " << UecSrc::_prism_loss_decomp << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_loss_streak_cap")) {
+            UecSrc::_prism_loss_streak_cap = atoi(argv[i+1]);
+            cout << "prism_loss_streak_cap " << UecSrc::_prism_loss_streak_cap << endl;
+            i++;
         } else if (!strcmp(argv[i],"-queue_size_bdp_factor")) {
             queue_size_bdp_factor = atoi(argv[i+1]);
             cout << "Setting queue size to "<< queue_size_bdp_factor << "x BDP." << endl;
