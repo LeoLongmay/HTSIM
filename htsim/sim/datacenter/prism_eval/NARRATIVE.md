@@ -79,6 +79,10 @@ performance universally. (Consistent detail: README_signal already flagged that 
 is ~1 base RTT ≈ 14 µs; the eval confirms the runtime `_target_Qdelay` ≈ 14 µs — see
 `expA_tspray_tuning/`.)
 
+**Which real fabrics this regime is** — large-buffer/lossless multipath Clos with link asymmetry
+(lossless RoCE/PFC, InfiniBand, deep-buffer DC), and why that class is real and important — is argued
+in `TARGET_REGIME.md`.
+
 ## Map
 
 | Stage | Artifact | Claim |
