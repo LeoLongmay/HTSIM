@@ -72,7 +72,9 @@ on throughput here. So STrack is a genuinely distinct controller, not a clone.
   above target, so the win is not a clean "floor stays below target" -- it is PRISM making
   fewer, better-targeted floor-driven cuts (651 per-ACK cwnd decreases vs REPS+NSCC 2208,
   STrack 2440) that net higher delivered work. floor-MD fraction = 316/651 = 0.485
-  (delay-driven confirmed; trimming baseline was ~0.05).
+  (delay-driven confirmed; trimming baseline was ~0.05). Note: the target queuing delay is
+  ~14 µs (one network RTT, read from the runtime `_target_Qdelay`), NOT 6 µs; an earlier
+  6 µs label in the figure was a documentation error now corrected.
 
 ### Faithfulness notes on the STrack port (from the final holistic review)
 The port realizes STrack Algorithm 4's *intent* (ECN-gated; avg-delay-keyed MD; conservative

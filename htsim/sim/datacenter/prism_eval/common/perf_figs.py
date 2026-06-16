@@ -13,6 +13,22 @@ def _ms(v):
     """(mean, population std) of a non-empty list -- population std: full fixed seed set."""
     return (statistics.mean(v), statistics.pstdev(v))
 
+def _read_target_us(data_dir, tag_prefix, fallback_us):
+    """Read the runtime _target_Qdelay (picoseconds) from the PRISM mechanism stdout and return
+    microseconds. initNsccParams sets the target to one network RTT (~14us), overriding the 6us
+    static default, so the figure's target line must reflect the real value, not a constant."""
+    path = os.path.join(data_dir, f"{tag_prefix}_prism_mech.stdout")
+    try:
+        with open(path) as fh:
+            for ln in fh:
+                i = ln.find("_target_Qdelay=")
+                if i >= 0:
+                    tok = ln[i + len("_target_Qdelay="):].split()[0]
+                    return float(tok) / 1e6   # ps -> us
+    except (OSError, ValueError, IndexError):
+        pass
+    return fallback_us
+
 def aggregate(data_dir, tag_prefix, label, failed, seeds):
     """Per-failed aggregates for one baseline: {f: {metric:(mean,std)}}; omit f with no data."""
     out = {}
@@ -81,6 +97,7 @@ def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, targ
     if not (os.path.exists(reps_pr) and os.path.exists(prism_ep)):
         print(f"[{fig_stem}] mechanism logs missing; skipping")
         return
+    target_us = _read_target_us(data_dir, tag_prefix, target_us)
     fig, (ax_sig, ax_cw) = plt.subplots(2, 1, figsize=(5.2, 6.0), sharex=True)
     bins = metrics.qdelay_bins(reps_pr, base_ns=base_ns, bin_us=20)
     if bins:
@@ -91,7 +108,7 @@ def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, targ
     if ep:
         te = [r["time_ns"] / 1000.0 for r in ep]; cc = [r["c_cc_ns"] / 1000.0 for r in ep]
         ax_sig.plot(te, cc, color=plot_style.COLORS["prism"], lw=2.0, label="PRISM floor C_cc")
-    ax_sig.axhline(target_us, color=plot_style.COLORS["target"], ls="--", lw=1.3, label="target")
+    ax_sig.axhline(target_us, color=plot_style.COLORS["target"], ls="--", lw=1.3, label=f"target ({target_us:.1f}us = 1 RTT)")
     ax_sig.set_ylabel("Queuing delay (us)")
     ax_sig.set_title(f"Mechanism @ -failed={mech_failed}", fontsize=11)
     ax_sig.grid(alpha=0.3); ax_sig.legend(fontsize=8)
