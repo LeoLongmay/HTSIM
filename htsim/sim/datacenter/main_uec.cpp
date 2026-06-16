@@ -198,6 +198,14 @@ int main(int argc, char **argv) {
             UecSrc::_prism_kappa = atof(argv[i+1]);
             cout << "prism_kappa " << UecSrc::_prism_kappa << endl;
             i++;
+        } else if (!strcmp(argv[i],"-strack_beta")) {
+            UecSrc::_strack_beta = atof(argv[i+1]);
+            cout << "strack_beta " << UecSrc::_strack_beta << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-strack_h")) {
+            UecSrc::_strack_h = atof(argv[i+1]);
+            cout << "strack_h " << UecSrc::_strack_h << endl;
+            i++;
         } else if (!strcmp(argv[i],"-queue_size_bdp_factor")) {
             queue_size_bdp_factor = atoi(argv[i+1]);
             cout << "Setting queue size to "<< queue_size_bdp_factor << "x BDP." << endl;
@@ -214,6 +222,8 @@ int main(int argc, char **argv) {
                 UecSrc::_sender_cc_algo = UecSrc::CONSTANT;
             else if (!strcmp(argv[i+1],"prism"))
                 UecSrc::_sender_cc_algo = UecSrc::PRISM;
+            else if (!strcmp(argv[i+1],"strack"))
+                UecSrc::_sender_cc_algo = UecSrc::STRACK;
             else {
                 cout << "UNKNOWN CC ALGO " << argv[i+1] << endl;
                 exit(1);

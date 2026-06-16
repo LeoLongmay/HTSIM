@@ -216,7 +216,7 @@ public:
     static bool _sender_based_cc;
     static bool _receiver_based_cc;
 
-    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM};
+    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK};
     static Sender_CC _sender_cc_algo;
 
     static bool _disable_quick_adapt;
@@ -309,6 +309,8 @@ public:
     void quick_adapt(bool trimmed);
     void updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void updateCwndOnAck_STRACK(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void starvation_increase();
     void updateCwndOnNack_NSCC(bool skip, mem_b nacked_bytes, bool last_hop);
 
     void updateCwndOnAck_DCTCP(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
@@ -368,6 +370,9 @@ public:
     // PRISM params. T_cc IS _target_Qdelay (reused, not a separate knob).
     static simtime_picosec _prism_T_spray;  // tolerated spread; 0 = follow _target_Qdelay
     static double          _prism_kappa;    // epoch length = kappa * base_rtt; default 1.0
+    // STrack (coupled-SOTA baseline) params. CC core reuses NSCC's _gamma/_eta/_target_Qdelay.
+    static double _strack_beta;   // starvation-bump scale (Table 1 beta; dimensionless, default 5.0)
+    static double _strack_h;      // per-hop target scale; default 0 (fixed target, see spec §3) (arg-parse symmetry in Task 3; not consumed while h=0)
     static double _gamma;
     static double _alpha;
     // static double _scaling_c;

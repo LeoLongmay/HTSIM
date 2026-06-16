@@ -10,6 +10,7 @@
 #include "uec_logger.h"
 #include "pciemodel.h"
 #include "prism_decompose.h"  // PRISM decomposition logic (used by updateCwndOnAck_PRISM)
+#include "strack_cc.h"               // STrack decision tree (used by updateCwndOnAck_STRACK)
 
 using namespace std;
 
@@ -96,6 +97,8 @@ simtime_picosec UecSrc::_adjust_period_threshold = timeFromUs(12u);
 simtime_picosec UecSrc::_target_Qdelay = timeFromUs(6u);
 simtime_picosec UecSrc::_prism_T_spray = 0;   // 0 sentinel: follow _target_Qdelay
 double UecSrc::_prism_kappa = 1.0;
+double UecSrc::_strack_beta = 5.0;   // STrack Table 1 beta scale; tuned in P5 sensitivity
+double UecSrc::_strack_h    = 0.0;   // fixed target (no live hop_count plumbing); see spec §3
 uint32_t UecSrc::_adjust_bytes_threshold = (simtime_picosec)32000*_target_Qdelay/timeFromUs(12u);
 double UecSrc::_qa_threshold = 4 * UecSrc::_target_Qdelay; 
 
@@ -599,6 +602,10 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 break;
             case PRISM:
                 updateCwndOnAck = &UecSrc::updateCwndOnAck_PRISM;
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;  // reuse NSCC NACK/loss handling
+                break;
+            case STRACK:
+                updateCwndOnAck = &UecSrc::updateCwndOnAck_STRACK;
                 updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;  // reuse NSCC NACK/loss handling
                 break;
             default:
@@ -1567,6 +1574,54 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         fulfill_adjustment();
     }
     set_cwnd_bounds();
+}
+
+// STrack (coupled SOTA): Algorithm-4 ECN-gated controller, MD keyed on AVERAGE delay.
+// Reuses NSCC primitives; the only STrack-specific action is the beta starvation bump.
+// Distinct from NSCC: where NSCC runs an aggressive fair_increase on !ecn && delay>=target,
+// STrack holds (fairness via periodic eta only) and bumps only when delay>2*target. See
+// strack_cc.h / spec 2026-06-16-prism-eval-p3-strack-design.md.
+void UecSrc::updateCwndOnAck_STRACK(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
+    if (quick_adapt(false, skip, delay))   // reuse NSCC achievedBDP fast-converge + loss/quick adapt
+        return;
+
+    simtime_picosec avg = get_avg_delay();
+    switch (strack::decide_action(skip, delay, avg, _target_Qdelay)) {
+        case strack::INCREASE_PROP:
+            proportional_increase(newly_acked_bytes, delay);  // _target_Qdelay>delay holds here
+            break;
+        case strack::STARVATION_BUMP:
+            starvation_increase();
+            break;
+        case strack::MULT_DECREASE:
+            multiplicative_decrease();  // self-gates avg>target & once-per-base_rtt; keys on avg
+            break;
+        case strack::HOLD:
+            break;
+    }
+
+    set_cwnd_bounds();
+
+    // Unlike PRISM (which gates fulfill to INCREASE), STrack runs it unconditionally: the periodic eta is STrack's fairness mechanism (Algorithm 4, Line #20), as in NSCC.
+    if (_received_bytes > _adjust_bytes_threshold ||
+        eventlist().now() - _last_adjust_time > _adjust_period_threshold) {
+        fulfill_adjustment();  // applies accumulated _inc_bytes + periodic _eta
+    }
+
+    set_cwnd_bounds();
+
+    if (_flow.flow_id() == _debug_flowid)
+        cout << timeAsUs(eventlist().now()) << " flowid " << _flow.flow_id()
+             << " final _strack_cwnd " << _cwnd << " _basertt " << timeAsUs(_base_rtt) << endl;
+}
+
+// STrack Algorithm 4 Line #7: cwnd += beta/cwnd. beta carried in mtu^2 units via _strack_beta
+// (dimensionless scale) so the per-ACK bump is self-clocking like Swift's ai/cwnd.
+void UecSrc::starvation_increase() {
+    if (_cwnd > 0) {
+        mem_b bump = (mem_b)(_strack_beta * (double)_mtu * (double)_mtu / (double)_cwnd);
+        _cwnd += max(bump, (mem_b)1);
+    }
 }
 
 void UecSrc::updateCwndOnNack_NSCC(bool skip, mem_b nacked_bytes, bool last_hop) {

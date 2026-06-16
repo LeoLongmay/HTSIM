@@ -106,6 +106,8 @@ int main(int argc, char** argv) {
                 UecSrc::_sender_cc_algo = UecSrc::CONSTANT;
             else if (!strcmp(argv[i + 1], "prism"))
                 UecSrc::_sender_cc_algo = UecSrc::PRISM;
+            else if (!strcmp(argv[i + 1], "strack"))
+                UecSrc::_sender_cc_algo = UecSrc::STRACK;
             else
                 throw std::logic_error("CC not recognized");
             i++;

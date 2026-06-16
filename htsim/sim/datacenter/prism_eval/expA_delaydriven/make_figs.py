@@ -11,7 +11,8 @@ import perf_figs  # noqa: E402
 
 DATA = os.path.join(HERE, "data")
 FIGS = os.path.join(HERE, "figs")
-BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"), ("prism", "PRISM", "prism")]
+BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
+             ("strack", "STrack", "strack"), ("prism", "PRISM", "prism")]
 FAILED = [0, 2, 4, 8, 12]
 SEEDS = [13, 14, 15, 16, 17]
 XLABEL = "# constrained core->agg links (-failed), delay-driven (-disable_trim)"

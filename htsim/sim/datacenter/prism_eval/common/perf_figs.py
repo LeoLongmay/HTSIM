@@ -111,6 +111,10 @@ def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, targ
     if os.path.exists(prism_pr):
         tp, cp = cwnd_series(prism_pr)
         ax_cw.plot(tp, cp, color=plot_style.COLORS["prism"], lw=2.0, label="PRISM")
+    strack_pr = os.path.join(data_dir, f"{tag_prefix}_strack_mech.pathrtt.csv")
+    if os.path.exists(strack_pr):
+        ts, cs = cwnd_series(strack_pr)
+        ax_cw.plot(ts, cs, color=plot_style.COLORS["strack"], lw=2.0, label="STrack")
     ax_cw.set_ylabel("cwnd (KB, mean/flow)")
     ax_cw.set_xlabel("time (us)")
     ax_cw.grid(alpha=0.3); ax_cw.legend(fontsize=9)
@@ -127,12 +131,17 @@ def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, targ
           f"PRISM={prism_dec}  REPS+NSCC={reps_dec}")
     print(f"[{fig_stem}] floor-MD fraction = PRISM epoch-MDs / PRISM cwnd-decreases = "
           f"{prism_md}/{prism_dec} = {frac:.3f}  (trimming baseline was ~0.05)")
+    if os.path.exists(strack_pr):
+        strack_dec = metrics.count_cwnd_cuts_from_pathrtt(strack_pr)
+        print(f"[{fig_stem}] DISTINCTNESS (per-ACK cwnd-decreases @failed={mech_failed}): "
+              f"STrack={strack_dec}  REPS+NSCC={reps_dec}  "
+              f"(must differ measurably; identical => STrack collapsed to NSCC, revisit spec Approach B)")
 
 def selftest():
     import tempfile, shutil
     d = tempfile.mkdtemp()
     failed = [0, 2, 4, 8, 12]; seeds = [13, 14, 15, 16, 17]
-    for lab in ("ops", "reps", "prism"):
+    for lab in ("ops", "reps", "strack", "prism"):
         for f in failed:
             for s in seeds:
                 with open(os.path.join(d, f"expA_{lab}_f{f}_s{s}.flow.txt"), "w") as fh:
