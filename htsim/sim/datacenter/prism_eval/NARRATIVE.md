@@ -43,6 +43,15 @@ only inferred. (`../../uec.cpp` `updateCwndOnAck_PRISM`; pure logic `../../prism
   signal*, not from coupling per se. `expA_tspray_tuning/` sharpens it: tightening `T_spray`
   (the spread tolerance) below the ~14 µs default widens the lead to **+25–33%** over both, at
   no symmetric cost. This is the head-to-head cost the motivation said it had not yet run.
+- **The win extends to an oversubscribed core, and holds at 1024-node scale.**
+  `expB_oversub_asym/`: the same asymmetric advantage generalizes from the 1:1 non-blocking fabric
+  to a moderately-oversubscribed **4:1** core — **+14–32%** goodput over both REPS+NSCC and STrack
+  once any core link is degraded — bounded by **8:1**, where the 128-node fabric saturates regardless
+  of controller. `expD_scale1024/`: at **1024 nodes (8× scale)** both headline wins reproduce
+  *undiluted* — D1 (1:1) **+14–25%** goodput at failed ≥ 8 (peak ≥ the 128-node result), and the 4:1
+  win **+3.7–30.8%** — and, with more reroutable headroom at scale, the 8:1 case flips from the
+  128-node hard-saturation into a PRISM **graceful-degradation** win: at the heaviest failure REPS and
+  STrack complete only ~36% of flows (cr 0.36) while PRISM completes 84% (cr 0.84, +133% goodput).
 - **Symmetric fabric → small penalty (diagnosed, and a fix tried + refuted).** At failed=0 PRISM is
   slightly worse: it under-grows because it HOLDs on a cross-path spread that is real but a
   self-resolving *startup transient* (the incast drains to uniformly-low queue), whereas at f8 the
@@ -104,6 +113,8 @@ in `TARGET_REGIME.md`.
 | Motivation | `../mvp_runs3/README_repro.md` (figA–figI) | both mechanisms necessary; CC optimum coupled to LB regime |
 | Mechanism | `../../prism_decompose.h`, `../../uec.cpp` | PRISM decomposes floor (CC) vs spread (spraying) |
 | Eval (win) | `expA_delaydriven/`, `expA_tspray_tuning/` | reroutable + delay-driven: +25–33% over REPS+NSCC & STrack |
+| Eval (win, oversub) | `expB_oversub_asym/` | asymmetric win extends to a 4:1 oversubscribed core (+14–32%); 8:1 = saturation boundary |
+| Eval (scale) | `expD_scale1024/` | both headline wins hold undiluted at 1024 nodes (8×); 8:1 becomes a graceful-degradation win |
 | Eval (cost) | `expA_delaydriven/` (f0) | symmetric fabric: small penalty |
 | Eval (boundary) | `expA_asymmetric/` (P2), `expA_lossdecomp/` | trimming default: ties (delay signal absent; loss-decomp no headroom) |
 | Eval (fallback) | `expB_oversub/` | path-wide overload: goodput do-no-harm, floor-driven (floor-MD 0.957); FCT cost |
