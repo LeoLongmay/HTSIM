@@ -9,7 +9,7 @@ REL="prism_eval/expA_delaydriven"
 cd "$DC"
 [ -x ./htsim_uec ] || { echo "ERROR: ./htsim_uec missing -- build it first"; exit 1; }
 mkdir -p "$REL/data"
-SEEDS="13 14 15 16 17"; FAILEDS="0 2 4 8 12"; TOPO=fat_tree_128_1os.topo
+SEEDS="13 14 15 16 17"; FAILEDS="0 2 4 6 8 10 12"; TOPO=fat_tree_128_1os.topo
 DD="-disable_trim"   # the delay-driven knob
 # END (ms). Default 8: the 5xBDP no-trim regime builds deep queues, so 2 ms left many flows
 # unfinished (completion-stressed, FCT confounded). 8 ms lets the workload drain. Override EXP_END.
@@ -23,6 +23,11 @@ python3 "$HERE/make_figs.py" --selftest
 echo "== generate workload (many2many: 64 -> 16 pod0, 2MB) =="
 python3 "$COMMON/gen/many2many.py" "$REL/data/m2m.cm" 64 16 pairs 2000000 128 16
 CM="$REL/data/m2m.cm"; OUT="$REL/data"
+# Mechanism condition uses a LARGER message size (4MB) so every arm's makespan > 3 ms, giving a
+# clean [0,3] ms window in figA2dd (the main perf sweep above stays at 2 MB). Override MECH_SIZE.
+MECH_SIZE="${MECH_SIZE:-4000000}"
+python3 "$COMMON/gen/many2many.py" "$REL/data/m2m_mech.cm" 64 16 pairs "$MECH_SIZE" 128 16
+CM_MECH="$REL/data/m2m_mech.cm"
 
 echo "== main sweep (delay-driven): 4 baselines x failed{0,2,4,8,12} x 5 seeds =="
 for f in $FAILEDS; do for s in $SEEDS; do
@@ -33,16 +38,16 @@ for f in $FAILEDS; do for s in $SEEDS; do
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps  "$f" "$TOPO" "$s" "$CM" flow,sink "expA_strack_f${f}_s${s}" "$OUT"
 done; done
 
-echo "== mechanism condition: failed=8, seed=13, all 4 with PRISM_PATHRTT =="
+echo "== mechanism condition: failed=8, seed=13, 4MB workload (CM_MECH), all 4 with PRISM_PATHRTT =="
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_ops_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc oblivious 8 "$TOPO" 13 "$CM" flow,sink expA_ops_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc oblivious 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_ops_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_reps_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc reps 8 "$TOPO" 13 "$CM" flow,sink expA_reps_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_reps_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_EPOCH="$OUT/expA_prism_mech.epoch.csv" PRISM_PATHRTT="$OUT/expA_prism_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" prism reps 8 "$TOPO" 13 "$CM" flow,sink expA_prism_mech "$OUT"
+  bash "$COMMON/run_lib.sh" prism reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_prism_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_strack_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" strack reps 8 "$TOPO" 13 "$CM" flow,sink expA_strack_mech "$OUT"
+  bash "$COMMON/run_lib.sh" strack reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_strack_mech "$OUT"
 
-echo "== render figA1dd + figA2dd =="
+echo "== render figA1dd_{goodput,avg_fct,p99_fct} + figA2dd_{signal,cwnd} =="
 python3 "$HERE/make_figs.py"
-echo "== done: figs/figA1dd_main_perf.{png,pdf} figs/figA2dd_mechanism.{png,pdf} =="
+echo "== done: figs/figA1dd_*.{png,pdf} figs/figA2dd_{signal,cwnd}.{png,pdf} =="

@@ -57,6 +57,19 @@ only inferred. (`../../uec.cpp` `updateCwndOnAck_PRISM`; pure logic `../../prism
   **loss/NACK** signal (`-prism_loss_decomp`) *activates* — PRISM holds ~18% of fabric
   trim-NACKs (loss-HOLD fraction 0.177, vs the delay floor-MD fraction ~0.05) — but still does
   not produce a win.
+- **Path-wide overload → PRISM falls back correctly (the other side of the boundary, measured).**
+  P4 tested what PRISM does when it *leaves* its target regime and meets non-reroutable overload.
+  Under graded oversubscription (`expB_oversub/`, delay-driven, 1:1→4:1→8:1) PRISM is **do-no-harm
+  on goodput** at oversub (4:1 −1.3%, 8:1 −1.0% vs REPS+NSCC) and at 8:1 is decisively floor-driven
+  — **floor-MD fraction 0.957**, cutting *fewer* times than REPS+NSCC (2693 vs 4586) — so it reacts
+  to the genuine core bottleneck through `C_cc` rather than waiting on spray; the cost shows up on
+  FCT (+12–14%). Under pure shared-bottleneck incast (`expC_incast/`, symmetric, fan-in 8→64) PRISM
+  again falls back to floor-driven CC (floor-MD 0.883 at fan-in 64) and **converges to do-no-harm as
+  the fan-in grows** (goodput −11.5% at f8 → −0.4% at f64). Its residual cost is the *same* f0
+  phenomenon: a symmetric shared bottleneck still presents a non-trivial transient cross-path spread
+  (`C_spray ≈ 0.72·C_cc`) that PRISM partly HOLDs on. (The 1:1 oversub column reproduces the f0
+  symmetric penalty exactly.) So PRISM does not mistake irreducible overload for reroutable
+  imbalance — it cuts on the floor — which is the fallback-correctness claim, now measured.
 
 ## 4. Closure — the boundary IS the premise
 
@@ -93,3 +106,5 @@ in `TARGET_REGIME.md`.
 | Eval (win) | `expA_delaydriven/`, `expA_tspray_tuning/` | reroutable + delay-driven: +25–33% over REPS+NSCC & STrack |
 | Eval (cost) | `expA_delaydriven/` (f0) | symmetric fabric: small penalty |
 | Eval (boundary) | `expA_asymmetric/` (P2), `expA_lossdecomp/` | trimming default: ties (delay signal absent; loss-decomp no headroom) |
+| Eval (fallback) | `expB_oversub/` | path-wide overload: goodput do-no-harm, floor-driven (floor-MD 0.957); FCT cost |
+| Eval (fallback) | `expC_incast/` | shared-bottleneck incast: floor-driven fallback, cost shrinks with fan-in (−11.5%→−0.4%) |

@@ -21,10 +21,20 @@ arms share the same fabric, sink, trimming-off setting and loss machinery; only 
 sender CC (and, for ops, the spray) differs -- so the comparison isolates the controller.
 
 ## Figures
-- `figs/figA1dd_main_perf` -- goodput / avg-FCT / P99-FCT vs # constrained links (4 lines).
-- `figs/figA2dd_mechanism` -- signal (REPS+NSCC avg/floor vs PRISM C_cc vs target) + cwnd(t)
-  for REPS+NSCC / PRISM / STrack; prints fair per-ACK cut counts, the **floor-MD fraction**,
-  and the **STrack-vs-NSCC distinctness** check.
+- `figs/figA1dd_goodput`, `figs/figA1dd_avg_fct`, `figs/figA1dd_p99_fct` -- three standalone panels
+  (goodput in Gbps; avg-FCT and P99-FCT in **ms**) vs # constrained links (4 lines each), x-ticks
+  {0,2,4,6,8,10,12}.
+- `figs/figA2dd_signal`, `figs/figA2dd_cwnd` -- two standalone mechanism panels at failed=8,
+  seed 13, over a clean [0,3] ms window. The mechanism *illustration* uses a larger **4 MB**
+  message size (vs the 2 MB perf sweep) so every arm's makespan exceeds 3 ms (Prism 3.44,
+  REPS+NSCC 4.98, STrack 5.08 ms) and all three curves span the full window.
+  - *signal*: the queuing-delay signal each controller acts on -- REPS+NSCC avg, **STrack avg**
+    (both averaging families overlay near/above target), the floor REPS+NSCC ignores, and Prism's
+    per-epoch floor `C_cc` (raw faint + a 20µs-binned overlay; `C_cc` is unsmoothed by design --
+    the binned line is a display aid only, and stays largely **below** the ~14µs target).
+  - *cwnd*: cwnd(t) for the three arms.
+- Console prints fair per-ACK cut counts, the **floor-MD fraction** (0.374), and the
+  **STrack-vs-NSCC distinctness** check.
 
 ## Result (128-node many2many, 5 seeds, `-disable_trim`; END=8 ms; all cr = 1.00)
 
@@ -35,7 +45,9 @@ Goodput (Gbps) / avg-FCT (µs):
 | 0  | 906 / 788  | 997 / 737  | 912 / 789  | 869 / 945  | goodput −5%, FCT worse (symmetric penalty) |
 | 2  | 411 / 1374 | 533 / 1202 | 515 / 1255 | 572 / 1305 | goodput +11%, FCT +4% (mixed) |
 | 4  | 373 / 1762 | 483 / 1450 | 471 / 1513 | **574 / 1401** | goodput **+22%**, FCT **−7%** |
+| 6  | 322 / 2088 | 454 / 1592 | 445 / 1610 | **531 / 1446** | goodput **+19%**, FCT **−10%** |
 | 8  | 311 / 2260 | 431 / 1694 | 415 / 1725 | **504 / 1518** | goodput **+21%**, FCT **−12%** |
+| 10 | 289 / 2390 | 418 / 1750 | 407 / 1806 | **489 / 1582** | goodput **+20%**, FCT **−12%** |
 | 12 | 287 / 2522 | 379 / 1856 | 364 / 1890 | **434 / 1725** | goodput **+19%**, FCT **−9%** |
 
 **Headline (P3):** under meaningful asymmetry (failed ≥ 4) PRISM beats the coupled-SOTA STrack
@@ -51,9 +63,9 @@ asymmetry. This is direct evidence for the framing "*it is decomposing the signa
 average), not coupling CC and LB, that recovers the lost performance.*"
 
 **Distinctness check (mandatory; PASSED).** STrack must not collapse into the NSCC baseline.
-Per-ACK cwnd-decrease events @failed=8: **STrack = 2440 vs REPS+NSCC(=NSCC) = 2208** (+10.5%) --
-measurably different, and the cwnd(t) trajectories in figA2dd visibly diverge (STrack cuts
-more often and drains longer). STrack's avg-only, ECN-gated MD makes it slightly more
+Per-ACK cwnd-decrease events @failed=8 (4 MB mechanism run): **STrack = 4987 vs REPS+NSCC(=NSCC)
+= 4344** (+14.8%) -- measurably different, and the cwnd(t) trajectories in figA2dd visibly diverge
+(STrack cuts more often and drains longer). STrack's avg-only, ECN-gated MD makes it slightly more
 decrease-happy than NSCC's `skip && delay≥target` MD, which is also why it trails REPS+NSCC
 on throughput here. So STrack is a genuinely distinct controller, not a clone.
 
@@ -68,13 +80,15 @@ on throughput here. So STrack is a genuinely distinct controller, not a clone.
   adaptive ECN-bitmap spray is **not** ported -- deliberately, to hold the spray fixed and
   isolate the CC; see spec §3, Approach B deferred). In this delay-driven asymmetric regime
   the averaged-delay MD is the wrong signal, so STrack-CC tracks REPS+NSCC rather than leading.
-- **Mechanism figure is messy** (figA2dd): at failed=8 even PRISM's floor C_cc spikes well
-  above target, so the win is not a clean "floor stays below target" -- it is PRISM making
-  fewer, better-targeted floor-driven cuts (651 per-ACK cwnd decreases vs REPS+NSCC 2208,
-  STrack 2440) that net higher delivered work. floor-MD fraction = 316/651 = 0.485
-  (delay-driven confirmed; trimming baseline was ~0.05). Note: the target queuing delay is
-  ~14 µs (one network RTT, read from the runtime `_target_Qdelay`), NOT 6 µs; an earlier
-  6 µs label in the figure was a documentation error now corrected.
+- **Mechanism (figA2dd, 4 MB illustration):** the *raw* per-epoch `C_cc` is jittery -- it is an
+  unsmoothed floor by design (O(1)); EWMA-smoothing it was tried in the f0 work and backfired, so
+  it is kept instantaneous. Its 20 µs-binned trend, however, stays largely **below** the ~14 µs
+  target in steady state, while REPS+NSCC and STrack's averaged delay both sit at/above it -- so
+  PRISM makes far fewer, better-targeted floor-driven cuts (954 per-ACK cwnd decreases vs REPS+NSCC
+  4344, STrack 4987). floor-MD fraction = 357/954 = 0.374 (delay-driven: ~7× the ~0.05 trimming
+  baseline). The target is ~14 µs (one network RTT, read from the runtime `_target_Qdelay`), not
+  6 µs. (These mechanism counts are at the 4 MB illustration size; the 2 MB perf-sweep failed=8
+  condition gives the same qualitative picture.)
 
 ### Faithfulness notes on the STrack port (from the final holistic review)
 The port realizes STrack Algorithm 4's *intent* (ECN-gated; avg-delay-keyed MD; conservative

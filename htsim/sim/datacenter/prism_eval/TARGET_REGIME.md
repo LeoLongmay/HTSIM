@@ -36,8 +36,9 @@ control must therefore react to rising delay/queue occupancy rather than to loss
   and acted upon, and PRISM's decomposition recovers the performance a decoupled averaging controller
   gives up. Measured: in the no-trim, 5×BDP-buffer, delay-MD regime under asymmetry (`failed ≥ 4`),
   PRISM beats both the decoupled REPS+NSCC and the coupled-SOTA STrack by **+19–22%** goodput (and
-  +25–33% once `T_spray` is tightened), with the floor-MD fraction at **0.485** — i.e. the delay
-  decomposition is the dominant control signal (`expA_delaydriven/`, `expA_tspray_tuning/`).
+  +25–33% once `T_spray` is tightened), with the floor-MD fraction at **0.374** (≈7× the ~0.05
+  trimming baseline) — i.e. the delay decomposition is operative (`expA_delaydriven/`,
+  `expA_tspray_tuning/`).
 - **Outside the regime (loss/trim-driven):** under the shallow-buffer **trimming** UEC default, queues
   are capped, the controller is driven by trim-NACKs, and the delay signal is largely absent (floor-MD
   fraction ~**0.05**). The conflation does not bite, and PRISM ties REPS+NSCC. Extending the
@@ -67,7 +68,14 @@ reroute to: the spread carries no durable signal, and holding the window only fo
   appears is a self-resolving *startup transient* (it drains from ~31 µs to ~8 µs over the flow), not
   structure. PRISM then falls back toward floor-driven CC at a small cost (at `failed=0`, goodput 869
   vs REPS+NSCC 997), diagnosed as under-growth from holding on that transient spread
-  (`expA_f0_diagnosis/`).
+  (`expA_f0_diagnosis/`). **P4 measured this fallback at graded scale:** under oversubscription
+  (`expB_oversub/`, 1:1→4:1→8:1) PRISM is do-no-harm on goodput (−1.3%, −1.0%) while becoming
+  decisively floor-driven (floor-MD fraction **0.957** at 8:1, cutting fewer times than REPS+NSCC),
+  and under pure incast (`expC_incast/`, fan-in 8→64) it falls back to floor-driven CC (floor-MD
+  **0.883** at fan-in 64) and converges to do-no-harm as the bottleneck becomes more irreducible
+  (goodput −11.5% at f8 → −0.4% at f64); the residual cost is the same transient spread
+  (`C_spray ≈ 0.72·C_cc`, present in ~98% of epochs). So PRISM cuts on the floor under irreducible
+  overload rather than misusing spray — fallback correctness, measured.
 
 **Which real fabrics are reroutable.** Multipath packet spray over a Clos/fat-tree is standard in
 datacenter fabrics, so path diversity is the norm rather than the exception; and at scale, link and
@@ -94,7 +102,10 @@ PRISM is not universally better, and the evaluation says so:
 - **Shallow-buffer trimming → ties.** The delay signal is absent; even decomposing the loss signal
   finds no headroom (`expA_lossdecomp/`).
 - **Symmetric / shared-bottleneck incast → small cost.** No persistent reroutable spread; PRISM
-  under-grows slightly while holding on a transient (`expA_f0_diagnosis/`).
+  under-grows slightly while holding on a transient (`expA_f0_diagnosis/`). Measured at graded scale
+  in P4 (`expB_oversub/`, `expC_incast/`): PRISM falls back to floor-driven CC (floor-MD 0.88–0.96),
+  is do-no-harm on goodput under oversub, and the incast cost shrinks toward do-no-harm as fan-in
+  grows — the cut side is correct; only the FCT/under-growth residual remains.
 
 Both of these are not just conceded — they were *probed*. The two natural ways to extend PRISM past
 its target cell were each built and **honestly refuted**: loss-signal decomposition under trimming
@@ -128,9 +139,10 @@ Keeping the honest line explicit:
 | Stage | Artifact | Claim |
 |---|---|---|
 | Motivation | `../mvp_runs3/` (figS/figI) | average conflates floor + reroutable spread (a delay-signal phenomenon) |
-| Axis 1 (in) | `expA_delaydriven/`, `expA_tspray_tuning/` | delay-driven + asymmetric → +25–33%; floor-MD fraction 0.485 |
+| Axis 1 (in) | `expA_delaydriven/`, `expA_tspray_tuning/` | delay-driven + asymmetric → +25–33%; floor-MD fraction 0.374 |
 | Axis 1 (out) | `expA_asymmetric/`, `expA_lossdecomp/` | trimming → delay signal absent (floor-MD ~0.05) → ties |
 | Axis 2 (in) | `expA_delaydriven/`, `expA_f0_diagnosis/` | structural asymmetry persists (rank-stability ~0.8) → reroutable |
 | Axis 2 (out) | `expA_f0_diagnosis/` | symmetric incast = shared bottleneck, transient spread → small cost |
+| Fallback (P4) | `expB_oversub/`, `expC_incast/` | path-wide overload: floor-driven fallback (floor-MD 0.88–0.96), goodput do-no-harm under oversub, incast cost shrinks with fan-in |
 | Boundary | `expA_lossdecomp/`, `expA_f0_diagnosis/` | both extensions past the cell tried and refuted |
 | Thread | `NARRATIVE.md` | motivation → mechanism → boundary, one argument |
