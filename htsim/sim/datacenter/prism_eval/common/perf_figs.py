@@ -10,8 +10,14 @@ import metrics          # noqa: E402
 import plot_style       # noqa: E402
 
 def _ms(v):
-    """(mean, population std) of a non-empty list -- population std: full fixed seed set."""
-    return (statistics.mean(v), statistics.pstdev(v))
+    """(mean, population std) of a non-empty list -- population std: full fixed seed set.
+    NaN values (e.g. FCT from zero-completion seeds) are dropped before stats; if all NaN,
+    returns (nan, 0.0) so the figure can still render the cr=0 points without crashing."""
+    import math
+    clean = [x for x in v if not math.isnan(x)]
+    if not clean:
+        return (float("nan"), 0.0)
+    return (statistics.mean(clean), statistics.pstdev(clean))
 
 def _mech_label(mech_label, mech_failed):
     """Label for the mechanism figure's stressor. Defaults to the legacy `-failed=N` form
