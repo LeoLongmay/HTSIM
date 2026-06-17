@@ -190,5 +190,27 @@ precise.
   oversub-asym behavior is deferred.
 - Completion ratio is 1.00 for all 4:1 cells; FCT comparisons are unconfounded.
 
+## Fairness & rate reductions
+
+**Jain fairness** (`figs/figBa_4os_fairness`), 4:1 oversub, per arm across `-failed {0,4,8,12}`:
+
+| Arm | f0 | f4 | f8 | f12 |
+|---|---|---|---|---|
+| OPS+NSCC  | 0.940 | 0.695 | 0.633 | 0.915 |
+| REPS+NSCC | 0.941 | 0.808 | 0.796 | 0.757 |
+| STrack    | 0.946 | 0.807 | 0.799 | 0.785 |
+| PRISM     | 0.975 | 0.846 | 0.883 | 0.850 |
+
+PRISM is the **most fair** arm at every 4:1 point (f0 0.975, f4 0.846, f8 0.883, f12 0.850
+— all above REPS+NSCC's 0.941 / 0.808 / 0.796 / 0.757 and STrack's 0.946 / 0.807 / 0.799
+/ 0.785), reinforcing the goodput/FCT win. Unlike expA's symmetric-point dip, at 4:1
+PRISM is also more fair at failed=0 — the oversubscribed symmetric baseline does not trigger
+the same under-growth as the 1:1 fabric.
+
+**Rate reductions** (mechanism, 4:1 / failed=8, annotated on `figs/figBa_mech`): **PRISM
+1046 cwnd cuts vs REPS+NSCC 3885** (~3.7× fewer; STrack 4133). Same pattern as expA: PRISM
+reaches higher goodput with fewer rate reductions, confirming the "control correctness"
+advantage transfers to the oversubscribed core.
+
 Cross-links: `../NARRATIVE.md` | `../TARGET_REGIME.md` | `../expA_delaydriven/` (1:1 win) |
 `../expB_oversub/` (symmetric oversub baseline, failed=0 columns).

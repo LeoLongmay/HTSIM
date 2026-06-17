@@ -125,6 +125,30 @@ congestion signal (floor vs average), not from coupling CC and load balancing.**
   STrack's adaptive spray (Approach B, "beats the *full* published STrack"), add permutation,
   and revisit the symmetric-f0 penalty (T_spray tuning, roadmap item).
 
+## Fairness & rate reductions
+
+**Jain fairness** (`figs/figA1dd_fairness`), per arm across `-failed {0,2,4,6,8,10,12}`:
+
+| Arm | f0 | f2 | f4 | f6 | f8 | f10 | f12 |
+|---|---|---|---|---|---|---|---|
+| OPS+NSCC  | 0.924 | 0.757 | 0.730 | 0.783 | 0.874 | 0.879 | 0.916 |
+| REPS+NSCC | 0.931 | 0.784 | 0.810 | 0.873 | 0.912 | 0.941 | 0.911 |
+| STrack    | 0.920 | 0.779 | 0.812 | 0.871 | 0.928 | 0.935 | 0.909 |
+| PRISM     | 0.880 | 0.842 | 0.867 | 0.941 | 0.979 | 0.976 | 0.967 |
+
+At the asymmetric win region (failed ≥ 4) PRISM is the **most fair** arm: e.g. f8 PRISM 0.979
+vs REPS+NSCC 0.912 / STrack 0.928; f12 PRISM 0.967 vs REPS+NSCC 0.911 / STrack 0.909. PRISM
+spreads the recovered capacity evenly by holding-and-rerouting rather than cutting on the
+inflated average delay. At failed=0 (symmetric) PRISM is slightly **less** fair (0.880 vs
+0.931 for REPS+NSCC) — the same under-growth that causes the f0 goodput cost. So fairness is
+a modest *additional* advantage exactly where PRISM wins, consistent with (not independent of)
+the goodput result.
+
+**Rate reductions** (mechanism, failed=8, annotated on `figs/figA2dd_cwnd`): **PRISM 954
+per-ACK cwnd cuts vs REPS+NSCC 4344** (~4.6× fewer; STrack 4987). PRISM reaches its higher
+goodput with far fewer rate reductions — the on-thesis "control correctness" advantage
+(floor-MD fraction 0.374).
+
 ## Reproduce
 ```
 bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~100 sweep + 4 mechanism sims

@@ -86,10 +86,51 @@ def test_parse_prism_epoch_and_qbins():
     assert abs(minq - 1.0) < 1e-9 and abs(meanq - 3.0) < 1e-9, bins
     print("ok parse_prism_epoch + qdelay_bins")
 
+def test_jain_fairness():
+    d = tempfile.mkdtemp()
+    # equal throughput: 2 flows, same size + same FCT -> Jain = 1.0
+    p = os.path.join(d, "fair.flow.txt")
+    with open(p, "w") as fh:
+        for fid in (1, 2):
+            fh.write(f"0.000000000 Type FLOW_EVENT SrcID {fid} Ev START FlowID {fid} Flowsize 1000\n")
+            fh.write(f"0.001000000 Type FLOW_EVENT SrcID {fid} Ev FINISH FlowID {fid} Bytes 1000 Pkts 1\n")
+    assert abs(metrics.jain_fairness(p) - 1.0) < 1e-9, metrics.jain_fairness(p)
+    # skewed: flow1 tput 1000/1ms, flow2 tput 1000/3ms -> 0.5 < Jain < 1
+    p2 = os.path.join(d, "skew.flow.txt")
+    with open(p2, "w") as fh:
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 1000\n")
+        fh.write("0.001000000 Type FLOW_EVENT SrcID 1 Ev FINISH FlowID 1 Bytes 1000 Pkts 1\n")
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 2 Ev START FlowID 2 Flowsize 1000\n")
+        fh.write("0.003000000 Type FLOW_EVENT SrcID 2 Ev FINISH FlowID 2 Bytes 1000 Pkts 1\n")
+    j = metrics.jain_fairness(p2)
+    assert 0.5 < j < 1.0, j
+    # <2 completed -> nan
+    import math
+    p3 = os.path.join(d, "one.flow.txt")
+    with open(p3, "w") as fh:
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 1000\n")
+        fh.write("0.001000000 Type FLOW_EVENT SrcID 1 Ev FINISH FlowID 1 Bytes 1000 Pkts 1\n")
+    assert math.isnan(metrics.jain_fairness(p3)), metrics.jain_fairness(p3)
+    print("ok jain_fairness")
+
+def test_fct_slowdown():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "sd.flow.txt")
+    # 1,250,000 B = 1e7 bits; at 100 Gbps ideal-transmit = 1e7/1e11 = 100us; base_rtt 0;
+    # FCT = 200us -> slowdown = 2.0
+    with open(p, "w") as fh:
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 1250000\n")
+        fh.write("0.000200000 Type FLOW_EVENT SrcID 1 Ev FINISH FlowID 1 Bytes 1250000 Pkts 1\n")
+    sd = metrics.fct_slowdown(p, link_gbps=100.0, base_rtt_s=0.0)
+    assert abs(sd["mean"] - 2.0) < 1e-9, sd
+    print("ok fct_slowdown")
+
 if __name__ == "__main__":
     test_fct_stats()
     test_goodput()
     test_aggregate_goodput()
     test_count_cwnd_cuts()
     test_parse_prism_epoch_and_qbins()
+    test_jain_fairness()
+    test_fct_slowdown()
     print("ALL PASS")

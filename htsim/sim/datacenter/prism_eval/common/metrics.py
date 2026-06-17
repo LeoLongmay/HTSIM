@@ -77,6 +77,37 @@ def aggregate_goodput_gbps(flow_path):
         return 0.0
     return total_bytes * 8.0 / span / 1e9
 
+def jain_fairness(flow_path):
+    """Jain's fairness index over per-flow throughput (bytes / FCT) of the COMPLETED flows.
+    Returns a float in (0, 1] (1.0 = perfectly fair); nan if fewer than 2 completed flows."""
+    starts, finishes = parse_flow_events(flow_path)
+    tput = [finishes[k][1] / (finishes[k][0] - starts[k])
+            for k in finishes if k in starts and finishes[k][0] > starts[k]]
+    n = len(tput)
+    if n < 2:
+        return float("nan")
+    s = sum(tput); s2 = sum(t * t for t in tput)
+    return (s * s) / (n * s2) if s2 > 0 else float("nan")
+
+def fct_slowdown(flow_path, link_gbps=100.0, base_rtt_s=14e-6):
+    """Per-flow slowdown = FCT / (base_rtt_s + bytes*8 / (link_gbps*1e9)); returns {'mean','p99'}.
+    Built for varied-size workloads; redundant at uniform flow size (where slowdown is proportional
+    to FCT), so not rendered there. nan if no completed flows."""
+    starts, finishes = parse_flow_events(flow_path)
+    rate = link_gbps * 1e9
+    sd = []
+    for k in finishes:
+        if k not in starts:
+            continue
+        fct = finishes[k][0] - starts[k]
+        ideal = base_rtt_s + finishes[k][1] * 8.0 / rate
+        if ideal > 0:
+            sd.append(fct / ideal)
+    if not sd:
+        return {"mean": float("nan"), "p99": float("nan")}
+    sd.sort()
+    return {"mean": statistics.mean(sd), "p99": _percentile(sd, 99)}
+
 def count_cwnd_cuts_from_pathrtt(pathrtt_path):
     """Count window-cut events across all flows from a PRISM_PATHRTT csv
     (time_ns,flow,path,raw_rtt_ns,ecn,cwnd): per flow, in time order, a 'cut' is any sample

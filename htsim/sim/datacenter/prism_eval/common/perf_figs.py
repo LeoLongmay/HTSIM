@@ -155,6 +155,41 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
             f"p99={aggs[lab][f]['p99_fct'][0] / 1000:.3f}ms,cr={aggs[lab][f]['cr'][0]:.2f}"
             for f in failed if aggs[lab].get(f)))
 
+def render_fairness(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fig_stem, xlabel):
+    """Standalone Jain-fairness figure: fairness vs `failed`, one line per baseline + error bars.
+    Self-aggregating (computes metrics.jain_fairness in its own loop) -- does NOT touch aggregate()
+    or render_main_perf, so existing figures are unaffected. Skips cells with <2 completed flows."""
+    import matplotlib.pyplot as plt
+    plot_style.apply_style(13)
+    def _fair(lab, f):
+        vals = []
+        for s in seeds:
+            fp = os.path.join(data_dir, f"{tag_prefix}_{lab}_f{f}_s{s}.flow.txt")
+            if not os.path.exists(fp):
+                continue
+            j = metrics.jain_fairness(fp)
+            if j == j:   # not nan
+                vals.append(j)
+        return vals
+    fig, ax = plt.subplots(1, 1, figsize=(5.2, 3.4))
+    for (lab, disp, ck) in baselines:
+        xs, ys, es = [], [], []
+        for f in failed:
+            vals = _fair(lab, f)
+            if vals:
+                xs.append(f); ys.append(statistics.mean(vals)); es.append(statistics.pstdev(vals))
+        if xs:
+            ax.errorbar(xs, ys, yerr=es, marker="o", lw=2.0, ms=6, capsize=3,
+                        color=plot_style.COLORS[ck], label=disp)
+    ax.set_ylabel("Jain fairness index"); ax.set_xlabel(xlabel)
+    ax.set_xticks(failed); ax.grid(alpha=0.3); ax.legend(fontsize=9)
+    plt.tight_layout()
+    plot_style.save(fig, fig_stem, figs_dir)
+    plt.close(fig)
+    for (lab, disp, _c) in baselines:
+        cells = [(f, statistics.mean(v)) for f in failed for v in [_fair(lab, f)] if v]
+        print(f"[{fig_stem}] {disp}: " + " ".join(f"f{f}:{m:.3f}" for f, m in cells))
+
 def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_failed,
                            target_us=6.0, base_ns=13945, mech_label=None, xlim_ms=None):
     """Two STANDALONE mechanism figures (paper version of render_mechanism):
@@ -216,6 +251,12 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
         axc.plot(xs, ys, color=plot_style.COLORS[ck], lw=2.0, label=disp)
         axc.plot(xs[-1], ys[-1], marker="o", ms=9, color=plot_style.COLORS[ck], zorder=5)  # makespan
         makespans.append((disp, xs[-1]))
+    reps_dec = metrics.count_cwnd_cuts_from_pathrtt(reps_pr)
+    prism_dec = metrics.count_cwnd_cuts_from_pathrtt(prism_pr) if os.path.exists(prism_pr) else -1
+    strack_dec = metrics.count_cwnd_cuts_from_pathrtt(strack_pr) if os.path.exists(strack_pr) else -1
+    axc.text(0.02, 0.97, f"rate reductions (per-ACK cwnd cuts): Prism {prism_dec}, "
+             f"REPS+NSCC {reps_dec}, STrack {strack_dec}", transform=axc.transAxes, fontsize=7,
+             va="top", bbox=dict(boxstyle="round", fc="white", ec="gray", alpha=0.85))
     axc.set_xlabel("time (ms)"); axc.set_ylabel("cwnd (KB, mean/flow)")
     axc.set_title(f"Mechanism @ {lbl}: cwnd", fontsize=11)
     axc.grid(alpha=0.3); axc.legend(fontsize=9)
@@ -229,15 +270,12 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
     # --- diagnostics (identical metrics to render_mechanism) ---
     if not ep:
         print(f"[{stem_prefix}] WARNING: prism epoch log empty -- floor-MD fraction unreliable")
-    reps_dec = metrics.count_cwnd_cuts_from_pathrtt(reps_pr)
-    prism_dec = metrics.count_cwnd_cuts_from_pathrtt(prism_pr) if os.path.exists(prism_pr) else -1
     prism_md = sum(r["cut"] for r in ep)
     frac = (prism_md / prism_dec) if prism_dec > 0 else float("nan")
     print(f"[{stem_prefix}] cwnd-decrease events @{lbl} (FAIR, per-ACK): Prism={prism_dec}  REPS+NSCC={reps_dec}")
     print(f"[{stem_prefix}] floor-MD fraction = Prism epoch-MDs / Prism cwnd-decreases = "
           f"{prism_md}/{prism_dec} = {frac:.3f}  (trimming baseline was ~0.05)")
     if os.path.exists(strack_pr):
-        strack_dec = metrics.count_cwnd_cuts_from_pathrtt(strack_pr)
         print(f"[{stem_prefix}] DISTINCTNESS (per-ACK cwnd-decreases @{lbl}): "
               f"STrack={strack_dec}  REPS+NSCC={reps_dec}")
 
@@ -292,14 +330,18 @@ def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, targ
         ax_cw.plot(ts, cs, color=plot_style.COLORS["strack"], lw=2.0, label="STrack")
     ax_cw.set_ylabel("cwnd (KB, mean/flow)")
     ax_cw.set_xlabel("time (ms)")
+    reps_dec = metrics.count_cwnd_cuts_from_pathrtt(reps_pr)
+    prism_dec = metrics.count_cwnd_cuts_from_pathrtt(prism_pr) if os.path.exists(prism_pr) else -1
+    strack_dec = metrics.count_cwnd_cuts_from_pathrtt(strack_pr) if os.path.exists(strack_pr) else -1
+    ax_cw.text(0.02, 0.97, f"rate reductions (per-ACK cwnd cuts): Prism {prism_dec}, "
+               f"REPS+NSCC {reps_dec}, STrack {strack_dec}", transform=ax_cw.transAxes, fontsize=7,
+               va="top", bbox=dict(boxstyle="round", fc="white", ec="gray", alpha=0.85))
     ax_cw.grid(alpha=0.3); ax_cw.legend(fontsize=9)
     plt.tight_layout()
     plot_style.save(fig, fig_stem, figs_dir)
     plt.close(fig)
     if not ep:
         print(f"[{fig_stem}] WARNING: prism epoch log empty -- floor-MD fraction unreliable")
-    reps_dec = metrics.count_cwnd_cuts_from_pathrtt(reps_pr)
-    prism_dec = metrics.count_cwnd_cuts_from_pathrtt(prism_pr) if os.path.exists(prism_pr) else -1
     prism_md = sum(r["cut"] for r in ep)
     frac = (prism_md / prism_dec) if prism_dec > 0 else float("nan")
     print(f"[{fig_stem}] cwnd-decrease events @{lbl} (FAIR, per-ACK): "
@@ -307,7 +349,6 @@ def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, targ
     print(f"[{fig_stem}] floor-MD fraction = PRISM epoch-MDs / PRISM cwnd-decreases = "
           f"{prism_md}/{prism_dec} = {frac:.3f}  (trimming baseline was ~0.05)")
     if os.path.exists(strack_pr):
-        strack_dec = metrics.count_cwnd_cuts_from_pathrtt(strack_pr)
         print(f"[{fig_stem}] DISTINCTNESS (per-ACK cwnd-decreases @{lbl}): "
               f"STrack={strack_dec}  REPS+NSCC={reps_dec}  "
               f"(must differ measurably; identical => STrack collapsed to NSCC, revisit spec Approach B)")
