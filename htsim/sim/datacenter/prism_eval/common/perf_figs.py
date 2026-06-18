@@ -262,7 +262,8 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
     makespans = []
     for ck, disp, path in [("reps", "REPS+NSCC", reps_pr), ("prism", "Prism", prism_pr),
                            ("strack", "STrack", strack_pr),
-                           ("mnscc", "MNSCC", os.path.join(data_dir, f"{tag_prefix}_mnscc_mech.pathrtt.csv"))]:
+                           ("mnscc", "MNSCC", os.path.join(data_dir, f"{tag_prefix}_mnscc_mech.pathrtt.csv")),
+                           ("swift", "Swift", os.path.join(data_dir, f"{tag_prefix}_swift_mech.pathrtt.csv"))]:
         if not os.path.exists(path):
             continue
         xs, ys = _cwnd_series(path)
@@ -277,8 +278,11 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
     mnscc_pr = os.path.join(data_dir, f"{tag_prefix}_mnscc_mech.pathrtt.csv")
     mnscc_dec = metrics.count_cwnd_cuts_from_pathrtt(mnscc_pr) if os.path.exists(mnscc_pr) else -1
     mnscc_part = f", MNSCC {mnscc_dec}" if mnscc_dec != -1 else ""
+    swift_pr = os.path.join(data_dir, f"{tag_prefix}_swift_mech.pathrtt.csv")
+    swift_dec = metrics.count_cwnd_cuts_from_pathrtt(swift_pr) if os.path.exists(swift_pr) else -1
+    swift_part = f", Swift {swift_dec}" if swift_dec != -1 else ""
     axc.text(0.02, 0.97, f"rate reductions (per-ACK cwnd cuts): Prism {prism_dec}, "
-             f"REPS+NSCC {reps_dec}, STrack {strack_dec}{mnscc_part}", transform=axc.transAxes, fontsize=7,
+             f"REPS+NSCC {reps_dec}, STrack {strack_dec}{mnscc_part}{swift_part}", transform=axc.transAxes, fontsize=7,
              va="top", bbox=dict(boxstyle="round", fc="white", ec="gray", alpha=0.85))
     axc.set_xlabel("time (ms)"); axc.set_ylabel("cwnd (KB, mean/flow)")
     axc.set_title(f"Mechanism @ {lbl}: cwnd", fontsize=11)
