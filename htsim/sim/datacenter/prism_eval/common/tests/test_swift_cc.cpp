@@ -24,6 +24,12 @@ int main() {
     { double f = md_factor(15000, 14000, 0.8, 0.5); assert(f < 1.0 && f > 0.5); }
     // delay >> target -> clamped at 1 - max_mdf = 0.5
     assert(std::fabs(md_factor(1000000, 14000, 0.8, 0.5) - 0.5) < 1e-9);
+    // swift::nyquist_h = max(W/2, 1), UNCAPPED (distinct from mnscc::nyquist_h which caps at 4)
+    assert(nyquist_h(0) == 1);
+    assert(nyquist_h(1) == 1);
+    assert(nyquist_h(2) == 1);     // 2/2 = 1
+    assert(nyquist_h(8) == 4);     // 8/2 = 4
+    assert(nyquist_h(100) == 50);  // uncapped
     printf("ok swift target_delay_q + md_factor\n");
     printf("ALL PASS\n");
     return 0;

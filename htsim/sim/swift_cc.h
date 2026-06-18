@@ -36,5 +36,12 @@ inline double md_factor(uint64_t delay, uint64_t target, double beta, double max
     return f > lo ? f : lo;
 }
 
+// Swift's Nyquist history size for the MSwift median framework: H = max(W/2, 1). UNCAPPED
+// (unlike mnscc::nyquist_h, which caps at 4) -- Swift's cwnd grows by ai=1 every RTT, so K=W.
+inline int nyquist_h(int w_packets) {
+    int h = w_packets / 2;
+    return h < 1 ? 1 : h;
+}
+
 } // namespace swift
 #endif
