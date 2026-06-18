@@ -63,13 +63,14 @@ def _read_target_us(data_dir, tag_prefix, fallback_us):
         pass
     return fallback_us
 
-def aggregate(data_dir, tag_prefix, label, failed, seeds):
-    """Per-failed aggregates for one baseline: {f: {metric:(mean,std)}}; omit f with no data."""
+def aggregate(data_dir, tag_prefix, label, failed, seeds, token="f"):
+    """Per-failed aggregates for one baseline: {f: {metric:(mean,std)}}; omit f with no data.
+    `token` is the filename sweep prefix ('f' for -failed sweeps, 'L' for offered-load)."""
     out = {}
     for f in failed:
         g, afct, p99, cr = [], [], [], []
         for s in seeds:
-            flow = os.path.join(data_dir, f"{tag_prefix}_{label}_f{f}_s{s}.flow.txt")
+            flow = os.path.join(data_dir, f"{tag_prefix}_{label}_{token}{f}_s{s}.flow.txt")
             if not os.path.exists(flow):
                 continue
             st = metrics.fct_stats(flow)
@@ -82,11 +83,11 @@ def aggregate(data_dir, tag_prefix, label, failed, seeds):
         out[f] = {"goodput": _ms(g), "avg_fct": _ms(afct), "p99_fct": _ms(p99), "cr": _ms(cr)}
     return out
 
-def render_main_perf(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fig_stem, xlabel):
+def render_main_perf(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fig_stem, xlabel, token="f"):
     """3 panels (goodput / avg-FCT us / P99-FCT us) vs `failed`, one line per baseline + error bars."""
     import matplotlib.pyplot as plt
     plot_style.apply_style(13)
-    aggs = {lab: aggregate(data_dir, tag_prefix, lab, failed, seeds) for (lab, _d, _c) in baselines}
+    aggs = {lab: aggregate(data_dir, tag_prefix, lab, failed, seeds, token) for (lab, _d, _c) in baselines}
     fig, axes = plt.subplots(3, 1, figsize=(5.2, 8.0), sharex=True)
     panels = [("goodput", "Goodput (Gbps)"), ("avg_fct", "Avg FCT (us)"), ("p99_fct", "P99 FCT (us)")]
     for ax, (key, ylabel) in zip(axes, panels):
@@ -118,13 +119,13 @@ def render_main_perf(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, f
             f"f{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0]:.0f}us,"
             f"cr={aggs[lab][f]['cr'][0]:.2f}" for f in failed if aggs[lab].get(f)))
 
-def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel):
+def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f"):
     """Same data as render_main_perf, but emits THREE standalone figures (one metric each):
     `{stem_prefix}_goodput` (Gbps), `{stem_prefix}_avg_fct` (ms), `{stem_prefix}_p99_fct` (ms).
     aggregate() stores FCT in microseconds, so the two FCT panels scale by 1e-3 -> milliseconds."""
     import matplotlib.pyplot as plt
     plot_style.apply_style(13)
-    aggs = {lab: aggregate(data_dir, tag_prefix, lab, failed, seeds) for (lab, _d, _c) in baselines}
+    aggs = {lab: aggregate(data_dir, tag_prefix, lab, failed, seeds, token) for (lab, _d, _c) in baselines}
     panels = [("goodput", "Goodput (Gbps)", "goodput", 1.0),
               ("avg_fct", "Avg FCT (ms)", "avg_fct", 1e-3),
               ("p99_fct", "P99 FCT (ms)", "p99_fct", 1e-3)]
@@ -155,7 +156,7 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
             f"p99={aggs[lab][f]['p99_fct'][0] / 1000:.3f}ms,cr={aggs[lab][f]['cr'][0]:.2f}"
             for f in failed if aggs[lab].get(f)))
 
-def render_fairness(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fig_stem, xlabel):
+def render_fairness(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fig_stem, xlabel, token="f"):
     """Standalone Jain-fairness figure: fairness vs `failed`, one line per baseline + error bars.
     Self-aggregating (computes metrics.jain_fairness in its own loop) -- does NOT touch aggregate()
     or render_main_perf, so existing figures are unaffected. Skips cells with <2 completed flows."""
@@ -164,7 +165,7 @@ def render_fairness(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fi
     def _fair(lab, f):
         vals = []
         for s in seeds:
-            fp = os.path.join(data_dir, f"{tag_prefix}_{lab}_f{f}_s{s}.flow.txt")
+            fp = os.path.join(data_dir, f"{tag_prefix}_{lab}_{token}{f}_s{s}.flow.txt")
             if not os.path.exists(fp):
                 continue
             j = metrics.jain_fairness(fp)
@@ -369,6 +370,15 @@ def selftest():
     assert abs(a[0]["goodput"][0] - 32.0) < 1e-6, a[0]
     assert abs(a[0]["avg_fct"][0] - 1000.0) < 1e-6, a[0]
     assert abs(a[0]["cr"][0] - 1.0) < 1e-9, a[0]
+    # token="L" (offered-load sweep) names files {prefix}_{label}_L{val}_s{seed}.flow.txt
+    for s in seeds:
+        with open(os.path.join(d, f"expAload_ops_L50_s{s}.flow.txt"), "w") as fh:
+            fh.write("0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 2000000\n")
+            fh.write("0.002000000 Type FLOW_EVENT SrcID 1 Ev FINISH FlowID 1 Bytes 2000000 Pkts 1\n")
+    al = aggregate(d, "expAload", "ops", [50], seeds, token="L")
+    assert 50 in al, al
+    assert abs(al[50]["avg_fct"][0] - 2000.0) < 1e-6, al[50]   # 2 ms = 2000 us
+    assert abs(al[50]["cr"][0] - 1.0) < 1e-9, al[50]
     shutil.rmtree(d)
     assert _mech_label(None, 8) == "-failed=8", _mech_label(None, 8)
     assert _mech_label("oversub=8:1", 8) == "oversub=8:1", _mech_label("oversub=8:1", 8)
