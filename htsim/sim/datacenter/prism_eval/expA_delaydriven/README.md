@@ -240,6 +240,73 @@ the same NSCC base — and the comparison cleanly isolates **floor vs median** a
 MNSCC is not a weaker NSCC; it is a genuine attempt at the same robustness goal, and it falls
 short under asymmetry because the median of spread-inflated samples is still spread-inflated.
 
+## Swift (delay-AIMD) baseline
+
+**What Swift is.** Swift is a well-known production delay congestion controller (Google, SIGCOMM
+2020). It maintains a per-flow cwnd using AIMD: additive increase each RTT, multiplicative
+decrease when the queuing delay exceeds a flow-scaled target. The port realizes **Algorithm 1 +
+§3.5 (flow-scaled target)** from the Swift paper in htsim's `UecSrc`: `base_q` tracks the
+runtime `_target_Qdelay` per-ACK, placing Swift at the **same ~14 µs operating point** as
+NSCC/PRISM. ECN is ignored (Swift is pure-delay). `ai/β/max_mdf` use htsim's shared defaults
+(the Swift paper's production values are not published). Swift runs on the same REPS spray as
+REPS+NSCC, MNSCC, and PRISM — so only the CC algorithm differs. Completion rate cr = 1.00
+everywhere (FCT unconfounded).
+
+**Failed-sweep results (figA1dd, 7 arms; cr = 1.00 everywhere):**
+
+| -failed | REPS+NSCC | MNSCC (median) | STrack (coupled) | Swift (delay-AIMD) | PRISM (floor) | PRISM vs Swift |
+|---|---|---|---|---|---|---|
+| 0  | 997 Gbps | 998 Gbps | 912 Gbps | **864 Gbps** | 869 Gbps | −0.5% (tied small dip) |
+| 4  | 483 Gbps | 486 Gbps | 471 Gbps | 469 Gbps | **574 Gbps** | **+22.5%** |
+| 8  | 431 Gbps | 444 Gbps | 415 Gbps | 445 Gbps | **504 Gbps** | **+13.3%** |
+| 12 | 379 Gbps | 392 Gbps | 364 Gbps | 397 Gbps | **434 Gbps** | **+9.2%** |
+
+avg-FCT at failed=8: Prism 1.518 ms / MNSCC 1.640 ms / REPS 1.694 ms / **Swift 1.776 ms**
+(Swift is the highest avg-FCT of all delay arms).
+
+**Swift vs cluster.** Under asymmetry Swift lands in the same cluster as REPS+NSCC / STrack /
+MNSCC: e.g. f8 goodput Swift 444.9, MNSCC 443.5, REPS 430.8, STrack 414.6 — all four within
+~7% of each other, and all 9–22% below PRISM. Swift is marginally better than REPS+NSCC on
+goodput under asymmetry (f8 +3.3%; f12 +4.8%) but trails them on avg-FCT (Swift 1.776 ms vs
+REPS 1.694 ms at f8) — the flow-scaled-target AIMD recovers a little more throughput at the
+cost of slightly higher latency. At f0 (symmetric) Swift's f0 dip mirrors PRISM's (864 vs 869
+Gbps) — the flow-scaled-target AIMD slightly under-utilizes the symmetric fabric, the same root
+cause as PRISM's f0 cost.
+
+**Offered-load sweep results (figA3dd_load, failed=8; cr = 1.00 everywhere):**
+
+| rho | REPS+NSCC | MNSCC | STrack | Swift (delay-AIMD) | PRISM | PRISM vs Swift |
+|---|---|---|---|---|---|---|
+| 0.1 | 156.2 Gbps | — | — | 155.1 Gbps | 155.2 Gbps | tie (near-idle) |
+| 0.5 | 564.5 Gbps | 581.6 Gbps | — | 534.1 Gbps | **726.0 Gbps** | **+35.9%** |
+| 0.9 | 651.6 Gbps | 663.6 Gbps | 665.8 Gbps | 657.0 Gbps | **778.9 Gbps** | **+18.6%** |
+
+avg-FCT at rho=0.5: Prism 1.006 ms / REPS 3.241 ms / **Swift 4.143 ms** (Prism ~4× lower than
+Swift; Swift ~28% worse than REPS at this load point). At rho=0.1 (near-idle) all three cluster
+within 0.7% — no reroutable spread, no advantage for any arm.
+
+**Swift on the mechanism panel (figA2dd_cwnd).** Swift joins the cwnd panel at failed=8. Per-ACK
+cwnd cuts: PRISM 954 (floor-MD 0.374), REPS+NSCC 4344, STrack 4987; Swift's cut count appears
+on the figA2dd_cwnd panel. PRISM's far fewer cuts, acting only when the floor `C_cc` exceeds
+the target, explain both its higher goodput and its lower avg-FCT under asymmetry.
+
+**Honest verdict.** PRISM's floor decomposition beats Swift's instantaneous-delay AIMD under
+asymmetry (+9–22% goodput at failed ≥ 4) and under load (+19–36% goodput, ~4× lower avg-FCT at
+ρ = 0.5). Swift is a **well-known production delay CC**, not a strawman — it is the fourth
+independent delay-CC design alongside NSCC (instantaneous-sample MD), STrack (coupled avg-delay
+MD), and MNSCC (median-delay MD) to land in the same cluster that PRISM's floor beats. This
+makes the floor-decomposition win **robust across the CC design space**: AIMD target-scaling
+(Swift), per-flow averaging (NSCC/REPS), coupling with LB (STrack), and robust-statistics
+smoothing (MNSCC) all fail to capture the benefit that decomposing the signal into floor
+vs. reroutable spread provides. None of these designs can bridge the gap because the
+inflated-by-spread delay signal is still inflated regardless of how it is processed
+per-acknowledgement — the correction must happen upstream, at the signal-decomposition level.
+
+**Faithfulness note.** Algorithm 1 + §3.5 flow-scaled target; queuing-delay domain; `base_q`
+tracks runtime `_target_Qdelay` per-ACK; same ~14 µs operating point as NSCC/PRISM. ECN
+ignored (Swift is pure-delay). `ai/β/max_mdf` = htsim defaults (the Swift paper's production
+values are unpublished). cr = 1.00 everywhere.
+
 ## Reproduce
 ```
 bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~210 failed-sweep + 5 mechanism + 150 offered-load sims

@@ -53,6 +53,14 @@ only inferred. (`../../uec.cpp` `updateCwndOnAck_PRISM`; pure logic `../../prism
   The advantage is also load-dependent: swept over offered load at fixed asymmetry (`figA3dd_load`),
   PRISM ~ties near-idle (no reroutable spread yet) and its FCT lead over REPS+NSCC and STrack widens as
   load approaches saturation — the floor-vs-spread structure of figS only becomes actionable once queues build.
+  The same experiment adds **Swift** (Google SIGCOMM 2020; Algorithm 1 + §3.5 flow-scaled-target
+  delay-AIMD, same ~14 µs operating point) as a fourth independent delay-CC reference: Swift lands
+  in the same cluster as REPS+NSCC / STrack / MNSCC under asymmetry and load (f8 goodput 445 vs
+  REPS 431, STrack 415, MNSCC 444 Gbps; load ρ = 0.5 FCT 4.1 ms vs REPS 3.2 ms), while PRISM's
+  floor beats it by +9–22% goodput at failed ≥ 4 and +19–36% / ~4× lower avg-FCT under load — the
+  floor-decomposition win is robust across the CC design space (AIMD, per-flow average, coupled
+  average, median), because all four designs act on a spread-inflated delay signal that can only be
+  corrected at the signal-decomposition level, not per-ACK.
 - **The win extends to an oversubscribed core, and holds at 1024-node scale.**
   `expB_oversub_asym/`: the same asymmetric advantage generalizes from the 1:1 non-blocking fabric
   to a moderately-oversubscribed **4:1** core — **+14–32%** goodput over both REPS+NSCC and STrack
@@ -124,6 +132,7 @@ in `TARGET_REGIME.md`.
 | Mechanism | `../../prism_decompose.h`, `../../uec.cpp` | PRISM decomposes floor (CC) vs spread (spraying) |
 | Eval (win) | `expA_delaydriven/`, `expA_tspray_tuning/` | reroutable + delay-driven: +25–33% over REPS+NSCC & STrack |
 | Eval (vs median CC) | `expA_delaydriven/` (MNSCC arm, figA2dd_signal) | PRISM floor beats MNSCC median under asymmetry/load (+11–25%); MNSCC only modestly > REPS+NSCC; median avoids PRISM's f0 cost |
+| Eval (vs Swift) | `expA_delaydriven/` (Swift arm) | PRISM floor beats Swift delay-AIMD (+13% f8, +36% load); Swift ~ REPS/STrack/MNSCC cluster |
 | Eval (win, load) | `expA_delaydriven/` (figA3dd_load) | open-loop offered-load sweep: PRISM's FCT lead widens with load under asymmetry |
 | Eval (win, oversub) | `expB_oversub_asym/` | asymmetric win extends to a 4:1 oversubscribed core (+14–32%); 8:1 = saturation boundary |
 | Eval (scale) | `expD_scale1024/` | both headline wins hold undiluted at 1024 nodes (8×); 8:1 becomes a graceful-degradation win |
