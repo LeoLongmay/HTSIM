@@ -300,6 +300,75 @@ tracks runtime `_target_Qdelay` per-ACK; same ~14 µs operating point as NSCC/PR
 ignored (Swift is pure-delay). `ai/β/max_mdf` = htsim defaults (the Swift paper's production
 values are unpublished). cr = 1.00 everywhere.
 
+## MSwift (median@LSwift) baseline + LSwift
+
+**What MSwift is.** MSwift combines two ideas on top of the plain Swift base (Algorithm 1 + §3.5
+flow-scaled target; same ~14 µs operating point; ECN ignored):
+
+1. **LSwift** — reordering-resilient Swift: multiplicative decrease fires only after **5
+   consecutive** over-target ACKs (not on the first), suppressing spurious cuts from transient
+   reordering. LSwift is implemented and flag-available (`-sender_cc_algo lswift`,
+   `-lswift_trigger`) but kept out of the headline figures; it is MSwift's base.
+2. **Median filter** — the MD decision keys off the **median** of the last H per-ACK delays, where
+   H = max(W/2, 1) (Nyquist; reuses `mnscc::median_of`). This is a second robust-statistics pass on
+   top of LSwift's consecutive-count guard.
+
+MSwift is built entirely on phase-A Swift: same REPS spray, same ~14 µs target, ECN ignored, cr = 1.00
+everywhere. The main comparison figures now show **MSwift in place of the earlier MNSCC line**
+(MNSCC remains on the mechanism panel for context).
+
+**Failed-sweep results (figA1dd; cr = 1.00 everywhere):**
+
+| -failed | Swift | REPS+NSCC | STrack | **MSwift** | **PRISM** | PRISM vs MSwift |
+|---|---|---|---|---|---|---|
+| 0  | 864.4 Gbps | 996.7 Gbps | 912.4 Gbps | **833.7 Gbps** | 868.6 Gbps | +4.2% (MSwift f0 dip largest) |
+| 4  | 468.9 Gbps | 482.5 Gbps | 470.6 Gbps | 537.6 Gbps | **574.3 Gbps** | **+6.8%** |
+| 8  | 444.9 Gbps | 430.8 Gbps | 414.6 Gbps | 472.5 Gbps | **504.2 Gbps** | **+6.7%** |
+| 12 | 397.1 Gbps | — | — | 413.9 Gbps | **433.8 Gbps** | **+4.8%** |
+
+avg-FCT at failed=8: Prism 1.518 ms / **MSwift 1.560 ms** (near Prism) / REPS 1.694 ms / Swift
+1.776 ms. MSwift closes most of the gap to PRISM on FCT while clearly separating from plain Swift
+and REPS.
+
+**MSwift vs the cluster.** Under asymmetry (failed ≥ 4) MSwift is the **strongest non-PRISM arm**:
+it beats plain Swift (+6–15% goodput at failed ≥ 4; avg-FCT 1.776 → 1.560 ms at f8, near PRISM),
+and beats REPS+NSCC / STrack / MNSCC. The median@LSwift combination reproduces the paper's claim
+that the median helps. **At f0 (symmetric) MSwift's dip is the largest of all arms (833.7 Gbps vs
+Swift 864.4, PRISM 868.6, REPS 996.7)** — the median@Swift under-utilizes the symmetric fabric
+most, the reverse of its advantage under asymmetry.
+
+**Offered-load sweep results (figA3dd_load, failed=8; cr = 1.00 everywhere):**
+
+| rho | REPS+NSCC | Swift | STrack | **MSwift** | **PRISM** | PRISM vs MSwift |
+|---|---|---|---|---|---|---|
+| 0.1 | 156.2 Gbps | — | — | 152.4 Gbps | 155.2 Gbps | tie (near-idle) |
+| 0.5 | 564.5 Gbps | 534.1 Gbps | — | 612.5 Gbps | **726.0 Gbps** | **+18.5%** |
+| 0.9 | 651.6 Gbps | 657.0 Gbps | 665.8 Gbps | 729.8 Gbps | **778.9 Gbps** | **+6.7%** |
+
+avg-FCT at rho=0.5: Prism 1.006 ms / **MSwift 2.394 ms** / REPS 3.241 ms / Swift 4.143 ms. MSwift
+is substantially better than plain Swift and REPS under load (MSwift +8.5% goodput vs REPS at ρ=0.5;
++14.7% vs Swift), yet PRISM's floor beats even MSwift by +18.5% goodput and ~2.4× lower avg-FCT.
+
+**Mechanism (figA2dd_cwnd).** MSwift joins the cwnd panel at failed=8. Per-ACK cwnd cuts: PRISM 954
+(floor-MD 0.374), REPS+NSCC 4344, STrack 4987. MSwift's cut count appears on the panel. PRISM's
+far fewer, better-targeted floor-driven cuts underlie both its higher goodput and lower FCT.
+
+**Honest verdict.**
+- **The median framework genuinely improves Swift.** MSwift is the strongest non-PRISM arm — it
+  beats plain Swift, REPS+NSCC, STrack, and MNSCC under asymmetry and load, reproducing the
+  paper's claim that the median helps. avg-FCT at f8: 1.560 ms, essentially tied with PRISM's
+  1.518 ms on FCT.
+- **Yet PRISM's floor still beats even MSwift** — by the **narrowest margin of any arm** at
+  failed ≥ 4 (+4.8–6.8% goodput, vs +13–17% for the other arms). Under offered load the margin
+  widens again (+6.7–18.5%), confirming the floor's structural advantage over the median as load
+  activates the reroutable spread.
+- **MSwift's f0 dip is the largest** (833.7 Gbps vs 864.4 Swift / 868.6 PRISM / 996.7 REPS):
+  the median@Swift combination over-suppresses on the symmetric startup transient more than any
+  other arm. This is the reverse side of MSwift's asymmetric strength.
+- **LSwift** (the reordering-resilient base, MD after 5 consecutive over-target ACKs) is
+  implemented and flag-available (`-sender_cc_algo lswift`, `-lswift_trigger`) but excluded from
+  the headline figures, where MSwift (LSwift + median) is the reported variant.
+
 ## Reproduce
 ```
 bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~210 failed-sweep + 5 mechanism + 150 offered-load sims

@@ -61,6 +61,12 @@ only inferred. (`../../uec.cpp` `updateCwndOnAck_PRISM`; pure logic `../../prism
   floor-decomposition win is robust across the CC design space (AIMD, per-flow average, coupled
   average, median), because all four designs act on a spread-inflated delay signal that can only be
   corrected at the signal-decomposition level, not per-ACK.
+  **MSwift** (the paper's strongest Swift variant: LSwift reordering-resilient base + median of
+  last H per-ACK delays, H = max(W/2,1)) is the closest competitor to PRISM in the headline
+  figures — it genuinely improves Swift (+6–15% goodput at failed ≥ 4; avg-FCT 1.776 → 1.560 ms
+  at f8, near PRISM), reproducing the paper's median claim — yet PRISM's floor still beats even
+  MSwift, by the **narrowest margin of any arm** (+4.8–6.8% goodput at failed ≥ 4;
+  +6.7–18.5% goodput under load); the median improves Swift but does not capture the floor.
 - **The win extends to an oversubscribed core, and holds at 1024-node scale.**
   `expB_oversub_asym/`: the same asymmetric advantage generalizes from the 1:1 non-blocking fabric
   to a moderately-oversubscribed **4:1** core — **+14–32%** goodput over both REPS+NSCC and STrack
@@ -133,6 +139,7 @@ in `TARGET_REGIME.md`.
 | Eval (win) | `expA_delaydriven/`, `expA_tspray_tuning/` | reroutable + delay-driven: +25–33% over REPS+NSCC & STrack |
 | Eval (vs median CC) | `expA_delaydriven/` (MNSCC arm, figA2dd_signal) | PRISM floor beats MNSCC median under asymmetry/load (+11–25%); MNSCC only modestly > REPS+NSCC; median avoids PRISM's f0 cost |
 | Eval (vs Swift) | `expA_delaydriven/` (Swift arm) | PRISM floor beats Swift delay-AIMD (+13% f8, +36% load); Swift ~ REPS/STrack/MNSCC cluster |
+| Eval (vs MSwift) | `expA_delaydriven/` (MSwift arm) | PRISM floor beats even the paper's strongest CC (MSwift) by the narrowest margin (+5–7% f≥4, +6.7–18.5% load); MSwift = strongest non-PRISM arm |
 | Eval (win, load) | `expA_delaydriven/` (figA3dd_load) | open-loop offered-load sweep: PRISM's FCT lead widens with load under asymmetry |
 | Eval (win, oversub) | `expB_oversub_asym/` | asymmetric win extends to a 4:1 oversubscribed core (+14–32%); 8:1 = saturation boundary |
 | Eval (scale) | `expD_scale1024/` | both headline wins hold undiluted at 1024 nodes (8×); 8:1 becomes a graceful-degradation win |
