@@ -149,13 +149,7 @@ per-ACK cwnd cuts vs REPS+NSCC 4344** (~4.6× fewer; STrack 4987). PRISM reaches
 goodput with far fewer rate reductions — the on-thesis "control correctness" advantage
 (floor-MD fraction 0.374).
 
-## Offered-load sweep + ECMP anchor
-
-**ECMP+NSCC** (single path per flow, `LB=ecmp CC=nscc`) is added to the `-failed` sweep as the
-conventional no-spray anchor: under asymmetry it is the worst arm (f8 goodput 225.1 Gbps vs
-430.8 for REPS+NSCC, 414.6 for STrack, 504.2 for PRISM; P99 FCT at f8 4.49 ms vs ~2.0–2.4 ms
-for the others), bracketing — with OPS — the contribution of spraying. It is *context*, not
-PRISM's competition (REPS+NSCC and STrack are).
+## Offered-load sweep
 
 **Offered-load figure** (`figA3dd_load_*`): open-loop Poisson arrivals (`common/gen/poisson_load.py`),
 fixed 2 MB flows, `-failed 8`. Offered load rho is relative to aggregate receiver-access capacity
@@ -170,9 +164,8 @@ The `.cm` `start` token is picoseconds (verified by the repro.sh start-unit guar
 | 0.7 | 627.5 / 624.3 / 799.2 | 4.998 / 5.112 / 2.712 | 1.00 / 1.00 / 1.00 |
 | 0.9 | 651.6 / 665.8 / 778.9 | 7.254 / 7.324 / 5.362 | 1.00 / 1.00 / 1.00 |
 
-Note: ECMP cr drops to 0.98 at rho=0.5, 0.68 at rho=0.7, and 0.52 at rho=0.9; OPS cr drops to
-0.96 at rho=0.7 and 0.66 at rho=0.9. At these high-rho points ECMP and OPS FCT are **confounded
-by incompletion** and cannot be compared cleanly — flagged on the figure.
+Note: OPS cr drops to 0.96 at rho=0.7 and 0.66 at rho=0.9. At these high-rho points OPS FCT is
+**confounded by incompletion** and cannot be compared cleanly — flagged on the figure.
 
 Reading: near-idle (rho=0.1) the fabric carries little queue, there is no reroutable spread to
 decompose, and PRISM ~ties REPS+NSCC (−0.6% goodput; FCT within noise). As rho approaches
@@ -252,7 +245,7 @@ NSCC/PRISM. ECN is ignored (Swift is pure-delay). `ai/β/max_mdf` use htsim's sh
 REPS+NSCC, MNSCC, and PRISM — so only the CC algorithm differs. Completion rate cr = 1.00
 everywhere (FCT unconfounded).
 
-**Failed-sweep results (figA1dd, 7 arms; cr = 1.00 everywhere):**
+**Failed-sweep results (figA1dd, 6 arms; cr = 1.00 everywhere):**
 
 | -failed | REPS+NSCC | MNSCC (median) | STrack (coupled) | Swift (delay-AIMD) | PRISM (floor) | PRISM vs Swift |
 |---|---|---|---|---|---|---|

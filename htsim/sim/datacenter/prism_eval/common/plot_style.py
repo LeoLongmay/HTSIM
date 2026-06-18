@@ -11,7 +11,6 @@ COLORS = {
     "reps": "tab:blue",
     "strack": "tab:orange",
     "prism": "tab:green",
-    "ecmp": "tab:purple",  # single-path (no spray) anchor
     "mnscc": "tab:brown",  # median@NSCC (Gerstein et al. 2026) competitor
     "swift": "tab:pink",  # Swift (Kumar et al. 2020) delay-AIMD baseline
     "ccc": "tab:red",      # C_cc / floor
