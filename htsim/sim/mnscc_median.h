@@ -19,7 +19,8 @@ inline T median_of(const T* buf, int n) {
     for (int i = 0; i < n; ++i) tmp[i] = buf[i];
     std::sort(tmp, tmp + n);
     if (n & 1) return tmp[n / 2];
-    return (tmp[n / 2 - 1] + tmp[n / 2]) / 2;
+    T lo = tmp[n / 2 - 1], hi = tmp[n / 2];      // floor midpoint without overflow
+    return lo / 2 + hi / 2 + ((lo & hi) & 1);
 }
 
 // Nyquist history size for MNSCC: H = max(min(W/2, 4), 1), W = cwnd in packets.

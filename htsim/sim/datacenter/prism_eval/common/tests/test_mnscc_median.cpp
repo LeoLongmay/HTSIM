@@ -8,6 +8,10 @@ int main() {
     { uint64_t b[] = {30, 10, 20}; assert(median_of(b, 3) == 20); }
     // even window -> average of the two middle elements
     { uint64_t b[] = {10, 20, 30, 40}; assert(median_of(b, 4) == 25); }   // (20+30)/2
+    // even window, odd sum -> floor of the midpoint (truncation, not rounding)
+    { uint64_t b[] = {10, 11}; assert(median_of(b, 2) == 10); }
+    // overflow-safety: two near-UINT64_MAX values must not wrap
+    { uint64_t b[] = {0xFFFFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFFFFFULL}; assert(median_of(b, 2) == 0xFFFFFFFFFFFFFFFEULL); }
     // n==1 -> identity (degenerates to the latest delay == plain NSCC)
     { uint64_t b[] = {17}; assert(median_of(b, 1) == 17); }
     // robustness: a single huge outlier does not move the median (the whole point)
