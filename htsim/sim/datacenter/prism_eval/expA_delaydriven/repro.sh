@@ -51,6 +51,7 @@ for f in $FAILEDS; do for s in $SEEDS; do
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps  "$f" "$TOPO" "$s" "$CM" flow,sink "expA_strack_f${f}_s${s}" "$OUT"
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc ecmp "$f" "$TOPO" "$s" "$CM" flow,sink "expA_ecmp_f${f}_s${s}" "$OUT"
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc reps "$f" "$TOPO" "$s" "$CM" flow,sink "expA_mnscc_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift reps "$f" "$TOPO" "$s" "$CM" flow,sink "expA_swift_f${f}_s${s}" "$OUT"
 done; done
 
 echo "== mechanism condition: failed=8, seed=13, 4MB workload (CM_MECH), all 4 with PRISM_PATHRTT =="
@@ -64,6 +65,8 @@ PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_strack_mech.pat
   bash "$COMMON/run_lib.sh" strack reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_strack_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_mnscc_mech.pathrtt.csv" MNSCC_MEDIAN="$OUT/expA_mnscc_mech.median.csv" \
   bash "$COMMON/run_lib.sh" mnscc reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_mnscc_mech "$OUT"
+PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_swift_mech.pathrtt.csv" \
+  bash "$COMMON/run_lib.sh" swift reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_swift_mech "$OUT"
 
 echo "== offered-load sweep (Poisson, failed=8, 2MB): 5 arms x rho{10,30,50,70,90}% x 5 seeds =="
 LOAD_W_US=8000; LOAD_END=20; REF_GBPS=1600
@@ -78,6 +81,7 @@ for rho in 10 30 50 70 90; do
     PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps    8 "$TOPO" "$s" "$LCM" flow,sink "expAload_strack_L${rho}_s${s}" "$OUT"
     PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc ecmp      8 "$TOPO" "$s" "$LCM" flow,sink "expAload_ecmp_L${rho}_s${s}" "$OUT"
     PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc reps 8 "$TOPO" "$s" "$LCM" flow,sink "expAload_mnscc_L${rho}_s${s}" "$OUT"
+    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift reps 8 "$TOPO" "$s" "$LCM" flow,sink "expAload_swift_L${rho}_s${s}" "$OUT"
   done
 done
 
