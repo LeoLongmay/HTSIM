@@ -107,6 +107,8 @@ simtime_picosec UecSrc::_swift_base_q = 0;
 simtime_picosec UecSrc::_swift_fs_range = 0;
 double          UecSrc::_swift_fs_min_cwnd = 0.1;
 double          UecSrc::_swift_fs_max_cwnd = 100.0;
+uint32_t UecSrc::_lswift_trigger = 5;
+uint32_t UecSrc::_mswift_h = 0;
 double UecSrc::_strack_beta = 5.0;   // STrack Table 1 beta scale; tuned in P5 sensitivity
 double UecSrc::_strack_h    = 0.0;   // fixed target (no live hop_count plumbing); see spec §3
 bool     UecSrc::_prism_loss_decomp     = false;
@@ -626,6 +628,14 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 break;
             case SWIFT:
                 updateCwndOnAck = &UecSrc::updateCwndOnAck_SWIFT;
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_SWIFT;
+                break;
+            case LSWIFT:
+                updateCwndOnAck = &UecSrc::updateCwndOnAck_LSWIFT;
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_SWIFT;
+                break;
+            case MSWIFT:
+                updateCwndOnAck = &UecSrc::updateCwndOnAck_MSWIFT;
                 updateCwndOnNack = &UecSrc::updateCwndOnNack_SWIFT;
                 break;
             default:
@@ -1716,6 +1726,65 @@ void UecSrc::updateCwndOnNack_SWIFT(uint32_t ev, mem_b nacked_bytes, bool last_h
         _swift_last_dec = eventlist().now();
     }
     set_cwnd_bounds();
+}
+
+// Shared Swift-family AIMD step: phase-A Swift's flow-scaled target + AI/MD, with the MD gated on
+// `trigger` CONSECUTIVE over-target ACKs (LSwift's reordering resilience; reset on under-target),
+// still once per RTT. `eff_delay` is the raw per-ACK delay (LSwift) or the median of recent delays
+// (MSwift). phase-A SWIFT is left independent (not refactored) to avoid regressing it.
+void UecSrc::swift_family_step(simtime_picosec eff_delay, mem_b newly_acked_bytes, uint32_t trigger) {
+    simtime_picosec base_q = _swift_base_q > 0 ? _swift_base_q : _target_Qdelay;
+    double fs_range = _swift_fs_range > 0 ? (double)_swift_fs_range : (double)_target_Qdelay / 2.0;
+    double a, b;
+    swift::fs_coeffs(fs_range, _swift_fs_min_cwnd, _swift_fs_max_cwnd, a, b);
+    double cwnd_pkts = (_mtu > 0) ? (double)_cwnd / _mtu : 0.0;
+    simtime_picosec target = swift::target_delay_q(cwnd_pkts, base_q, a, b, fs_range);
+
+    if (eff_delay < target) {
+        if (_cwnd > 0)
+            _cwnd += (mem_b)((double)_mtu * _swift_ai * (double)newly_acked_bytes / (double)_cwnd);
+        _swift_overcount = 0;
+    } else {
+        _swift_overcount++;
+        bool can_decrease = (eventlist().now() - _swift_last_dec) >= _base_rtt;
+        if (_swift_overcount >= trigger && can_decrease && eff_delay > 0) {
+            mem_b before = _cwnd;
+            _cwnd = (mem_b)(_cwnd * swift::md_factor(eff_delay, target, _swift_beta, _swift_max_mdf));
+            if (_cwnd <= before)
+                _swift_last_dec = eventlist().now();
+            _swift_overcount = 0;
+        }
+    }
+    set_cwnd_bounds();
+}
+
+// LSwift: reordering-resilient Swift -- MD only after _lswift_trigger consecutive over-target ACKs.
+void UecSrc::updateCwndOnAck_LSWIFT(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
+    if (quick_adapt(false, skip, delay))
+        return;
+    swift_family_step(delay, newly_acked_bytes, _lswift_trigger);
+}
+
+// MSwift: LSwift driven by the MEDIAN of the last H per-ACK delays (H = max(W/2,1), Nyquist; reuses
+// mnscc::median_of). ECN ignored; the consecutive-over-target trigger and the median compose.
+void UecSrc::updateCwndOnAck_MSWIFT(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
+    if (quick_adapt(false, skip, delay))
+        return;
+    _swift_window[_swift_whead] = delay;
+    _swift_whead = (_swift_whead + 1) % SWIFT_MAX_H;
+    if (_swift_wcount < SWIFT_MAX_H) _swift_wcount++;
+    uint32_t w_pkts = (_mtu > 0) ? (uint32_t)(_cwnd / _mtu) : 0;
+    uint32_t H = _mswift_h > 0 ? min(_mswift_h, SWIFT_MAX_H)
+                               : min((uint32_t)swift::nyquist_h((int)w_pkts), SWIFT_MAX_H);
+    uint32_t use = min(H, _swift_wcount);
+    if (use < 1) use = 1;
+    simtime_picosec recent[SWIFT_MAX_H];
+    for (uint32_t k = 0; k < use; ++k) {
+        uint32_t idx = (_swift_whead + SWIFT_MAX_H - 1 - k) % SWIFT_MAX_H;
+        recent[k] = _swift_window[idx];
+    }
+    simtime_picosec med = mnscc::median_of(recent, (int)use);
+    swift_family_step(med, newly_acked_bytes, _lswift_trigger);
 }
 
 // STrack Algorithm 4 Line #7: cwnd += beta/cwnd. beta carried in mtu^2 units via _strack_beta

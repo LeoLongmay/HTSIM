@@ -230,6 +230,14 @@ int main(int argc, char **argv) {
             UecSrc::_swift_fs_max_cwnd = atof(argv[i+1]);
             cout << "swift_fs_max_cwnd " << UecSrc::_swift_fs_max_cwnd << endl;
             i++;
+        } else if (!strcmp(argv[i],"-lswift_trigger")) {
+            UecSrc::_lswift_trigger = atoi(argv[i+1]);
+            cout << "lswift_trigger " << UecSrc::_lswift_trigger << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mswift_h")) {
+            UecSrc::_mswift_h = atoi(argv[i+1]);
+            cout << "mswift_h " << UecSrc::_mswift_h << endl;
+            i++;
         } else if (!strcmp(argv[i],"-strack_beta")) {
             UecSrc::_strack_beta = atof(argv[i+1]);
             cout << "strack_beta " << UecSrc::_strack_beta << endl;
@@ -268,6 +276,10 @@ int main(int argc, char **argv) {
                 UecSrc::_sender_cc_algo = UecSrc::MNSCC;
             else if (!strcmp(argv[i+1],"swift"))
                 UecSrc::_sender_cc_algo = UecSrc::SWIFT;
+            else if (!strcmp(argv[i+1],"lswift"))
+                UecSrc::_sender_cc_algo = UecSrc::LSWIFT;
+            else if (!strcmp(argv[i+1],"mswift"))
+                UecSrc::_sender_cc_algo = UecSrc::MSWIFT;
             else {
                 cout << "UNKNOWN CC ALGO " << argv[i+1] << endl;
                 exit(1);

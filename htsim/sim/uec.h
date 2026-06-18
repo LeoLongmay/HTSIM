@@ -216,7 +216,7 @@ public:
     static bool _sender_based_cc;
     static bool _receiver_based_cc;
 
-    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT};
+    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT};
     static Sender_CC _sender_cc_algo;
 
     static bool _disable_quick_adapt;
@@ -313,6 +313,9 @@ public:
     void updateCwndOnAck_MNSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_SWIFT(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnNack_SWIFT(uint32_t ev, mem_b nacked_bytes, bool last_hop);
+    void updateCwndOnAck_LSWIFT(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void updateCwndOnAck_MSWIFT(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void swift_family_step(simtime_picosec eff_delay, mem_b newly_acked_bytes, uint32_t trigger);
     void starvation_increase();
     void updateCwndOnNack_NSCC(uint32_t ev, mem_b nacked_bytes, bool last_hop);
     void updateCwndOnNack_PRISM(uint32_t ev, mem_b nacked_bytes, bool last_hop);
@@ -385,6 +388,8 @@ public:
     static simtime_picosec _swift_fs_range;  // flow-scaling range; 0 = use _target_Qdelay/2
     static double _swift_fs_min_cwnd; // packets (default 0.1)
     static double _swift_fs_max_cwnd; // packets (default 100)
+    static uint32_t _lswift_trigger;  // LSwift/MSwift consecutive-over-target MD trigger (default 5)
+    static uint32_t _mswift_h;        // MSwift median window; 0 = Nyquist max(W/2,1)
     static bool     _prism_loss_decomp;       // -prism_loss_decomp; default false (== today's PRISM)
     static uint32_t _prism_loss_streak_cap;   // -prism_loss_streak_cap; consecutive HOLD epochs -> force cut
     static double _gamma;
@@ -493,6 +498,11 @@ private:
     uint32_t        _mnscc_whead  = 0;   // next write index (ring)
 
     simtime_picosec _swift_last_dec = 0;   // Swift: time of last MD (MD allowed once per RTT)
+    uint32_t _swift_overcount = 0;   // LSwift/MSwift: consecutive over-target ACKs
+    static constexpr uint32_t SWIFT_MAX_H = 64;
+    simtime_picosec _swift_window[SWIFT_MAX_H] = {};  // MSwift median window (ring)
+    uint32_t _swift_wcount = 0;
+    uint32_t _swift_whead = 0;
 
     // PRISM loss/NACK decomposition (flag-gated). Per-epoch distinct entropies that ACK'd-good
     // vs fabric-NACK'd; the safety valve is time-based (epoch-closure-independent). See prism::decide_loss.
