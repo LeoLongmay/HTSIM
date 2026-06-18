@@ -216,7 +216,7 @@ public:
     static bool _sender_based_cc;
     static bool _receiver_based_cc;
 
-    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC};
+    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT};
     static Sender_CC _sender_cc_algo;
 
     static bool _disable_quick_adapt;
@@ -311,6 +311,8 @@ public:
     void updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_STRACK(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_MNSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void updateCwndOnAck_SWIFT(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void updateCwndOnNack_SWIFT(uint32_t ev, mem_b nacked_bytes, bool last_hop);
     void starvation_increase();
     void updateCwndOnNack_NSCC(uint32_t ev, mem_b nacked_bytes, bool last_hop);
     void updateCwndOnNack_PRISM(uint32_t ev, mem_b nacked_bytes, bool last_hop);
@@ -376,6 +378,13 @@ public:
     static double _strack_beta;   // starvation-bump scale (Table 1 beta; dimensionless, default 5.0)
     static double _strack_h;      // per-hop target scale; default 0 (fixed target, see spec §3) (arg-parse symmetry in Task 3; not consumed while h=0)
     static uint32_t _mnscc_h;  // MNSCC median window override; 0 = Nyquist max(min(W/2,4),1)
+    static double _swift_ai;          // Swift additive increment (default 1.0)
+    static double _swift_beta;        // Swift MD constant (default 0.8)
+    static double _swift_max_mdf;     // Swift max multiplicative decrease factor (default 0.5)
+    static simtime_picosec _swift_base_q;   // queuing-domain base target; 0 = use _target_Qdelay
+    static simtime_picosec _swift_fs_range;  // flow-scaling range; 0 = use _target_Qdelay/2
+    static double _swift_fs_min_cwnd; // packets (default 0.1)
+    static double _swift_fs_max_cwnd; // packets (default 100)
     static bool     _prism_loss_decomp;       // -prism_loss_decomp; default false (== today's PRISM)
     static uint32_t _prism_loss_streak_cap;   // -prism_loss_streak_cap; consecutive HOLD epochs -> force cut
     static double _gamma;
@@ -482,6 +491,8 @@ private:
     simtime_picosec _mnscc_window[MNSCC_MAX_H] = {};
     uint32_t        _mnscc_wcount = 0;   // samples seen so far (caps at MNSCC_MAX_H)
     uint32_t        _mnscc_whead  = 0;   // next write index (ring)
+
+    simtime_picosec _swift_last_dec = 0;   // Swift: time of last MD (MD allowed once per RTT)
 
     // PRISM loss/NACK decomposition (flag-gated). Per-epoch distinct entropies that ACK'd-good
     // vs fabric-NACK'd; the safety valve is time-based (epoch-closure-independent). See prism::decide_loss.

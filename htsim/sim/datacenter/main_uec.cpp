@@ -202,6 +202,34 @@ int main(int argc, char **argv) {
             UecSrc::_mnscc_h = atoi(argv[i+1]);
             cout << "mnscc_h " << UecSrc::_mnscc_h << endl;
             i++;
+        } else if (!strcmp(argv[i],"-swift_ai")) {
+            UecSrc::_swift_ai = atof(argv[i+1]);
+            cout << "swift_ai " << UecSrc::_swift_ai << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-swift_beta")) {
+            UecSrc::_swift_beta = atof(argv[i+1]);
+            cout << "swift_beta " << UecSrc::_swift_beta << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-swift_max_mdf")) {
+            UecSrc::_swift_max_mdf = atof(argv[i+1]);
+            cout << "swift_max_mdf " << UecSrc::_swift_max_mdf << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-swift_base_q")) {
+            UecSrc::_swift_base_q = timeFromUs(atof(argv[i+1]));
+            cout << "swift_base_q(us) " << atof(argv[i+1]) << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-swift_fs_range")) {
+            UecSrc::_swift_fs_range = timeFromUs(atof(argv[i+1]));
+            cout << "swift_fs_range(us) " << atof(argv[i+1]) << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-swift_fs_min_cwnd")) {
+            UecSrc::_swift_fs_min_cwnd = atof(argv[i+1]);
+            cout << "swift_fs_min_cwnd " << UecSrc::_swift_fs_min_cwnd << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-swift_fs_max_cwnd")) {
+            UecSrc::_swift_fs_max_cwnd = atof(argv[i+1]);
+            cout << "swift_fs_max_cwnd " << UecSrc::_swift_fs_max_cwnd << endl;
+            i++;
         } else if (!strcmp(argv[i],"-strack_beta")) {
             UecSrc::_strack_beta = atof(argv[i+1]);
             cout << "strack_beta " << UecSrc::_strack_beta << endl;
@@ -238,6 +266,8 @@ int main(int argc, char **argv) {
                 UecSrc::_sender_cc_algo = UecSrc::STRACK;
             else if (!strcmp(argv[i+1],"mnscc"))
                 UecSrc::_sender_cc_algo = UecSrc::MNSCC;
+            else if (!strcmp(argv[i+1],"swift"))
+                UecSrc::_sender_cc_algo = UecSrc::SWIFT;
             else {
                 cout << "UNKNOWN CC ALGO " << argv[i+1] << endl;
                 exit(1);

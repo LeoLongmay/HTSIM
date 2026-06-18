@@ -12,6 +12,7 @@
 #include "prism_decompose.h"  // PRISM decomposition logic (used by updateCwndOnAck_PRISM)
 #include "strack_cc.h"               // STrack decision tree (used by updateCwndOnAck_STRACK)
 #include "mnscc_median.h"            // MNSCC median framework (used by updateCwndOnAck_MNSCC)
+#include "swift_cc.h"                // Swift CC pure logic (used by updateCwndOnAck_SWIFT)
 
 using namespace std;
 
@@ -99,6 +100,13 @@ simtime_picosec UecSrc::_target_Qdelay = timeFromUs(6u);
 simtime_picosec UecSrc::_prism_T_spray = 0;   // 0 sentinel: follow _target_Qdelay
 double UecSrc::_prism_kappa = 1.0;
 uint32_t UecSrc::_mnscc_h = 0;
+double          UecSrc::_swift_ai = 1.0;
+double          UecSrc::_swift_beta = 0.8;
+double          UecSrc::_swift_max_mdf = 0.5;
+simtime_picosec UecSrc::_swift_base_q = 0;
+simtime_picosec UecSrc::_swift_fs_range = 0;
+double          UecSrc::_swift_fs_min_cwnd = 0.1;
+double          UecSrc::_swift_fs_max_cwnd = 100.0;
 double UecSrc::_strack_beta = 5.0;   // STrack Table 1 beta scale; tuned in P5 sensitivity
 double UecSrc::_strack_h    = 0.0;   // fixed target (no live hop_count plumbing); see spec §3
 bool     UecSrc::_prism_loss_decomp     = false;
@@ -615,6 +623,10 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
             case MNSCC:
                 updateCwndOnAck = &UecSrc::updateCwndOnAck_MNSCC;
                 updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;  // reuse NSCC NACK/loss handling
+                break;
+            case SWIFT:
+                updateCwndOnAck = &UecSrc::updateCwndOnAck_SWIFT;
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_SWIFT;
                 break;
             default:
                 cout << "Unknown CC algo specified " << _sender_cc_algo << endl;
@@ -1670,6 +1682,40 @@ void UecSrc::updateCwndOnAck_MNSCC(bool skip, simtime_picosec delay, mem_b newly
 
     // (e) reuse NSCC verbatim, with the median substituted for the per-ACK delay
     updateCwndOnAck_NSCC(skip, med, newly_acked_bytes);
+}
+
+// Swift (Kumar et al. 2020): pure-delay AIMD with the §3.5 flow-scaled target, in the queuing-delay
+// domain. ECN (skip) is ignored (Swift has no ECN term). MD is once per RTT. See swift_cc.h.
+void UecSrc::updateCwndOnAck_SWIFT(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
+    if (quick_adapt(false, skip, delay))   // reuse NSCC loss/quick adaptation
+        return;
+    simtime_picosec base_q = _swift_base_q > 0 ? _swift_base_q : _target_Qdelay;
+    double fs_range = _swift_fs_range > 0 ? (double)_swift_fs_range : (double)_target_Qdelay / 2.0;
+    double a, b;
+    swift::fs_coeffs(fs_range, _swift_fs_min_cwnd, _swift_fs_max_cwnd, a, b);
+    double cwnd_pkts = (_mtu > 0) ? (double)_cwnd / _mtu : 0.0;
+    simtime_picosec target = swift::target_delay_q(cwnd_pkts, base_q, a, b, fs_range);
+
+    bool can_decrease = (eventlist().now() - _swift_last_dec) >= _base_rtt;
+    if (delay < target) {
+        if (_cwnd > 0)
+            _cwnd += (mem_b)((double)_mtu * _swift_ai * (double)newly_acked_bytes / (double)_cwnd);
+    } else if (can_decrease && delay > 0) {
+        mem_b before = _cwnd;
+        _cwnd = (mem_b)(_cwnd * swift::md_factor(delay, target, _swift_beta, _swift_max_mdf));
+        if (_cwnd <= before)
+            _swift_last_dec = eventlist().now();
+    }
+    set_cwnd_bounds();
+}
+
+// Swift loss reaction: flat (1 - max_mdf) multiplicative decrease, once per RTT.
+void UecSrc::updateCwndOnNack_SWIFT(uint32_t ev, mem_b nacked_bytes, bool last_hop) {
+    if ((eventlist().now() - _swift_last_dec) >= _base_rtt) {
+        _cwnd = (mem_b)(_cwnd * (1.0 - _swift_max_mdf));
+        _swift_last_dec = eventlist().now();
+    }
+    set_cwnd_bounds();
 }
 
 // STrack Algorithm 4 Line #7: cwnd += beta/cwnd. beta carried in mtu^2 units via _strack_beta
