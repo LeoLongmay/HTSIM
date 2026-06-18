@@ -12,6 +12,7 @@ COLORS = {
     "strack": "tab:orange",
     "prism": "tab:green",
     "ecmp": "tab:purple",  # single-path (no spray) anchor
+    "mnscc": "tab:brown",  # median@NSCC (Gerstein et al. 2026) competitor
     "ccc": "tab:red",      # C_cc / floor
     "spray": "tab:orange",  # C_spray / spread band
     "target": "gray",
