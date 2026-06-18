@@ -13,8 +13,8 @@ import perf_figs  # noqa: E402
 DATA = os.path.join(HERE, "data")
 FIGS = os.path.join(HERE, "figs")
 BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
-             ("strack", "STrack", "strack"), ("prism", "Prism", "prism"),
-             ("mnscc", "MNSCC", "mnscc"), ("swift", "Swift", "swift")]
+             ("strack", "STrack", "strack"), ("mnscc", "REPS+MNSCC", "mnscc"),
+             ("swift", "REPS+Swift", "swift"), ("prism", "Prism", "prism")]
 FAILED = [0, 2, 4, 6, 8, 10, 12]
 SEEDS = [13, 14, 15, 16, 17]
 XLABEL = "# constrained core->agg links (-failed)"
