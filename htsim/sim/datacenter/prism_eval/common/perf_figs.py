@@ -276,8 +276,9 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
     strack_dec = metrics.count_cwnd_cuts_from_pathrtt(strack_pr) if os.path.exists(strack_pr) else -1
     mnscc_pr = os.path.join(data_dir, f"{tag_prefix}_mnscc_mech.pathrtt.csv")
     mnscc_dec = metrics.count_cwnd_cuts_from_pathrtt(mnscc_pr) if os.path.exists(mnscc_pr) else -1
+    mnscc_part = f", MNSCC {mnscc_dec}" if mnscc_dec != -1 else ""
     axc.text(0.02, 0.97, f"rate reductions (per-ACK cwnd cuts): Prism {prism_dec}, "
-             f"REPS+NSCC {reps_dec}, STrack {strack_dec}, MNSCC {mnscc_dec}", transform=axc.transAxes, fontsize=7,
+             f"REPS+NSCC {reps_dec}, STrack {strack_dec}{mnscc_part}", transform=axc.transAxes, fontsize=7,
              va="top", bbox=dict(boxstyle="round", fc="white", ec="gray", alpha=0.85))
     axc.set_xlabel("time (ms)"); axc.set_ylabel("cwnd (KB, mean/flow)")
     axc.set_title(f"Mechanism @ {lbl}: cwnd", fontsize=11)
@@ -414,6 +415,11 @@ def selftest():
         fh.write("1000,1,8000\n2000,1,10000\n3000,2,12000\n")  # ns: medians 8,10,12 us
     ts, ys = _read_mnscc_median(os.path.join(md, "x_mnscc_mech.median.csv"), bin_us=1000)
     assert ys and abs(sum(ys) / len(ys) - 10.0) < 1e-6, (ts, ys)   # mean of 8,10,12 = 10 us
+    # Multi-bin aggregation test: two distinct time bins
+    with open(os.path.join(md, "x2_mnscc_mech.median.csv"), "w") as fh:
+        fh.write("0,1,8000\n10000,1,10000\n40000000,2,20000\n")  # bin0: [8,10]us; later bin: [20]us
+    ts2, ys2 = _read_mnscc_median(os.path.join(md, "x2_mnscc_mech.median.csv"), bin_us=20)
+    assert len(ys2) == 2 and abs(ys2[0] - 9.0) < 1e-6 and abs(ys2[1] - 20.0) < 1e-6, (ts2, ys2)
     shutil.rmtree(md)
     print("ok perf_figs aggregation selftest")
 
