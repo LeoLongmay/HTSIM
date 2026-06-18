@@ -38,6 +38,19 @@ def _cwnd_series(path, bin_ns=20000):
     xs = sorted(acc)
     return [b * bin_ns / 1e6 for b in xs], [sum(acc[b]) / len(acc[b]) / 1024.0 for b in xs]
 
+def _read_mnscc_median(path, bin_us=20):
+    """Read an MNSCC median CSV (time_ns,flow_id,median_ns); return (times_ms, median_us)
+    averaged into bin_us-wide time bins. Used to overlay MNSCC's median delay on the signal panel."""
+    acc = collections.defaultdict(list)
+    with open(path) as fh:
+        for ln in fh:
+            p = ln.strip().split(",")
+            if len(p) < 3:
+                continue
+            acc[int(p[0]) // (bin_us * 1000)].append(int(p[2]) / 1000.0)  # ns->us
+    xs = sorted(acc)
+    return [b * bin_us / 1000.0 for b in xs], [sum(acc[b]) / len(acc[b]) for b in xs]  # x in ms
+
 def _bin_series(xs, ys, bin_w):
     """Bin (xs, ys) into width-`bin_w` buckets on x; return (bucket_mid_x, mean_y). Used as a
     display-only smoother for the otherwise-unsmoothed per-epoch Prism C_cc signal."""
@@ -225,6 +238,11 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
         if sb:
             axs.plot([b[0] / 1000.0 for b in sb], [b[2] for b in sb],
                      color=plot_style.COLORS["strack"], lw=2.0, label="STrack avg delay")
+    mnscc_med = os.path.join(data_dir, f"{tag_prefix}_mnscc_mech.median.csv")
+    if os.path.exists(mnscc_med):
+        mt, mu = _read_mnscc_median(mnscc_med, bin_us=20)
+        if mt:
+            axs.plot(mt, mu, color=plot_style.COLORS["mnscc"], lw=2.0, label="MNSCC median delay")
     ep = metrics.parse_prism_epoch(prism_ep)
     if ep:
         te = [r["time_ns"] / 1e6 for r in ep]; cc = [r["c_cc_ns"] / 1000.0 for r in ep]
@@ -243,7 +261,8 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
     figC, axc = plt.subplots(1, 1, figsize=(6.4, 3.8))
     makespans = []
     for ck, disp, path in [("reps", "REPS+NSCC", reps_pr), ("prism", "Prism", prism_pr),
-                           ("strack", "STrack", strack_pr)]:
+                           ("strack", "STrack", strack_pr),
+                           ("mnscc", "MNSCC", os.path.join(data_dir, f"{tag_prefix}_mnscc_mech.pathrtt.csv"))]:
         if not os.path.exists(path):
             continue
         xs, ys = _cwnd_series(path)
@@ -255,8 +274,10 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
     reps_dec = metrics.count_cwnd_cuts_from_pathrtt(reps_pr)
     prism_dec = metrics.count_cwnd_cuts_from_pathrtt(prism_pr) if os.path.exists(prism_pr) else -1
     strack_dec = metrics.count_cwnd_cuts_from_pathrtt(strack_pr) if os.path.exists(strack_pr) else -1
+    mnscc_pr = os.path.join(data_dir, f"{tag_prefix}_mnscc_mech.pathrtt.csv")
+    mnscc_dec = metrics.count_cwnd_cuts_from_pathrtt(mnscc_pr) if os.path.exists(mnscc_pr) else -1
     axc.text(0.02, 0.97, f"rate reductions (per-ACK cwnd cuts): Prism {prism_dec}, "
-             f"REPS+NSCC {reps_dec}, STrack {strack_dec}", transform=axc.transAxes, fontsize=7,
+             f"REPS+NSCC {reps_dec}, STrack {strack_dec}, MNSCC {mnscc_dec}", transform=axc.transAxes, fontsize=7,
              va="top", bbox=dict(boxstyle="round", fc="white", ec="gray", alpha=0.85))
     axc.set_xlabel("time (ms)"); axc.set_ylabel("cwnd (KB, mean/flow)")
     axc.set_title(f"Mechanism @ {lbl}: cwnd", fontsize=11)
@@ -386,6 +407,14 @@ def selftest():
     bx, by = _bin_series([0.0, 0.01, 0.05], [10.0, 20.0, 30.0], 0.02)  # buckets: {0:[10,20], 2:[30]}
     assert by == [15.0, 30.0], by
     assert abs(bx[0] - 0.01) < 1e-9 and abs(bx[1] - 0.05) < 1e-9, bx
+    # MNSCC median-CSV reader: 3 rows -> mean median in us over a coarse bin
+    import tempfile as _tf
+    md = _tf.mkdtemp()
+    with open(os.path.join(md, "x_mnscc_mech.median.csv"), "w") as fh:
+        fh.write("1000,1,8000\n2000,1,10000\n3000,2,12000\n")  # ns: medians 8,10,12 us
+    ts, ys = _read_mnscc_median(os.path.join(md, "x_mnscc_mech.median.csv"), bin_us=1000)
+    assert ys and abs(sum(ys) / len(ys) - 10.0) < 1e-6, (ts, ys)   # mean of 8,10,12 = 10 us
+    shutil.rmtree(md)
     print("ok perf_figs aggregation selftest")
 
 if __name__ == "__main__":
