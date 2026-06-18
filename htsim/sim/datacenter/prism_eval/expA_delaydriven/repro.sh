@@ -29,13 +29,14 @@ MECH_SIZE="${MECH_SIZE:-4000000}"
 python3 "$COMMON/gen/many2many.py" "$REL/data/m2m_mech.cm" 64 16 pairs "$MECH_SIZE" 128 16
 CM_MECH="$REL/data/m2m_mech.cm"
 
-echo "== main sweep (delay-driven): 4 baselines x failed{0,2,4,8,12} x 5 seeds =="
+echo "== main sweep (delay-driven): 5 baselines x failed{0,2,4,8,12} x 5 seeds =="
 for f in $FAILEDS; do for s in $SEEDS; do
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious "$f" "$TOPO" "$s" "$CM" flow,sink "expA_ops_f${f}_s${s}" "$OUT"
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      "$f" "$TOPO" "$s" "$CM" flow,sink "expA_reps_f${f}_s${s}" "$OUT"
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_EPOCH="$OUT/expA_prism_f${f}_s${s}.epoch.csv" \
     bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow,sink "expA_prism_f${f}_s${s}" "$OUT"
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps  "$f" "$TOPO" "$s" "$CM" flow,sink "expA_strack_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc ecmp "$f" "$TOPO" "$s" "$CM" flow,sink "expA_ecmp_f${f}_s${s}" "$OUT"
 done; done
 
 echo "== mechanism condition: failed=8, seed=13, 4MB workload (CM_MECH), all 4 with PRISM_PATHRTT =="

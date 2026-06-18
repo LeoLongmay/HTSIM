@@ -11,6 +11,7 @@ COLORS = {
     "reps": "tab:blue",
     "strack": "tab:orange",
     "prism": "tab:green",
+    "ecmp": "tab:purple",  # single-path (no spray) anchor
     "ccc": "tab:red",      # C_cc / floor
     "spray": "tab:orange",  # C_spray / spread band
     "target": "gray",
