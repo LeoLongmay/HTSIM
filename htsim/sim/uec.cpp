@@ -11,6 +11,7 @@
 #include "pciemodel.h"
 #include "prism_decompose.h"  // PRISM decomposition logic (used by updateCwndOnAck_PRISM)
 #include "strack_cc.h"               // STrack decision tree (used by updateCwndOnAck_STRACK)
+#include "mnscc_median.h"            // MNSCC median framework (used by updateCwndOnAck_MNSCC)
 
 using namespace std;
 
@@ -97,6 +98,7 @@ simtime_picosec UecSrc::_adjust_period_threshold = timeFromUs(12u);
 simtime_picosec UecSrc::_target_Qdelay = timeFromUs(6u);
 simtime_picosec UecSrc::_prism_T_spray = 0;   // 0 sentinel: follow _target_Qdelay
 double UecSrc::_prism_kappa = 1.0;
+uint32_t UecSrc::_mnscc_h = 0;
 double UecSrc::_strack_beta = 5.0;   // STrack Table 1 beta scale; tuned in P5 sensitivity
 double UecSrc::_strack_h    = 0.0;   // fixed target (no live hop_count plumbing); see spec §3
 bool     UecSrc::_prism_loss_decomp     = false;
@@ -608,6 +610,10 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 break;
             case STRACK:
                 updateCwndOnAck = &UecSrc::updateCwndOnAck_STRACK;
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;  // reuse NSCC NACK/loss handling
+                break;
+            case MNSCC:
+                updateCwndOnAck = &UecSrc::updateCwndOnAck_MNSCC;
                 updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;  // reuse NSCC NACK/loss handling
                 break;
             default:
@@ -1622,6 +1628,48 @@ void UecSrc::updateCwndOnAck_STRACK(bool skip, simtime_picosec delay, mem_b newl
     if (_flow.flow_id() == _debug_flowid)
         cout << timeAsUs(eventlist().now()) << " flowid " << _flow.flow_id()
              << " final _strack_cwnd " << _cwnd << " _basertt " << timeAsUs(_base_rtt) << endl;
+}
+
+// MNSCC (Gerstein et al. 2026): NSCC driven by the MEDIAN of the last H per-ACK delays instead of
+// the latest delay -> robust to the intermittent high-delay signals a few congested paths inject.
+// H = _mnscc_h>0 ? _mnscc_h : nyquist_h(cwnd in packets) (paper's Nyquist rule, <=4). The ECN bit
+// (skip) stays per-ACK; only the delay signal is medianed. Reuses NSCC verbatim.
+void UecSrc::updateCwndOnAck_MNSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
+    // (a) push this ACK's delay into the ring buffer
+    _mnscc_window[_mnscc_whead] = delay;
+    _mnscc_whead = (_mnscc_whead + 1) % MNSCC_MAX_H;
+    if (_mnscc_wcount < MNSCC_MAX_H) _mnscc_wcount++;
+
+    // (b) choose H: flag override, else Nyquist H = max(min(W/2,4),1), W = cwnd in packets
+    uint32_t w_pkts = (_mtu > 0) ? (uint32_t)(_cwnd / _mtu) : 0;
+    uint32_t H = _mnscc_h > 0 ? min(_mnscc_h, MNSCC_MAX_H)
+                              : (uint32_t)mnscc::nyquist_h((int)w_pkts);
+    uint32_t use = min(H, _mnscc_wcount);
+    if (use < 1) use = 1;
+
+    // (c) median of the most-recent `use` samples (walk back from the last written slot)
+    simtime_picosec recent[MNSCC_MAX_H];
+    for (uint32_t k = 0; k < use; ++k) {
+        uint32_t idx = (_mnscc_whead + MNSCC_MAX_H - 1 - k) % MNSCC_MAX_H;
+        recent[k] = _mnscc_window[idx];
+    }
+    simtime_picosec med = mnscc::median_of(recent, (int)use);
+
+    // (d) env-gated median signal log (mechanism figure): time_ns,flow_id,median_ns
+    {
+        static std::ofstream* mnscc_med_log = [](){
+            const char* p = getenv("MNSCC_MEDIAN");
+            return (p && *p) ? new std::ofstream(p) : nullptr;
+        }();
+        if (mnscc_med_log) {
+            (*mnscc_med_log) << (uint64_t)timeAsNs(eventlist().now()) << ','
+                             << flowId() << ',' << (uint64_t)timeAsNs(med) << '\n';
+            mnscc_med_log->flush();
+        }
+    }
+
+    // (e) reuse NSCC verbatim, with the median substituted for the per-ACK delay
+    updateCwndOnAck_NSCC(skip, med, newly_acked_bytes);
 }
 
 // STrack Algorithm 4 Line #7: cwnd += beta/cwnd. beta carried in mtu^2 units via _strack_beta
