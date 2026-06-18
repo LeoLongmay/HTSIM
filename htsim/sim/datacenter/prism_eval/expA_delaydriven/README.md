@@ -165,7 +165,9 @@ The `.cm` `start` token is picoseconds (verified by the repro.sh start-unit guar
 | rho | goodput (Gbps) REPS / STrack / PRISM | avg FCT (ms) REPS / STrack / PRISM | cr |
 |----:|---|---|---|
 | 0.1 | 156.2 / 156.4 / 155.2 | 0.299 / 0.322 / 0.321 | 1.00 / 1.00 / 1.00 |
+| 0.3 | 441.5 / 441.7 / 451.7 | 0.917 / 1.004 / 0.648 | 1.00 / 1.00 / 1.00 |
 | 0.5 | 564.5 / 560.8 / 726.0 | 3.241 / 3.180 / 1.006 | 1.00 / 1.00 / 1.00 |
+| 0.7 | 627.5 / 624.3 / 799.2 | 4.998 / 5.112 / 2.712 | 1.00 / 1.00 / 1.00 |
 | 0.9 | 651.6 / 665.8 / 778.9 | 7.254 / 7.324 / 5.362 | 1.00 / 1.00 / 1.00 |
 
 Note: ECMP cr drops to 0.98 at rho=0.5, 0.68 at rho=0.7, and 0.52 at rho=0.9; OPS cr drops to
@@ -183,5 +185,5 @@ arms' effective headroom. All REPS / STrack / PRISM cr = 1.00 at every rho (FCT 
 
 ## Reproduce
 ```
-bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~100 sweep + 4 mechanism sims
+bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~175 failed-sweep + 4 mechanism + 125 offered-load sims
 ```

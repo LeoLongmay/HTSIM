@@ -41,7 +41,7 @@ assert 0.0079 < starts[-1] < 0.0081, f"start-unit NOT picoseconds / overflow (st
 print("ok start-unit = picoseconds, no overflow at 8ms:", starts)
 PY
 
-echo "== main sweep (delay-driven): 5 baselines x failed{0,2,4,8,12} x 5 seeds =="
+echo "== main sweep (delay-driven): 5 baselines x failed{0,2,4,6,8,10,12} x 5 seeds =="
 for f in $FAILEDS; do for s in $SEEDS; do
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious "$f" "$TOPO" "$s" "$CM" flow,sink "expA_ops_f${f}_s${s}" "$OUT"
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      "$f" "$TOPO" "$s" "$CM" flow,sink "expA_reps_f${f}_s${s}" "$OUT"
@@ -78,4 +78,4 @@ done
 
 echo "== render figA1dd_{goodput,avg_fct,p99_fct} + figA2dd_{signal,cwnd} =="
 python3 "$HERE/make_figs.py"
-echo "== done: figs/figA1dd_*.{png,pdf} figs/figA2dd_{signal,cwnd}.{png,pdf} =="
+echo "== done: figs/figA1dd_*.{png,pdf} figs/figA2dd_{signal,cwnd}.{png,pdf} figs/figA3dd_load_*.{png,pdf} =="

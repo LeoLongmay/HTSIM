@@ -116,7 +116,7 @@ def render_main_perf(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, f
     plt.close(fig)
     for (lab, disp, _c) in baselines:
         print(f"[{fig_stem}] {disp}: " + " ".join(
-            f"f{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0]:.0f}us,"
+            f"{token}{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0]:.0f}us,"
             f"cr={aggs[lab][f]['cr'][0]:.2f}" for f in failed if aggs[lab].get(f)))
 
 def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f"):
@@ -152,7 +152,7 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
         plt.close(fig)
     for (lab, disp, _c) in baselines:
         print(f"[{stem_prefix}] {disp}: " + " ".join(
-            f"f{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0] / 1000:.3f}ms,"
+            f"{token}{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0] / 1000:.3f}ms,"
             f"p99={aggs[lab][f]['p99_fct'][0] / 1000:.3f}ms,cr={aggs[lab][f]['cr'][0]:.2f}"
             for f in failed if aggs[lab].get(f)))
 
@@ -189,7 +189,7 @@ def render_fairness(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fi
     plt.close(fig)
     for (lab, disp, _c) in baselines:
         cells = [(f, statistics.mean(v)) for f in failed for v in [_fair(lab, f)] if v]
-        print(f"[{fig_stem}] {disp}: " + " ".join(f"f{f}:{m:.3f}" for f, m in cells))
+        print(f"[{fig_stem}] {disp}: " + " ".join(f"{token}{f}:{m:.3f}" for f, m in cells))
 
 def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_failed,
                            target_us=6.0, base_ns=13945, mech_label=None, xlim_ms=None):
