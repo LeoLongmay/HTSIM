@@ -242,5 +242,5 @@ short under asymmetry because the median of spread-inflated samples is still spr
 
 ## Reproduce
 ```
-bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~175 failed-sweep + 4 mechanism + 125 offered-load sims
+bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~210 failed-sweep + 5 mechanism + 150 offered-load sims
 ```

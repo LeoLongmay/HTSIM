@@ -49,7 +49,7 @@ def _read_mnscc_median(path, bin_us=20):
                 continue
             acc[int(p[0]) // (bin_us * 1000)].append(int(p[2]) / 1000.0)  # ns->us
     xs = sorted(acc)
-    return [b * bin_us / 1000.0 for b in xs], [sum(acc[b]) / len(acc[b]) for b in xs]  # x in ms
+    return [(b + 0.5) * bin_us / 1000.0 for b in xs], [sum(acc[b]) / len(acc[b]) for b in xs]  # x in ms
 
 def _bin_series(xs, ys, bin_w):
     """Bin (xs, ys) into width-`bin_w` buckets on x; return (bucket_mid_x, mean_y). Used as a
