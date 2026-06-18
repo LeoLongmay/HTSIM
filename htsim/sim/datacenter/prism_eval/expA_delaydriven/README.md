@@ -183,6 +183,63 @@ is **3.2× lower** (1.006 vs 3.241 ms); at rho=0.9 the goodput lead is +19.5% vs
 slightly from its rho=0.5–0.7 peak to rho=0.9 — consistent with near-saturation compressing all
 arms' effective headroom. All REPS / STrack / PRISM cr = 1.00 at every rho (FCT unconfounded).
 
+## MNSCC (median@NSCC) head-to-head
+
+**What MNSCC is.** MNSCC uses the same NSCC base (ECN-gated per-ACK MD, REPS spray, shared
+`_gamma`/`_eta`/`_target_Qdelay`) but replaces the *instantaneous* delay sample with the
+**median** of the H most recent per-ACK delays, where H = Nyquist max(min(W/2,4),1) ≤ 4
+(controlled by `-mnscc_h`). It is the concurrent design that asks: does a *robust-statistics*
+smoothing of the raw delay already capture what PRISM's floor decomposition captures?
+Degeneracy check: `-mnscc_h 1` makes H=1 (median of one = latest sample = vanilla NSCC), and
+produces byte-identical goodput to REPS+NSCC — MNSCC is a strict superset of NSCC. Overhead:
+PRISM keeps O(1) scalars; MNSCC keeps an O(H) sliding window with H ≤ 4 (small, but not O(1)).
+
+**Failed-sweep results (figA1dd, 6 arms; cr = 1.00 everywhere):**
+
+| -failed | REPS+NSCC | MNSCC (median) | PRISM (floor) | PRISM vs MNSCC | MNSCC vs REPS |
+|---|---|---|---|---|---|
+| 0  | 997 Gbps | **997 Gbps** | 869 Gbps | −12.8% (floor penalty) | ≈0% (tie) |
+| 4  | 483 Gbps | 486 Gbps | **574 Gbps** | **+18.2%** | +0.7% |
+| 8  | 431 Gbps | 444 Gbps | **504 Gbps** | **+13.7%** | +2.9% |
+| 12 | 379 Gbps | 392 Gbps | **434 Gbps** | **+10.8%** | +3.4% |
+
+avg-FCT at failed=8: Prism 1.518 ms / MNSCC 1.640 ms / REPS 1.694 ms.
+
+**Offered-load sweep results (figA3dd_load, failed=8; cr = 1.00 for REPS/MNSCC/PRISM everywhere):**
+
+| rho | REPS+NSCC | MNSCC | PRISM | PRISM vs MNSCC | MNSCC vs REPS |
+|---|---|---|---|---|---|
+| 0.1 | 156.2 Gbps | 157.7 Gbps | 155.2 Gbps | tie (near-idle) | tie |
+| 0.5 | 564.5 Gbps | 581.6 Gbps | **726.0 Gbps** | **+24.8%** | +3.0% |
+| 0.9 | 651.6 Gbps | 663.6 Gbps | **778.9 Gbps** | **+17.4%** | +1.8% |
+
+avg-FCT at rho=0.5: Prism 1.006 ms / MNSCC 2.855 ms / REPS 3.241 ms (Prism ~2.8× lower than
+MNSCC). avg-FCT at rho=0.9: Prism 5.362 ms / MNSCC 6.957 ms / REPS 7.254 ms.
+
+**Mechanism panel (figA2dd_signal, failed=8 4 MB illustration).** The signal panel now overlays
+MNSCC's median-delay line alongside REPS+NSCC's avg and STrack's avg (both averaging families
+sit near/above the ~14 µs target) and PRISM's per-epoch floor `C_cc` (which stays largely
+**below** the target). Per-ACK cwnd cuts: Prism 954 (floor-MD fraction 0.374), REPS+NSCC 4344,
+STrack 4987. MNSCC's median-smoothed signal also sits above the target in steady state — the
+median, like the mean, is pushed up by reroutable spread, just slightly less so than the average.
+PRISM makes far fewer cuts by acting only when even the *best* path is congested.
+
+**Honest verdict (min vs median tradeoff).**
+- **Floor beats median under asymmetry/load (+11–18% goodput at failed ≥ 4; +17–25% goodput at
+  ρ ≥ 0.5; ~2.8× lower avg-FCT at ρ=0.5).** MNSCC's H ≤ 4 Nyquist window does not capture the
+  floor: the median of a small window of inflated-by-spread delay samples is still inflated.
+  This matches the MNSCC paper's own finding that the small H limits the median's effect.
+- **MNSCC modestly improves REPS+NSCC (+0.7–3.4% goodput at failed ≥ 4).** The median shaves
+  some noise but does not eliminate the reroutable-spread bias.
+- **At f0 (symmetric) MNSCC ties REPS (no penalty) while PRISM pays its known f0 cost.**  The
+  median correctly backs off on the symmetric startup transient that PRISM's floor HOLDs through.
+  This is the one place the median is better-calibrated than the floor.
+
+So MNSCC is a faithful, non-strawman baseline — it makes the natural robust-statistics choice on
+the same NSCC base — and the comparison cleanly isolates **floor vs median** as the design axis.
+MNSCC is not a weaker NSCC; it is a genuine attempt at the same robustness goal, and it falls
+short under asymmetry because the median of spread-inflated samples is still spread-inflated.
+
 ## Reproduce
 ```
 bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~175 failed-sweep + 4 mechanism + 125 offered-load sims

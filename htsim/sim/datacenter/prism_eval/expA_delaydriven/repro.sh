@@ -19,6 +19,7 @@ echo "== self-test analysis =="
 python3 "$HERE/make_figs.py" --selftest
 ( cd "$COMMON/tests" && python3 test_metrics.py >/dev/null && echo "ok common metrics selftest" )
 ( cd "$DC/.." && g++ -I. datacenter/prism_eval/common/tests/test_strack_cc.cpp -o /tmp/test_strack_cc && /tmp/test_strack_cc )
+( cd "$DC/.." && g++ -I. datacenter/prism_eval/common/tests/test_mnscc_median.cpp -o /tmp/test_mnscc_median && /tmp/test_mnscc_median )
 
 echo "== generate workload (many2many: 64 -> 16 pod0, 2MB) =="
 python3 "$COMMON/gen/many2many.py" "$REL/data/m2m.cm" 64 16 pairs 2000000 128 16
@@ -41,7 +42,7 @@ assert 0.0079 < starts[-1] < 0.0081, f"start-unit NOT picoseconds / overflow (st
 print("ok start-unit = picoseconds, no overflow at 8ms:", starts)
 PY
 
-echo "== main sweep (delay-driven): 5 baselines x failed{0,2,4,6,8,10,12} x 5 seeds =="
+echo "== main sweep (delay-driven): 6 baselines x failed{0,2,4,6,8,10,12} x 5 seeds =="
 for f in $FAILEDS; do for s in $SEEDS; do
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious "$f" "$TOPO" "$s" "$CM" flow,sink "expA_ops_f${f}_s${s}" "$OUT"
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      "$f" "$TOPO" "$s" "$CM" flow,sink "expA_reps_f${f}_s${s}" "$OUT"

@@ -40,7 +40,14 @@ only inferred. (`../../uec.cpp` `updateCwndOnAck_PRISM`; pure logic `../../prism
   delay-MD): under asymmetry (failed ≥ 4) PRISM beats the *decoupled* REPS+NSCC **and** the
   *coupled-SOTA* STrack on both goodput (+19–22%) and FCT (7–12% lower). Crucially STrack
   (coupled, but averaging) does **not** beat REPS+NSCC — so the win is from *decomposing the
-  signal*, not from coupling per se. `expA_tspray_tuning/` sharpens it: tightening `T_spray`
+  signal*, not from coupling per se. The same experiment adds **MNSCC** (median@NSCC, H ≤ 4
+  Nyquist window), the concurrent design that asks whether robust-statistics smoothing on the
+  shared NSCC base already captures what the floor does: MNSCC only modestly improves REPS+NSCC
+  (+0.7–3.4% goodput at failed ≥ 4), while PRISM's floor beats MNSCC's median by +11–18%
+  goodput under asymmetry and +17–25% / ~2.8× lower avg-FCT under load — the median of
+  spread-inflated samples remains spread-inflated; the one place the median wins is at f0
+  (symmetric), where it ties REPS with no penalty while PRISM pays its known floor over-permit
+  cost (`figA2dd_signal`, `figA1dd`). `expA_tspray_tuning/` sharpens it: tightening `T_spray`
   (the spread tolerance) below the ~14 µs default widens the lead to **+25–33%** over both, at
   no symmetric cost. This is the head-to-head cost the motivation said it had not yet run.
   The advantage is also load-dependent: swept over offered load at fixed asymmetry (`figA3dd_load`),
@@ -116,6 +123,7 @@ in `TARGET_REGIME.md`.
 | Motivation | `../mvp_runs3/README_repro.md` (figA–figI) | both mechanisms necessary; CC optimum coupled to LB regime |
 | Mechanism | `../../prism_decompose.h`, `../../uec.cpp` | PRISM decomposes floor (CC) vs spread (spraying) |
 | Eval (win) | `expA_delaydriven/`, `expA_tspray_tuning/` | reroutable + delay-driven: +25–33% over REPS+NSCC & STrack |
+| Eval (vs median CC) | `expA_delaydriven/` (MNSCC arm, figA2dd_signal) | PRISM floor beats MNSCC median under asymmetry/load (+11–25%); MNSCC only modestly > REPS+NSCC; median avoids PRISM's f0 cost |
 | Eval (win, load) | `expA_delaydriven/` (figA3dd_load) | open-loop offered-load sweep: PRISM's FCT lead widens with load under asymmetry |
 | Eval (win, oversub) | `expB_oversub_asym/` | asymmetric win extends to a 4:1 oversubscribed core (+14–32%); 8:1 = saturation boundary |
 | Eval (scale) | `expD_scale1024/` | both headline wins hold undiluted at 1024 nodes (8×); 8:1 becomes a graceful-degradation win |
