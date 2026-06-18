@@ -18,6 +18,8 @@ BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
 FAILED = [0, 2, 4, 6, 8, 10, 12]
 SEEDS = [13, 14, 15, 16, 17]
 XLABEL = "# constrained core->agg links (-failed)"
+LOADS = [10, 30, 50, 70, 90]   # offered load rho*100 (% of 1.6 Tbps receiver-access capacity)
+XLABEL_LOAD = "offered load (% of receiver-access capacity, 1.6 Tbps)"
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
@@ -27,3 +29,5 @@ if __name__ == "__main__":
         perf_figs.render_main_perf_split(DATA, FIGS, "expA", BASELINES, FAILED, SEEDS, "figA1dd", XLABEL)
         perf_figs.render_fairness(DATA, FIGS, "expA", BASELINES, FAILED, SEEDS, "figA1dd_fairness", XLABEL)
         perf_figs.render_mechanism_split(DATA, FIGS, "expA", "figA2dd", 8, xlim_ms=3.0)
+        perf_figs.render_main_perf_split(DATA, FIGS, "expAload", BASELINES, LOADS, SEEDS,
+                                         "figA3dd_load", XLABEL_LOAD, token="L")
