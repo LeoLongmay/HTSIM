@@ -256,7 +256,7 @@ everywhere (FCT unconfounded).
 
 | -failed | REPS+NSCC | MNSCC (median) | STrack (coupled) | Swift (delay-AIMD) | PRISM (floor) | PRISM vs Swift |
 |---|---|---|---|---|---|---|
-| 0  | 997 Gbps | 998 Gbps | 912 Gbps | **864 Gbps** | 869 Gbps | −0.5% (tied small dip) |
+| 0  | 997 Gbps | 998 Gbps | 912 Gbps | **864 Gbps** | 869 Gbps | +0.5% (tied small dip) |
 | 4  | 483 Gbps | 486 Gbps | 471 Gbps | 469 Gbps | **574 Gbps** | **+22.5%** |
 | 8  | 431 Gbps | 444 Gbps | 415 Gbps | 445 Gbps | **504 Gbps** | **+13.3%** |
 | 12 | 379 Gbps | 392 Gbps | 364 Gbps | 397 Gbps | **434 Gbps** | **+9.2%** |

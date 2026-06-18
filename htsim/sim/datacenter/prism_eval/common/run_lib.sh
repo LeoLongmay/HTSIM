@@ -7,7 +7,7 @@
 # Usage:
 #   bash common/run_lib.sh CC LB FAILED TOPO SEED CM LOGSPEC TAG OUTDIR
 # Positional args:
-#   CC       sender_cc_algo: nscc|dctcp|constant|prism|strack
+#   CC       sender_cc_algo: nscc|dctcp|constant|prism|strack|mnscc|swift
 #   LB       load_balancing_algo: reps|oblivious|ecmp|...
 #   FAILED   # degraded core->agg downlinks (0 = none)
 #   TOPO     topology filename under topologies/ (e.g. fat_tree_128_1os.topo)
