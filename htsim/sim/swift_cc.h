@@ -25,7 +25,7 @@ inline uint64_t target_delay_q(double cwnd_pkts, uint64_t base_q, double a, doub
     double fs = a / std::sqrt(cwnd_pkts) + b;
     if (fs > fs_range) fs = fs_range;
     if (fs < 0.0) fs = 0.0;
-    return base_q + (uint64_t)fs;
+    return base_q + (uint64_t)std::round(fs);
 }
 
 // Algorithm 1 MD factor: max(1 - beta*(delay-target)/delay, 1 - max_mdf).

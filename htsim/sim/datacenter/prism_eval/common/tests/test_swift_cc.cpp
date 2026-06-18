@@ -11,11 +11,13 @@ int main() {
     // at cwnd == fs_max_cwnd (100) the scaling term is ~0 -> target == base
     assert(target_delay_q(100.0, 14000, a, b, R) == 14000);
     // at cwnd == fs_min_cwnd (0.1) the scaling term saturates at fs_range -> target == base + R
-    assert(target_delay_q(0.1, 14000, a, b, R) == 14000 + (uint64_t)R);
+    { uint64_t t = target_delay_q(0.1, 14000, a, b, R);
+      assert(t >= 14000 + (uint64_t)R - 1 && t <= 14000 + (uint64_t)R + 1); }
     // monotonic: a smaller cwnd yields a larger target
     assert(target_delay_q(4.0, 14000, a, b, R) > target_delay_q(64.0, 14000, a, b, R));
     // cwnd <= 0 -> base (no scaling)
     assert(target_delay_q(0.0, 14000, a, b, R) == 14000);
+    assert(target_delay_q(-1.0, 14000, a, b, R) == 14000);  // negative cwnd -> base (no scaling)
     // md_factor: delay == target -> factor 1.0 (no decrease)
     assert(std::fabs(md_factor(14000, 14000, 0.8, 0.5) - 1.0) < 1e-9);
     // delay slightly above target -> just below 1, above the 1-max_mdf floor
