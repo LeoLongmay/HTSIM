@@ -43,6 +43,9 @@ only inferred. (`../../uec.cpp` `updateCwndOnAck_PRISM`; pure logic `../../prism
   signal*, not from coupling per se. `expA_tspray_tuning/` sharpens it: tightening `T_spray`
   (the spread tolerance) below the ~14 µs default widens the lead to **+25–33%** over both, at
   no symmetric cost. This is the head-to-head cost the motivation said it had not yet run.
+  The advantage is also load-dependent: swept over offered load at fixed asymmetry (`figA3dd_load`),
+  PRISM ~ties near-idle (no reroutable spread yet) and its FCT lead over REPS+NSCC and STrack widens as
+  load approaches saturation — the floor-vs-spread structure of figS only becomes actionable once queues build.
 - **The win extends to an oversubscribed core, and holds at 1024-node scale.**
   `expB_oversub_asym/`: the same asymmetric advantage generalizes from the 1:1 non-blocking fabric
   to a moderately-oversubscribed **4:1** core — **+14–32%** goodput over both REPS+NSCC and STrack
@@ -113,6 +116,7 @@ in `TARGET_REGIME.md`.
 | Motivation | `../mvp_runs3/README_repro.md` (figA–figI) | both mechanisms necessary; CC optimum coupled to LB regime |
 | Mechanism | `../../prism_decompose.h`, `../../uec.cpp` | PRISM decomposes floor (CC) vs spread (spraying) |
 | Eval (win) | `expA_delaydriven/`, `expA_tspray_tuning/` | reroutable + delay-driven: +25–33% over REPS+NSCC & STrack |
+| Eval (win, load) | `expA_delaydriven/` (figA3dd_load) | open-loop offered-load sweep: PRISM's FCT lead widens with load under asymmetry |
 | Eval (win, oversub) | `expB_oversub_asym/` | asymmetric win extends to a 4:1 oversubscribed core (+14–32%); 8:1 = saturation boundary |
 | Eval (scale) | `expD_scale1024/` | both headline wins hold undiluted at 1024 nodes (8×); 8:1 becomes a graceful-degradation win |
 | Eval (cost) | `expA_delaydriven/` (f0) | symmetric fabric: small penalty |

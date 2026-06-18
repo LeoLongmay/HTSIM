@@ -149,6 +149,38 @@ per-ACK cwnd cuts vs REPS+NSCC 4344** (~4.6× fewer; STrack 4987). PRISM reaches
 goodput with far fewer rate reductions — the on-thesis "control correctness" advantage
 (floor-MD fraction 0.374).
 
+## Offered-load sweep + ECMP anchor
+
+**ECMP+NSCC** (single path per flow, `LB=ecmp CC=nscc`) is added to the `-failed` sweep as the
+conventional no-spray anchor: under asymmetry it is the worst arm (f8 goodput 225.1 Gbps vs
+430.8 for REPS+NSCC, 414.6 for STrack, 504.2 for PRISM; P99 FCT at f8 4.49 ms vs ~2.0–2.4 ms
+for the others), bracketing — with OPS — the contribution of spraying. It is *context*, not
+PRISM's competition (REPS+NSCC and STrack are).
+
+**Offered-load figure** (`figA3dd_load_*`): open-loop Poisson arrivals (`common/gen/poisson_load.py`),
+fixed 2 MB flows, `-failed 8`. Offered load rho is relative to aggregate receiver-access capacity
+C = 16 x 100 Gbps = 1.6 Tbps; lambda = rho*C/(2MB*8). Window 8 ms, END 20 ms, seeds {13-17}.
+The `.cm` `start` token is picoseconds (verified by the repro.sh start-unit guard; window_us is converted x1e6 to ps in poisson_load.py).
+
+| rho | goodput (Gbps) REPS / STrack / PRISM | avg FCT (ms) REPS / STrack / PRISM | cr |
+|----:|---|---|---|
+| 0.1 | 156.2 / 156.4 / 155.2 | 0.299 / 0.322 / 0.321 | 1.00 / 1.00 / 1.00 |
+| 0.5 | 564.5 / 560.8 / 726.0 | 3.241 / 3.180 / 1.006 | 1.00 / 1.00 / 1.00 |
+| 0.9 | 651.6 / 665.8 / 778.9 | 7.254 / 7.324 / 5.362 | 1.00 / 1.00 / 1.00 |
+
+Note: ECMP cr drops to 0.98 at rho=0.5, 0.68 at rho=0.7, and 0.52 at rho=0.9; OPS cr drops to
+0.96 at rho=0.7 and 0.66 at rho=0.9. At these high-rho points ECMP and OPS FCT are **confounded
+by incompletion** and cannot be compared cleanly — flagged on the figure.
+
+Reading: near-idle (rho=0.1) the fabric carries little queue, there is no reroutable spread to
+decompose, and PRISM ~ties REPS+NSCC (−0.6% goodput; FCT within noise). As rho approaches
+saturation under the f8 asymmetry the reroutable spread appears and PRISM's lead over both
+REPS+NSCC and STrack widens: at rho=0.5, PRISM goodput is **+28.6%** vs REPS+NSCC and avg FCT
+is **3.2× lower** (1.006 vs 3.241 ms); at rho=0.9 the goodput lead is +19.5% vs REPS+NSCC and
++17.0% vs STrack, with FCT ~26% lower than REPS+NSCC (5.362 vs 7.254 ms). The lead narrows
+slightly from its rho=0.5–0.7 peak to rho=0.9 — consistent with near-saturation compressing all
+arms' effective headroom. All REPS / STrack / PRISM cr = 1.00 at every rho (FCT unconfounded).
+
 ## Reproduce
 ```
 bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~100 sweep + 4 mechanism sims
