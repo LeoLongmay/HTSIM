@@ -27,7 +27,7 @@ BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
 SEEDS = [13, 14, 15, 16, 17]
 
 # D1: 1:1 delay-driven. failed = pod0 core-ingress choke {0,12.5,25,37.5,50,75}%.
-FAILED_D1 = [0, 8, 16, 24, 32, 48]
+FAILED_D1 = [0, 8, 16, 24, 32, 40, 48]
 XLABEL_D1 = "# constrained core->agg uplinks (-failed; pod0 has 64)"
 # D2: oversub. 4:1 cr=1 win window; 8:1 saturation boundary (cr reported on the figure).
 FAILED_4OS = [0, 1, 2, 3, 4]

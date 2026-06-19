@@ -44,7 +44,7 @@ run() { # cc lb failed topo end seed cm logspec tag  [extra env applied by calle
 }
 
 echo "== D1 sweep: 1:1, -failed {0,8,16,24,32,48} x 7 arms x 5 seeds =="
-for f in 0 8 16 24 32 48; do for s in $SEEDS; do
+for f in 0 8 16 24 32 40 48; do for s in $SEEDS; do
   run nscc   oblivious "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_ops_f${f}_s${s}"
   run nscc   reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_reps_f${f}_s${s}"
   PRISM_EPOCH="$OUT/expD1_prism_f${f}_s${s}.epoch.csv" \
