@@ -154,6 +154,9 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
                         color=plot_style.COLORS[ck], label=disp)
         ax.set_ylabel(ylabel)
         ax.set_xlabel(xlabel)
+        if key == "goodput":
+            ax.yaxis.set_label_coords(-0.2, 0.45)
+            ax.xaxis.label.set_x(0.45)
         ax.set_xticks(failed)
         ax.grid(alpha=0.3)
         # ax.legend(fontsize=9)
@@ -179,27 +182,29 @@ def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None):
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
     from matplotlib.legend import Legend
-    plot_style.apply_style(13)
+    plot_style.apply_style(10)
     handles = [Line2D([], [], marker="o", lw=2.0, ms=6, color=plot_style.COLORS[ck], label=disp)
                for (lab, disp, ck) in baselines]
     if row_counts:
         n = len(row_counts)
-        fig = plt.figure(figsize=(3.0 * max(row_counts), 1.0 * n))   # generous; tight-crop trims excess
+        fig = plt.figure(figsize=(2.6 * max(row_counts), 0.42 * n))   # short -> rows close; tight-crop trims
         ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
         i = 0
         for r, cnt in enumerate(row_counts):
             row = handles[i:i + cnt]; i += cnt
             y = 1.0 - (r + 0.5) / n   # rows top-to-bottom; each row centered on x=0.5 -> shared centerline
             leg = Legend(ax, row, [h.get_label() for h in row], ncol=cnt, loc="center",
-                         bbox_to_anchor=(0.5, y), bbox_transform=ax.transAxes,
-                         frameon=False, fontsize=24)
+                         bbox_to_anchor=(0.5, y), bbox_transform=ax.transAxes, frameon=False, fontsize=20,
+                         handlelength=1.4, handletextpad=0.4, columnspacing=1.0, borderpad=0.1, borderaxespad=0.0)
             ax.add_artist(leg)
         desc = f"rows={row_counts}, centered"
     else:
-        fig = plt.figure(figsize=(0.1, 0.1))
-        fig.legend(handles=handles, ncol=(ncol or len(baselines)), loc="center", frameon=False, fontsize=24)
+        fig = plt.figure(figsize=(0.12, 0.1))
+        fig.legend(handles=handles, ncol=(ncol or len(baselines)), loc="center", frameon=False, fontsize=20)
         desc = f"ncol={ncol or len(baselines)}, single row"
-    plot_style.save(fig, fig_stem, figs_dir)
+    os.makedirs(figs_dir, exist_ok=True)
+    for ext in ("png", "pdf"):   # tighter crop than plot_style.save (pad 0.02 vs 0.04) for a compact legend
+        fig.savefig(os.path.join(figs_dir, f"{fig_stem}.{ext}"), bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
     print(f"[{fig_stem}] standalone legend: {len(handles)} entries, {desc}")
 
