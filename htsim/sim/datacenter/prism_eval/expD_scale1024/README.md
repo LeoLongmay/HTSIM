@@ -491,7 +491,7 @@ At L10% all arms are close on goodput (light load, little queuing). The PRISM go
 emerges sharply at moderate-to-high load (L50–L70%): +6–17% vs REPS+NSCC/STrack/REPS+MNSCC and
 +24–41% vs REPS+Swift at L70%, still at cr = 1.00.
 
-The avg-FCT win is even more dramatic: at L50% Prism avg-FCT (0.709 ms) is 2.1× lower than
+The avg-FCT win is even more dramatic: at L50% Prism avg-FCT (0.709 ms) is 1.8× lower than
 REPS+NSCC (1.287 ms) and 3.6× lower than REPS+Swift (2.548 ms). At L70% Prism avg-FCT is 0.932 ms
 vs REPS+NSCC 1.652 ms (−43.6%) and vs REPS+Swift 3.845 ms (−75.8%). P99-FCT similarly: at L50%
 Prism P99 = 1.389 ms vs REPS+NSCC 6.221 ms (4.5× lower).
