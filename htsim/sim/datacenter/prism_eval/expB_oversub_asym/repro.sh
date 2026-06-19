@@ -24,6 +24,8 @@ declare -A TOPO=( [4os]=fat_tree_128_4os.topo [8os]=fat_tree_128_8os.topo )
 echo "== selftest =="
 python3 "$HERE/make_figs.py" --selftest
 ( cd "$COMMON/tests" && python3 test_metrics.py >/dev/null && echo "ok common metrics selftest" )
+( cd "$DC/.." && g++ -I. datacenter/prism_eval/common/tests/test_swift_cc.cpp -o /tmp/test_swift_cc && /tmp/test_swift_cc )
+( cd "$DC/.." && g++ -I. datacenter/prism_eval/common/tests/test_mnscc_median.cpp -o /tmp/test_mnscc_median && /tmp/test_mnscc_median )
 
 echo "== workload (many2many 64->16 pod0, 2MB) =="
 python3 "$COMMON/gen/many2many.py" "$REL/data/m2m.cm" 64 16 pairs 2000000 128 16
@@ -39,6 +41,9 @@ for R in 8os 4os; do
     PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_EPOCH="$OUT/expBa${R}_prism_f${f}_s${s}.epoch.csv" \
       bash "$COMMON/run_lib.sh" prism reps "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_prism_f${f}_s${s}" "$OUT"
     PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps   "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_strack_f${f}_s${s}" "$OUT"
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift  reps "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_swift_f${f}_s${s}"  "$OUT"
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_mswift_f${f}_s${s}" "$OUT"
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc  reps "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_mnscc_f${f}_s${s}"  "$OUT"
   done; done
 done
 

@@ -20,7 +20,9 @@ import perf_figs  # noqa: E402
 
 DATA = os.path.join(HERE, "data"); FIGS = os.path.join(HERE, "figs")
 BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
-             ("strack", "STrack", "strack"), ("prism", "Prism", "prism")]
+             ("swift", "REPS+Swift", "swift"), ("mswift", "REPS+MSwift", "mswift"),
+             ("mnscc", "REPS+MNSCC", "mnscc"), ("strack", "STrack", "strack"),
+             ("prism", "Prism", "prism")]
 SEEDS = [13, 14, 15, 16, 17]
 # x = requested -failed. 8:1 is the real asymmetry axis (degraded {0,3,7,15} of 16; failed=8 = near-
 # total core loss). 4:1 is a degenerate reference (degraded {0,1,2,3} of 32 -- knob barely acts).
