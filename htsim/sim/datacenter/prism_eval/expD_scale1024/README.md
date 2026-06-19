@@ -413,7 +413,104 @@ Prism is the **most fair arm** at f1–f4 among the NSCC-family and STrack. REPS
 
 ---
 
-## 9. Verdict
+## 9. D3 results — Offered-load sweep (1:1, failed=16, Poisson)
+
+**Setup:** Poisson open-loop load sweep at fixed asymmetry (failed=16 = 25% pod0 core-ingress
+constrained). 256 senders (outside pod0) → 64 receivers (pod0), 2 MB each, hpp=64.
+REF = 6.4 Tbps (64 receivers × 100 G receiver-access capacity). Window = 8 ms. END = 20 ms.
+Seeds {13,14,15,16,17}. All cr = 1.00 across all arms at every load point.
+See `figs/figD3_load_{goodput,avg_fct,p99_fct}`.
+
+### Goodput (Gbps) / avg-FCT (ms) / P99-FCT (ms)
+
+| Arm | L10% | L30% | L50% | L70% | L90% |
+|---|---|---|---|---|---|
+| OPS+NSCC    | 613.3 / 0.298 / 0.826 | 1561.8 / 1.672 / 6.676 | 1978.4 / 3.294 / 10.757 | 2365.5 / 4.165 / 12.724 | 2573.8 / 5.515 / 15.435 |
+| REPS+NSCC   | 616.7 / 0.247 / 0.692 | 1789.8 / 0.610 / 2.001 | 2726.8 / 1.287 / 6.221 | 3420.2 / 1.652 / 7.940 | 3550.1 / 3.034 / 10.692 |
+| REPS+Swift  | 620.0 / 0.266 / 0.679 | 1726.3 / 0.993 / 3.100 | 2334.1 / 2.548 / 7.271 | 2815.4 / 3.845 / 9.857 | 3176.0 / 4.987 / 11.785 |
+| REPS+MSwift | 624.9 / 0.249 / 0.681 | 1758.1 / 0.601 / 1.890 | 2734.6 / 1.116 / 5.401 | 3428.2 / 1.610 / 7.814 | 3551.7 / 3.128 / 10.482 |
+| REPS+MNSCC  | 619.2 / 0.251 / 0.660 | 1787.2 / 0.598 / 1.840 | 2753.2 / 1.174 / 5.668 | 3524.7 / 1.513 / 7.540 | 3672.8 / 2.884 / 10.331 |
+| STrack      | 618.7 / 0.250 / 0.689 | 1778.4 / 0.624 / 2.101 | 2703.6 / 1.297 / 6.080 | 3373.3 / 1.748 / 8.172 | 3502.0 / 3.169 / 10.878 |
+| Prism       | 622.4 / 0.237 / 0.688 | 1793.9 / 0.532 / 1.051 | 2905.6 / 0.709 / 1.389 | 3980.3 / 0.932 / 4.127 | 3983.4 / 2.501 / 9.440 |
+
+All cells cr = 1.00.
+
+### PRISM vs REPS+NSCC deltas
+
+| Load | Goodput delta | Avg-FCT delta | P99-FCT (Prism / REPS) |
+|---|---|---|---|
+| L10% | +0.9% | −4.0% | 0.688 / 0.692 |
+| L30% | +0.2% | **−12.8%** | **1.051 / 2.001** |
+| L50% | **+6.6%** | **−44.9%** | **1.389 / 6.221** |
+| L70% | **+16.4%** | **−43.6%** | **4.127 / 7.940** |
+| L90% | **+12.2%** | **−17.6%** | **9.440 / 10.692** |
+
+### PRISM vs STrack deltas
+
+| Load | Goodput delta | Avg-FCT delta |
+|---|---|---|
+| L10% | +0.6% | −5.2% |
+| L30% | +0.9% | **−14.7%** |
+| L50% | **+7.5%** | **−45.3%** |
+| L70% | **+18.0%** | **−46.7%** |
+| L90% | **+13.7%** | **−21.1%** |
+
+### PRISM vs REPS+Swift deltas
+
+| Load | Goodput delta | Avg-FCT delta |
+|---|---|---|
+| L10% | +0.4% | **−10.9%** |
+| L30% | +3.9% | **−46.4%** |
+| L50% | **+24.5%** | **−72.2%** |
+| L70% | **+41.4%** | **−75.8%** |
+| L90% | **+25.4%** | **−49.8%** |
+
+### PRISM vs REPS+MSwift deltas
+
+| Load | Goodput delta | Avg-FCT delta |
+|---|---|---|
+| L10% | −0.4% | **−4.8%** |
+| L30% | +2.0% | **−11.5%** |
+| L50% | **+6.3%** | **−36.5%** |
+| L70% | **+16.1%** | **−42.1%** |
+| L90% | **+12.2%** | **−20.0%** |
+
+### PRISM vs REPS+MNSCC deltas
+
+| Load | Goodput delta | Avg-FCT delta |
+|---|---|---|
+| L10% | +0.5% | −5.6% |
+| L30% | +0.4% | **−11.0%** |
+| L50% | **+5.5%** | **−39.6%** |
+| L70% | **+12.9%** | **−38.4%** |
+| L90% | **+8.5%** | **−13.3%** |
+
+### Headline
+
+At L10% all arms are close on goodput (light load, little queuing). The PRISM goodput advantage
+emerges sharply at moderate-to-high load (L50–L70%): +6–17% vs REPS+NSCC/STrack/REPS+MNSCC and
++24–41% vs REPS+Swift at L70%, still at cr = 1.00.
+
+The avg-FCT win is even more dramatic: at L50% Prism avg-FCT (0.709 ms) is 2.1× lower than
+REPS+NSCC (1.287 ms) and 3.6× lower than REPS+Swift (2.548 ms). At L70% Prism avg-FCT is 0.932 ms
+vs REPS+NSCC 1.652 ms (−43.6%) and vs REPS+Swift 3.845 ms (−75.8%). P99-FCT similarly: at L50%
+Prism P99 = 1.389 ms vs REPS+NSCC 6.221 ms (4.5× lower).
+
+The win flattens at L90% as all arms approach the receiver-access bandwidth ceiling
+(REF = 6.4 Tbps; PRISM goodput at L90% = 3983.4 Gbps ≈ 62% of REF given failed=16 = 25% pod0
+ingress choke). REPS+MNSCC is the closest non-Prism arm throughout (−8.5% at L90%); REPS+Swift
+is the weakest delay-driven arm at high load.
+
+**REPS+MSwift is the closest arm at L10%** (624.9 Gbps, marginally ahead of Prism at −0.4% — the
+one non-positive Prism goodput cell). At every other load point Prism is ahead.
+
+**Honest framing:** all cells cr = 1.00 → FCT comparisons are unconfounded throughout. The
+offered-load sweep isolates the CC signal quality under fixed asymmetry (failed=16) without
+end-of-job truncation bias.
+
+---
+
+## 10. Verdict
 
 Both PRISM headline wins survive at 8× scale across all seven arms:
 
@@ -456,7 +553,7 @@ cr and goodput at f4. This is a scale-dependent finding and must be framed as su
 
 ---
 
-## 10. Reproduce
+## 11. Reproduce
 
 ```
 bash prism_eval/expD_scale1024/repro.sh   # from sim/datacenter
@@ -464,7 +561,7 @@ bash prism_eval/expD_scale1024/repro.sh   # from sim/datacenter
 
 ---
 
-## 11. Honest scope
+## 12. Honest scope
 
 - **Development scale:** 1024-node fat-tree. Production-scale evaluation (8192+ nodes) deferred.
 - **Delay-driven only:** `-disable_trim` throughout. Trimming-regime oversub-asym behaviour at

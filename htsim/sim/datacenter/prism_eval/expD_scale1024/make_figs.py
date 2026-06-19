@@ -34,6 +34,9 @@ FAILED_4OS = [0, 1, 2, 3, 4]
 FAILED_8OS = [0, 1, 2, 4]
 XLABEL_4OS = "requested -failed (4:1 oversub, 100G, delay-driven)"
 XLABEL_8OS = "requested -failed (8:1 oversub, delay-driven; saturates)"
+# D3: offered-load sweep (Poisson, failed=16, 1:1).
+LOADS = [10, 30, 50, 70, 90]
+XLABEL_LOAD = "offered load (% of receiver-access capacity, 6.4 Tbps; failed=16)"
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
@@ -54,3 +57,6 @@ if __name__ == "__main__":
                                   "figD2_4os_fairness", XLABEL_4OS)
         perf_figs.render_mechanism(DATA, FIGS, "expD2_4os", "figD2_mech", 4,
                                    mech_label="4:1 oversub (100G), failed=4 (cr=1 win point)")
+        # --- D3 (offered-load sweep) ---
+        perf_figs.render_main_perf_split(DATA, FIGS, "expD3load", BASELINES, LOADS, SEEDS,
+                                         "figD3_load", XLABEL_LOAD, token="L")

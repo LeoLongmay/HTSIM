@@ -99,6 +99,23 @@ PRISM_EPOCH="$OUT/expD2_4os_prism_mech.epoch.csv" PRISM_PATHRTT="$OUT/expD2_4os_
 PRISM_PATHRTT="$OUT/expD2_4os_strack_mech.pathrtt.csv" \
   run strack reps 4 fat_tree_1024_4os_100g.topo "$END_D1" 13 "$CM" flow,sink expD2_4os_strack_mech
 
+echo "== offered-load sweep (Poisson, failed=16, 1:1): 7 arms x rho{10,30,50,70,90}% x 5 seeds =="
+LOAD_W_US=8000; LOAD_END=20; REF_GBPS=6400; LOAD_FAILED=16
+for rho in 10 30 50 70 90; do
+  rhof="$(python3 -c "print($rho/100.0)")"
+  for s in $SEEDS; do
+    LCM="$OUT/m2m256_load_L${rho}_s${s}.cm"
+    python3 "$COMMON/gen/poisson_load.py" "$LCM" 256 64 2000000 1024 64 "$rhof" "$LOAD_W_US" "$REF_GBPS" "$s"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc   oblivious "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_ops_L${rho}_s${s}"    "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc   reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_reps_L${rho}_s${s}"   "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" prism  reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_prism_L${rho}_s${s}"  "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_strack_L${rho}_s${s}" "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift  reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_swift_L${rho}_s${s}"  "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_mswift_L${rho}_s${s}" "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc  reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_mnscc_L${rho}_s${s}"  "$OUT"
+  done
+done
+
 echo "== render figures =="
 python3 "$HERE/make_figs.py"
-echo "== done: figs/figD1_*.{png,pdf} figs/figD2_*.{png,pdf} =="
+echo "== done: figs/figD1_*.{png,pdf} figs/figD2_*.{png,pdf} figs/figD3_load_*.{png,pdf} =="
