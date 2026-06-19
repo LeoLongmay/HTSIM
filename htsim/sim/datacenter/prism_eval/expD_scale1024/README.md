@@ -61,6 +61,7 @@ with 8 uplinks each = 64 total pod0 core-ingress uplinks.
 | 16 | 16 | 25.0% |
 | 24 | 24 | 37.5% |
 | 32 | 32 | 50.0% |
+| 40 | 40 | 62.5% |
 | 48 | 48 | 75.0% |
 
 This matches the 128-node analog precisely: failed {0, 2, 4, 6, 8, 12} were {0, 12.5, 25, 37.5,
@@ -100,15 +101,15 @@ See `figs/figD1_goodput`, `figs/figD1_avg_fct`, `figs/figD1_p99_fct`.
 
 ### Goodput / avg-FCT / P99-FCT
 
-| Arm | f0 | f8 | f16 | f24 | f32 | f48 |
-|---|---|---|---|---|---|---|
-| OPS+NSCC | 3459.1 / 0.768 / 1.116 | 1489.8 / 1.421 / 2.647 | 1316.0 / 1.789 / 3.041 | 1244.2 / 2.075 / 3.228 | 1197.3 / 2.239 / 3.357 | 1139.1 / 2.494 / 3.517 |
-| REPS+NSCC | 3758.3 / 0.752 / 1.060 | 1961.6 / 1.231 / 2.030 | 1839.1 / 1.470 / 2.154 | 1608.4 / 1.626 / 2.511 | 1558.7 / 1.690 / 2.545 | 1479.2 / 1.817 / 2.656 |
-| REPS+Swift | 3313.9 / 1.010 / 1.205 | 1789.4 / 1.361 / 2.168 | 1746.3 / 1.550 / 2.235 | 1714.9 / 1.686 / 2.308 | 1693.2 / 1.765 / 2.358 | 1576.4 / 2.027 / 2.553 |
-| REPS+MSwift | 3305.3 / 1.051 / 1.212 | 2180.0 / 1.343 / 1.819 | 2058.0 / 1.475 / 1.921 | 1909.1 / 1.528 / 2.092 | 1834.4 / 1.574 / 2.154 | 1587.9 / 1.798 / 2.467 |
-| REPS+MNSCC | 3788.8 / 0.752 / 1.055 | 2105.2 / 1.194 / 1.905 | 1864.3 / 1.456 / 2.134 | 1640.3 / 1.599 / 2.421 | 1650.8 / 1.658 / 2.428 | 1528.4 / 1.798 / 2.643 |
-| STrack | 3497.4 / 0.811 / 1.109 | 1910.0 / 1.288 / 2.054 | 1757.7 / 1.511 / 2.258 | 1639.2 / 1.644 / 2.402 | 1569.7 / 1.725 / 2.540 | 1465.6 / 1.839 / 2.742 |
-| Prism | 3398.1 / 0.994 / 1.170 | 2237.2 / 1.302 / 1.769 | 2166.6 / 1.431 / 1.810 | 1972.5 / 1.474 / 2.060 | 1949.2 / 1.509 / 2.045 | 1676.3 / 1.723 / 2.404 |
+| Arm | f0 | f8 | f16 | f24 | f32 | f40 | f48 |
+|---|---|---|---|---|---|---|---|
+| OPS+NSCC | 3459.1 / 0.768 / 1.116 | 1489.8 / 1.421 / 2.647 | 1316.0 / 1.789 / 3.041 | 1244.2 / 2.075 / 3.228 | 1197.3 / 2.239 / 3.357 | 1166.3 / 2.399 / 3.455 | 1139.1 / 2.494 / 3.517 |
+| REPS+NSCC | 3758.3 / 0.752 / 1.060 | 1961.6 / 1.231 / 2.030 | 1839.1 / 1.470 / 2.154 | 1608.4 / 1.626 / 2.511 | 1558.7 / 1.690 / 2.545 | 1526.6 / 1.747 / 2.597 | 1479.2 / 1.817 / 2.656 |
+| REPS+Swift | 3313.9 / 1.010 / 1.205 | 1789.4 / 1.361 / 2.168 | 1746.3 / 1.550 / 2.235 | 1714.9 / 1.686 / 2.308 | 1693.2 / 1.765 / 2.358 | 1631.7 / 1.864 / 2.442 | 1576.4 / 2.027 / 2.553 |
+| REPS+MSwift | 3305.3 / 1.051 / 1.212 | 2180.0 / 1.343 / 1.819 | 2058.0 / 1.475 / 1.921 | 1909.1 / 1.528 / 2.092 | 1834.4 / 1.574 / 2.154 | 1730.7 / 1.654 / 2.311 | 1587.9 / 1.798 / 2.467 |
+| REPS+MNSCC | 3788.8 / 0.752 / 1.055 | 2105.2 / 1.194 / 1.905 | 1864.3 / 1.456 / 2.134 | 1640.3 / 1.599 / 2.421 | 1650.8 / 1.658 / 2.428 | 1553.7 / 1.723 / 2.564 | 1528.4 / 1.798 / 2.643 |
+| STrack | 3497.4 / 0.811 / 1.109 | 1910.0 / 1.288 / 2.054 | 1757.7 / 1.511 / 2.258 | 1639.2 / 1.644 / 2.402 | 1569.7 / 1.725 / 2.540 | 1545.2 / 1.776 / 2.574 | 1465.6 / 1.839 / 2.742 |
+| Prism | 3398.1 / 0.994 / 1.170 | 2237.2 / 1.302 / 1.769 | 2166.6 / 1.431 / 1.810 | 1972.5 / 1.474 / 2.060 | 1949.2 / 1.509 / 2.045 | 1810.8 / 1.600 / 2.221 | 1676.3 / 1.723 / 2.404 |
 
 ### PRISM vs REPS+NSCC deltas
 
@@ -119,6 +120,7 @@ See `figs/figD1_goodput`, `figs/figD1_avg_fct`, `figs/figD1_p99_fct`.
 | 16 | **+17.8%** | −2.7% | **Prism 1.810 vs REPS 2.154** |
 | 24 | **+22.6%** | **−9.3%** | **Prism 2.060 vs REPS 2.511** |
 | 32 | **+25.1%** | **−10.7%** | **Prism 2.045 vs REPS 2.545** |
+| 40 | **+18.6%** | **−8.4%** | **Prism 2.221 vs REPS 2.597** |
 | 48 | **+13.3%** | **−5.2%** | **Prism 2.404 vs REPS 2.656** |
 
 ### PRISM vs STrack deltas (goodput)
@@ -130,6 +132,7 @@ See `figs/figD1_goodput`, `figs/figD1_avg_fct`, `figs/figD1_p99_fct`.
 | 16 | **+23.3%** |
 | 24 | **+20.4%** |
 | 32 | **+24.1%** |
+| 40 | **+17.2%** |
 | 48 | **+14.4%** |
 
 ### PRISM vs REPS+Swift deltas (goodput / avg-FCT)
@@ -141,6 +144,7 @@ See `figs/figD1_goodput`, `figs/figD1_avg_fct`, `figs/figD1_p99_fct`.
 | 16 | **+24.0%** | **−7.7%** | **Prism 1.810 vs Swift 2.235** |
 | 24 | **+15.0%** | **−12.5%** | **Prism 2.060 vs Swift 2.308** |
 | 32 | **+15.1%** | **−13.7%** | **Prism 2.045 vs Swift 2.358** |
+| 40 | **+11.0%** | **−14.2%** | **Prism 2.221 vs Swift 2.442** |
 | 48 | **+6.3%** | **−15.0%** | **Prism 2.404 vs Swift 2.553** |
 
 PRISM beats REPS+Swift on goodput at every failed ≥ 8 point (+6–25%). Avg-FCT is clearly lower for Prism at failed ≥ 8. At f0 (symmetric), both are comparably penalised by under-growth vs REPS+NSCC.
@@ -154,6 +158,7 @@ PRISM beats REPS+Swift on goodput at every failed ≥ 8 point (+6–25%). Avg-FC
 | 16 | **+5.3%** | **−2.9%** | **Prism 1.810 vs MSwift 1.921** |
 | 24 | **+3.3%** | **−3.5%** | **Prism 2.060 vs MSwift 2.092** |
 | 32 | **+6.2%** | **−4.1%** | **Prism 2.045 vs MSwift 2.154** |
+| 40 | **+4.6%** | **−3.3%** | **Prism 2.221 vs MSwift 2.311** |
 | 48 | **+5.6%** | **−4.2%** | **Prism 2.404 vs MSwift 2.467** |
 
 REPS+MSwift is the closest delay-driven non-PRISM arm. PRISM still beats it on goodput (+2.6–6.2% at failed ≥ 8) and avg-FCT. The advantage is smaller than vs REPS+Swift because MSwift's median trigger is less aggressive in over-decreasing, but the gap persists at all non-zero asymmetry points.
@@ -167,6 +172,7 @@ REPS+MSwift is the closest delay-driven non-PRISM arm. PRISM still beats it on g
 | 16 | **+16.2%** | **−1.6%** |
 | 24 | **+20.3%** | **−7.8%** |
 | 32 | **+18.1%** | **−8.9%** |
+| 40 | **+16.5%** | **−7.1%** |
 | 48 | **+9.7%** | **−4.2%** |
 
 REPS+MNSCC and REPS+NSCC behave similarly (MNSCC is NSCC with a median delay trigger). PRISM wins on goodput at failed ≥ 8 (+6–20%). The FCT win is smaller than vs REPS+NSCC and only clear at failed ≥ 16 — consistent with the pattern seen at 128 nodes.
@@ -379,17 +385,17 @@ lever is the same; the balance between floor-cut and hold shifts with the densit
 
 **Jain fairness index** (`figs/figD1_fairness`), D1 (1:1), per arm:
 
-| Arm | f0 | f8 | f16 | f24 | f32 | f48 |
-|---|---|---|---|---|---|---|
-| OPS+NSCC   | 0.927 | 0.738 | 0.728 | 0.812 | 0.845 | 0.919 |
-| REPS+NSCC  | 0.932 | 0.803 | 0.820 | 0.870 | 0.910 | 0.902 |
-| REPS+Swift | 0.932 | 0.863 | 0.903 | 0.925 | 0.956 | 0.969 |
-| REPS+MSwift| 0.949 | 0.914 | 0.941 | 0.962 | 0.969 | 0.958 |
-| REPS+MNSCC | 0.932 | 0.811 | 0.831 | 0.869 | 0.909 | 0.898 |
-| STrack     | 0.915 | 0.788 | 0.811 | 0.877 | 0.913 | 0.905 |
-| Prism      | 0.898 | 0.838 | 0.901 | 0.923 | 0.941 | 0.944 |
+| Arm | f0 | f8 | f16 | f24 | f32 | f40 | f48 |
+|---|---|---|---|---|---|---|---|
+| OPS+NSCC   | 0.927 | 0.738 | 0.728 | 0.812 | 0.845 | 0.904 | 0.919 |
+| REPS+NSCC  | 0.932 | 0.803 | 0.820 | 0.870 | 0.910 | 0.915 | 0.902 |
+| REPS+Swift | 0.932 | 0.863 | 0.903 | 0.925 | 0.956 | 0.968 | 0.969 |
+| REPS+MSwift| 0.949 | 0.914 | 0.941 | 0.962 | 0.969 | 0.964 | 0.958 |
+| REPS+MNSCC | 0.932 | 0.811 | 0.831 | 0.869 | 0.909 | 0.919 | 0.898 |
+| STrack     | 0.915 | 0.788 | 0.811 | 0.877 | 0.913 | 0.917 | 0.905 |
+| Prism      | 0.898 | 0.838 | 0.901 | 0.923 | 0.941 | 0.960 | 0.944 |
 
-Prism is the **most fair among the NSCC-family arms** at failed ≥ 8 (e.g. f32: 0.941 vs REPS+NSCC 0.910 / STrack 0.913 / REPS+MNSCC 0.909). The Swift-family arms (REPS+Swift, REPS+MSwift) achieve higher fairness indices than Prism at high asymmetry — e.g. f32: MSwift 0.969, Swift 0.956, Prism 0.941. This is consistent with their rate-reduction behaviour under asymmetry (more conservative sends → more uniform across flows), but does not translate to better goodput or FCT. At f0 Prism (0.898) is slightly less fair than REPS+NSCC (0.932), same under-growth cost as for goodput.
+Prism is the **most fair among the NSCC-family arms** at failed ≥ 8 (e.g. f32: 0.941 vs REPS+NSCC 0.910 / STrack 0.913 / REPS+MNSCC 0.909; f40: 0.960 vs REPS+NSCC 0.915 / STrack 0.917 / REPS+MNSCC 0.919). The Swift-family arms (REPS+Swift, REPS+MSwift) achieve higher fairness indices than Prism at moderate asymmetry — e.g. f32: MSwift 0.969, Swift 0.956, Prism 0.941. At f40 Prism (0.960) closes this gap and leads REPS+MSwift (0.964 — within noise) and REPS+Swift (0.968). This is consistent with their rate-reduction behaviour under asymmetry (more conservative sends → more uniform across flows), but does not translate to better goodput or FCT. At f0 Prism (0.898) is slightly less fair than REPS+NSCC (0.932), same under-growth cost as for goodput.
 
 **Jain fairness index** (`figs/figD2_4os_fairness`), D2 4:1 oversub, per arm:
 
