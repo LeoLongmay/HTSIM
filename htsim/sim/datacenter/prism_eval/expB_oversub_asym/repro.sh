@@ -31,7 +31,7 @@ echo "== workload (many2many 64->16 pod0, 2MB) =="
 python3 "$COMMON/gen/many2many.py" "$REL/data/m2m.cm" 64 16 pairs 2000000 128 16
 CM="$REL/data/m2m.cm"; OUT="$REL/data"
 
-echo "== main sweep: {8os,4os} x -failed x 4 arms x 5 seeds =="
+echo "== main sweep: {8os,4os} x -failed x 7 arms x 5 seeds =="
 for R in 8os 4os; do
   if [ "$R" = 8os ]; then FS="$FAILED_8OS"; else FS="$FAILED_4OS"; fi
   T="${TOPO[$R]}"

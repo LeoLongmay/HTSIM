@@ -43,7 +43,7 @@ run() { # cc lb failed topo end seed cm logspec tag  [extra env applied by calle
     bash "$COMMON/run_lib.sh" "$1" "$2" "$3" "$4" "$6" "$7" "$8" "$9" "$OUT"
 }
 
-echo "== D1 sweep: 1:1, -failed {0,8,16,24,32,48} x 4 arms x 5 seeds =="
+echo "== D1 sweep: 1:1, -failed {0,8,16,24,32,48} x 7 arms x 5 seeds =="
 for f in 0 8 16 24 32 48; do for s in $SEEDS; do
   run nscc   oblivious "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_ops_f${f}_s${s}"
   run nscc   reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_reps_f${f}_s${s}"
@@ -65,7 +65,7 @@ PRISM_EPOCH="$OUT/expD1_prism_mech.epoch.csv" PRISM_PATHRTT="$OUT/expD1_prism_me
 PRISM_PATHRTT="$OUT/expD1_strack_mech.pathrtt.csv" \
   run strack reps 32 fat_tree_1024.topo "$END_D1" 13 "$CM_MECH" flow,sink expD1_strack_mech
 
-echo "== D2 4:1 sweep: fat_tree_1024_4os_100g, -failed {0,1,2,3,4} x 4 arms x 5 seeds =="
+echo "== D2 4:1 sweep: fat_tree_1024_4os_100g, -failed {0,1,2,3,4} x 7 arms x 5 seeds =="
 for f in 0 1 2 3 4; do for s in $SEEDS; do
   run nscc   oblivious "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_ops_f${f}_s${s}"
   run nscc   reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_reps_f${f}_s${s}"
@@ -77,7 +77,7 @@ for f in 0 1 2 3 4; do for s in $SEEDS; do
   run mnscc  reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_mnscc_f${f}_s${s}"
 done; done
 
-echo "== D2 8:1 sweep: fat_tree_1024_8os, -failed {0,1,2,4} x 4 arms x 5 seeds (END=$END_8OS) =="
+echo "== D2 8:1 sweep: fat_tree_1024_8os, -failed {0,1,2,4} x 7 arms x 5 seeds (END=$END_8OS) =="
 for f in 0 1 2 4; do for s in $SEEDS; do
   run nscc   oblivious "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_ops_f${f}_s${s}"
   run nscc   reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_reps_f${f}_s${s}"
