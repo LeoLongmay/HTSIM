@@ -28,7 +28,7 @@ See `../NARRATIVE.md` and `../TARGET_REGIME.md`.
 | Seeds | {13, 14, 15, 16, 17} |
 | `PATHS` | 8 |
 | `EXTRA_ARGS` | `-disable_trim` (delay-driven regime; 5× BDP buffers) |
-| `EXP_END` | 8 ms (4:1 all cr = 1.00); 12 ms used for 8:1 (still saturated, see below) |
+| `EXP_END` | 8 ms (4:1 all cr = 1.00); 8 ms used for 8:1 (still saturated, see below) |
 
 ### Critical: `-failed N` is nonlinear on oversub topologies
 
@@ -109,27 +109,31 @@ All three new arms use REPS spray; only CC differs.
 
 | `-failed` | Degraded links | Goodput delta | Avg-FCT delta | cr note |
 |---|---|---|---|---|
-| 0 | 0/32 | −0.9% | −5.2% (PRISM slower at f0) | both 1.00 |
+| 0 | 0/32 | −0.8% | −5.2% (PRISM faster on FCT; small goodput cost) | both 1.00 |
 | 4 | 1/32 | **+23.4%** | **−25.8%** | both 1.00 |
 | 8 | 2/32 | **+20.1%** | **−26.1%** | both 1.00 |
 | 12 | 3/32 | **+17.1%** | **−24.0%** | PRISM 1.00; Swift **0.96** |
 
 PRISM **beats** REPS+Swift at every asymmetric point by double digits on goodput and FCT.
-At f0, PRISM is marginally slower (−0.9% goodput, +5.2% FCT) — same known symmetric cost.
+At f0, PRISM pays a small goodput cost (−0.8%) but has lower (faster) FCT (−5.2%); unlike the
+NSCC/STrack f0 case where PRISM is worse on both metrics, Swift's higher FCT is the reason PRISM
+comes out ahead on latency here despite the minor goodput deficit.
 REPS+Swift also fails to drain at f12 (cr=0.96), making the comparison conservative for PRISM.
 
 **PRISM vs REPS+MSwift** (both cr=1.00 throughout):
 
 | `-failed` | Degraded links | Goodput delta | Avg-FCT delta |
 |---|---|---|---|
-| 0 | 0/32 | −0.1% | −4.5% (PRISM slightly slower at f0) |
+| 0 | 0/32 | −0.1% | −4.6% (PRISM faster on FCT; negligible goodput cost) |
 | 4 | 1/32 | **+9.7%** | **−8.6%** |
 | 8 | 2/32 | **+10.2%** | **−9.2%** |
 | 12 | 3/32 | **+8.5%** | **−10.4%** |
 
 PRISM **beats** REPS+MSwift at every asymmetric point. Margins are smaller than vs REPS+NSCC
 or REPS+Swift (roughly half), but consistent and positive across all 3 failed cells. At f0
-PRISM is negligibly slower (−0.1% goodput, +4.5% FCT). MSwift is the strongest new-arm
+PRISM pays a negligible goodput cost (−0.1%) but has lower (faster) FCT (−4.6%); unlike the
+NSCC/STrack f0 case where PRISM is worse on both metrics, MSwift's higher FCT is why PRISM
+leads on latency even at the symmetric point. MSwift is the strongest new-arm
 challenger; it retains cr=1.00 at f12 where Swift and MNSCC do not.
 
 **PRISM vs REPS+MNSCC** (cr<1 at f12 for MNSCC):
@@ -164,7 +168,7 @@ points.
 
 ## 4. Results — 8:1 oversub (saturation boundary)
 
-**16 core links; EXP_END = 12 ms.**
+**16 core links; EXP_END = 8 ms.**
 
 See `figs/figBa_8os_main`.
 
@@ -251,7 +255,7 @@ The 8:1 saturation boundary makes the scope precise.
 - The `-failed` knob is nonlinear on oversub topologies (see Section 2). The 4:1 asymmetry
   tested here is sparse (1–3/32 links, 3–9%), chosen to match expA's comparable fraction.
 - 8:1 saturation may eventually drain at a much larger time horizon, but is overload-dominated
-  at EXP_END = 12 ms across all controllers.
+  at EXP_END = 8 ms across all controllers.
 - 128-node development-scale topology; delay-driven regime only (`-disable_trim`). Trimming-regime
   oversub-asym behavior is deferred.
 - Completion ratio is 1.00 for all 4:1 cells; FCT comparisons are unconfounded.
@@ -272,7 +276,7 @@ The 8:1 saturation boundary makes the scope precise.
 
 PRISM is the **most fair** arm at the key asymmetric points f4 and f8 (0.846, 0.883), ahead
 of all six baselines including the three new CC arms. At f12, REPS+Swift (0.912) and
-REPS+Swift (0.912) and REPS+MSwift (0.840) approach or exceed PRISM (0.850), but both have
+REPS+MSwift (0.840) approach or exceed PRISM (0.850), but both have
 caveats: Swift has cr=0.96 (incomplete flows bias Jain upward by excluding stuck flows) and
 MSwift's 0.840 is still below PRISM's 0.850. At f0, REPS+Swift (0.996) and REPS+MSwift
 (0.994) are more fair than PRISM (0.975) — these arms have lower symmetric-point FCT, so
