@@ -139,9 +139,9 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
     import matplotlib.pyplot as plt
     plot_style.apply_style(24)
     aggs = {lab: aggregate(data_dir, tag_prefix, lab, failed, seeds, token) for (lab, _d, _c) in baselines}
-    panels = [("goodput", "Goodput (Gbps)", "Goodput", 1.0),
-              ("avg_fct", "Avg FCT (ms)", "Avg_fct", 1e-3),
-              ("p99_fct", "P99 FCT (ms)", "P99_fct", 1e-3)]
+    panels = [("goodput", "Goodput (Gbps)", "goodput", 1.0),
+              ("avg_fct", "Avg FCT (ms)", "avg_fct", 1e-3),
+              ("p99_fct", "P99 FCT (ms)", "p99_fct", 1e-3)]
     for key, ylabel, suffix, scale in panels:
         fig, ax = plt.subplots(1, 1, figsize=(5.2, 3.6))
         for (lab, disp, ck) in baselines:
@@ -152,10 +152,15 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
                         color=plot_style.COLORS[ck], label=disp)
         ax.set_ylabel(ylabel)
         if goodput_sci and key == "goodput":
-            from matplotlib.ticker import ScalarFormatter
-            fmt = ScalarFormatter(useMathText=True)
-            fmt.set_powerlimits((0, 0))   # force offset notation -> shared "×10ⁿ" multiplier at top
+            from matplotlib.ticker import ScalarFormatter, MultipleLocator
+            class _FixedOrder(ScalarFormatter):   # force the offset to ×10^2 (not matplotlib's auto ×10^3)
+                def _set_order_of_magnitude(self):
+                    self.orderOfMagnitude = 2
+            fmt = _FixedOrder(useMathText=True)
+            fmt.set_scientific(True)
+            fmt.set_powerlimits((0, 0))           # show the shared "×10²" multiplier at the top
             ax.yaxis.set_major_formatter(fmt)
+            ax.yaxis.set_major_locator(MultipleLocator(500))   # ticks 500,1000 -> shown as 5, 10
         ax.set_xlabel(xlabel)
         ax.set_xticks(failed)
         ax.grid(alpha=0.3)
