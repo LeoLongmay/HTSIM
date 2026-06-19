@@ -20,6 +20,8 @@ echo "== self-tests =="
 python3 "$HERE/make_figs.py" --selftest
 ( cd "$COMMON/tests" && python3 test_metrics.py >/dev/null && echo "ok common metrics selftest" )
 ( cd "$DC/.." && g++ -I. datacenter/prism_eval/common/tests/test_strack_cc.cpp -o /tmp/test_strack_cc && /tmp/test_strack_cc )
+( cd "$DC/.." && g++ -I. datacenter/prism_eval/common/tests/test_swift_cc.cpp -o /tmp/test_swift_cc && /tmp/test_swift_cc )
+( cd "$DC/.." && g++ -I. datacenter/prism_eval/common/tests/test_mnscc_median.cpp -o /tmp/test_mnscc_median && /tmp/test_mnscc_median )
 
 echo "== generate 100G 4:1 topology (decision A: keep 100G/14us calibration) =="
 # Stock fat_tree_1024_4os.topo is 200G -> would change BDP/target. Generate a 100G copy.
@@ -48,6 +50,9 @@ for f in 0 8 16 24 32 48; do for s in $SEEDS; do
   PRISM_EPOCH="$OUT/expD1_prism_f${f}_s${s}.epoch.csv" \
     run prism reps     "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_prism_f${f}_s${s}"
   run strack reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_strack_f${f}_s${s}"
+  run swift  reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_swift_f${f}_s${s}"
+  run mswift reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_mswift_f${f}_s${s}"
+  run mnscc  reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_mnscc_f${f}_s${s}"
 done; done
 
 echo "== D1 mechanism: 1:1 failed=32, seed 13, 4MB, all 4 arms w/ PRISM_PATHRTT =="
@@ -67,6 +72,9 @@ for f in 0 1 2 3 4; do for s in $SEEDS; do
   PRISM_EPOCH="$OUT/expD2_4os_prism_f${f}_s${s}.epoch.csv" \
     run prism reps     "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_prism_f${f}_s${s}"
   run strack reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_strack_f${f}_s${s}"
+  run swift  reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_swift_f${f}_s${s}"
+  run mswift reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_mswift_f${f}_s${s}"
+  run mnscc  reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_mnscc_f${f}_s${s}"
 done; done
 
 echo "== D2 8:1 sweep: fat_tree_1024_8os, -failed {0,1,2,4} x 4 arms x 5 seeds (END=$END_8OS) =="
@@ -76,6 +84,9 @@ for f in 0 1 2 4; do for s in $SEEDS; do
   PRISM_EPOCH="$OUT/expD2_8os_prism_f${f}_s${s}.epoch.csv" \
     run prism reps     "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_prism_f${f}_s${s}"
   run strack reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_strack_f${f}_s${s}"
+  run swift  reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_swift_f${f}_s${s}"
+  run mswift reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_mswift_f${f}_s${s}"
+  run mnscc  reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_mnscc_f${f}_s${s}"
 done; done
 
 echo "== D2 mechanism: 4:1 failed=4, seed 13, 2MB, all 4 arms w/ PRISM_PATHRTT =="

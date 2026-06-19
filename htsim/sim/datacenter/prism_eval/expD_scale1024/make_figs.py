@@ -21,7 +21,9 @@ import perf_figs  # noqa: E402
 DATA = os.path.join(HERE, "data")
 FIGS = os.path.join(HERE, "figs")
 BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
-             ("strack", "STrack", "strack"), ("prism", "Prism", "prism")]
+             ("swift", "REPS+Swift", "swift"), ("mswift", "REPS+MSwift", "mswift"),
+             ("mnscc", "REPS+MNSCC", "mnscc"), ("strack", "STrack", "strack"),
+             ("prism", "Prism", "prism")]
 SEEDS = [13, 14, 15, 16, 17]
 
 # D1: 1:1 delay-driven. failed = pod0 core-ingress choke {0,12.5,25,37.5,50,75}%.
