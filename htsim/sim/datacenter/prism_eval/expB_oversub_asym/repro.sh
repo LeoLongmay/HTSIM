@@ -36,14 +36,14 @@ for R in 8os 4os; do
   if [ "$R" = 8os ]; then FS="$FAILED_8OS"; else FS="$FAILED_4OS"; fi
   T="${TOPO[$R]}"
   for f in $FS; do for s in $SEEDS; do
-    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_ops_f${f}_s${s}" "$OUT"
-    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_reps_f${f}_s${s}" "$OUT"
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious "$f" "$T" "$s" "$CM" flow "expBa${R}_ops_f${f}_s${s}" "$OUT"
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      "$f" "$T" "$s" "$CM" flow "expBa${R}_reps_f${f}_s${s}" "$OUT"
     PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_EPOCH="$OUT/expBa${R}_prism_f${f}_s${s}.epoch.csv" \
-      bash "$COMMON/run_lib.sh" prism reps "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_prism_f${f}_s${s}" "$OUT"
-    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps   "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_strack_f${f}_s${s}" "$OUT"
-    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift  reps "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_swift_f${f}_s${s}"  "$OUT"
-    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_mswift_f${f}_s${s}" "$OUT"
-    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc  reps "$f" "$T" "$s" "$CM" flow,sink "expBa${R}_mnscc_f${f}_s${s}"  "$OUT"
+      bash "$COMMON/run_lib.sh" prism reps "$f" "$T" "$s" "$CM" flow "expBa${R}_prism_f${f}_s${s}" "$OUT"
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps   "$f" "$T" "$s" "$CM" flow "expBa${R}_strack_f${f}_s${s}" "$OUT"
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift  reps "$f" "$T" "$s" "$CM" flow "expBa${R}_swift_f${f}_s${s}"  "$OUT"
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps "$f" "$T" "$s" "$CM" flow "expBa${R}_mswift_f${f}_s${s}" "$OUT"
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc  reps "$f" "$T" "$s" "$CM" flow "expBa${R}_mnscc_f${f}_s${s}"  "$OUT"
   done; done
 done
 
@@ -59,13 +59,13 @@ done
 echo "== mechanism: 4:1, failed=8 (2/32 core links degraded -- the win point, cr=1.0), seed=13, all 4 arms with PRISM_PATHRTT =="
 T="${TOPO[4os]}"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expBa4os_ops_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc oblivious 8 "$T" 13 "$CM" flow,sink expBa4os_ops_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc oblivious 8 "$T" 13 "$CM" flow expBa4os_ops_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expBa4os_reps_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc reps 8 "$T" 13 "$CM" flow,sink expBa4os_reps_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc reps 8 "$T" 13 "$CM" flow expBa4os_reps_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_EPOCH="$OUT/expBa4os_prism_mech.epoch.csv" PRISM_PATHRTT="$OUT/expBa4os_prism_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" prism reps 8 "$T" 13 "$CM" flow,sink expBa4os_prism_mech "$OUT"
+  bash "$COMMON/run_lib.sh" prism reps 8 "$T" 13 "$CM" flow expBa4os_prism_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expBa4os_strack_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" strack reps 8 "$T" 13 "$CM" flow,sink expBa4os_strack_mech "$OUT"
+  bash "$COMMON/run_lib.sh" strack reps 8 "$T" 13 "$CM" flow expBa4os_strack_mech "$OUT"
 
 echo "== render figBa_8os_main + figBa_4os_main + figBa_mech =="
 python3 "$HERE/make_figs.py"

@@ -27,23 +27,23 @@ CM="$REL/data/m2m.cm"; OUT="$REL/data"
 echo "== main sweep (oversub): 4 baselines x ratio{1,4,8} x 5 seeds =="
 for r in $RATIOS; do for s in $SEEDS; do
   T="${TOPO[$r]}"
-  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious 0 "$T" "$s" "$CM" flow,sink "expB_ops_f${r}_s${s}" "$OUT"
-  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      0 "$T" "$s" "$CM" flow,sink "expB_reps_f${r}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious 0 "$T" "$s" "$CM" flow "expB_ops_f${r}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      0 "$T" "$s" "$CM" flow "expB_reps_f${r}_s${s}" "$OUT"
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_EPOCH="$OUT/expB_prism_f${r}_s${s}.epoch.csv" \
-    bash "$COMMON/run_lib.sh" prism reps 0 "$T" "$s" "$CM" flow,sink "expB_prism_f${r}_s${s}" "$OUT"
-  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps   0 "$T" "$s" "$CM" flow,sink "expB_strack_f${r}_s${s}" "$OUT"
+    bash "$COMMON/run_lib.sh" prism reps 0 "$T" "$s" "$CM" flow "expB_prism_f${r}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps   0 "$T" "$s" "$CM" flow "expB_strack_f${r}_s${s}" "$OUT"
 done; done
 
 echo "== mechanism condition: ratio=8 (8os), seed=13, all 4 arms with PRISM_PATHRTT =="
 T8="${TOPO[8]}"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expB_ops_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc oblivious 0 "$T8" 13 "$CM" flow,sink expB_ops_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc oblivious 0 "$T8" 13 "$CM" flow expB_ops_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expB_reps_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc reps 0 "$T8" 13 "$CM" flow,sink expB_reps_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc reps 0 "$T8" 13 "$CM" flow expB_reps_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_EPOCH="$OUT/expB_prism_mech.epoch.csv" PRISM_PATHRTT="$OUT/expB_prism_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" prism reps 0 "$T8" 13 "$CM" flow,sink expB_prism_mech "$OUT"
+  bash "$COMMON/run_lib.sh" prism reps 0 "$T8" 13 "$CM" flow expB_prism_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expB_strack_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" strack reps 0 "$T8" 13 "$CM" flow,sink expB_strack_mech "$OUT"
+  bash "$COMMON/run_lib.sh" strack reps 0 "$T8" 13 "$CM" flow expB_strack_mech "$OUT"
 
 echo "== render figB1 + figB2 =="
 python3 "$HERE/make_figs.py"

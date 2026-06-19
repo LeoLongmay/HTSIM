@@ -45,59 +45,59 @@ run() { # cc lb failed topo end seed cm logspec tag  [extra env applied by calle
 
 echo "== D1 sweep: 1:1, -failed {0,8,16,24,32,48} x 7 arms x 5 seeds =="
 for f in 0 8 16 24 32 40 48; do for s in $SEEDS; do
-  run nscc   oblivious "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_ops_f${f}_s${s}"
-  run nscc   reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_reps_f${f}_s${s}"
+  run nscc   oblivious "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow "expD1_ops_f${f}_s${s}"
+  run nscc   reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow "expD1_reps_f${f}_s${s}"
   PRISM_EPOCH="$OUT/expD1_prism_f${f}_s${s}.epoch.csv" \
-    run prism reps     "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_prism_f${f}_s${s}"
-  run strack reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_strack_f${f}_s${s}"
-  run swift  reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_swift_f${f}_s${s}"
-  run mswift reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_mswift_f${f}_s${s}"
-  run mnscc  reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow,sink "expD1_mnscc_f${f}_s${s}"
+    run prism reps     "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow "expD1_prism_f${f}_s${s}"
+  run strack reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow "expD1_strack_f${f}_s${s}"
+  run swift  reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow "expD1_swift_f${f}_s${s}"
+  run mswift reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow "expD1_mswift_f${f}_s${s}"
+  run mnscc  reps      "$f" fat_tree_1024.topo "$END_D1" "$s" "$CM" flow "expD1_mnscc_f${f}_s${s}"
 done; done
 
 echo "== D1 mechanism: 1:1 failed=32, seed 13, 4MB, all 4 arms w/ PRISM_PATHRTT =="
 PRISM_PATHRTT="$OUT/expD1_ops_mech.pathrtt.csv" \
-  run nscc oblivious 32 fat_tree_1024.topo "$END_D1" 13 "$CM_MECH" flow,sink expD1_ops_mech
+  run nscc oblivious 32 fat_tree_1024.topo "$END_D1" 13 "$CM_MECH" flow expD1_ops_mech
 PRISM_PATHRTT="$OUT/expD1_reps_mech.pathrtt.csv" \
-  run nscc reps 32 fat_tree_1024.topo "$END_D1" 13 "$CM_MECH" flow,sink expD1_reps_mech
+  run nscc reps 32 fat_tree_1024.topo "$END_D1" 13 "$CM_MECH" flow expD1_reps_mech
 PRISM_EPOCH="$OUT/expD1_prism_mech.epoch.csv" PRISM_PATHRTT="$OUT/expD1_prism_mech.pathrtt.csv" \
-  run prism reps 32 fat_tree_1024.topo "$END_D1" 13 "$CM_MECH" flow,sink expD1_prism_mech
+  run prism reps 32 fat_tree_1024.topo "$END_D1" 13 "$CM_MECH" flow expD1_prism_mech
 PRISM_PATHRTT="$OUT/expD1_strack_mech.pathrtt.csv" \
-  run strack reps 32 fat_tree_1024.topo "$END_D1" 13 "$CM_MECH" flow,sink expD1_strack_mech
+  run strack reps 32 fat_tree_1024.topo "$END_D1" 13 "$CM_MECH" flow expD1_strack_mech
 
 echo "== D2 4:1 sweep: fat_tree_1024_4os_100g, -failed {0,1,2,3,4} x 7 arms x 5 seeds =="
 for f in 0 1 2 3 4; do for s in $SEEDS; do
-  run nscc   oblivious "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_ops_f${f}_s${s}"
-  run nscc   reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_reps_f${f}_s${s}"
+  run nscc   oblivious "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow "expD2_4os_ops_f${f}_s${s}"
+  run nscc   reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow "expD2_4os_reps_f${f}_s${s}"
   PRISM_EPOCH="$OUT/expD2_4os_prism_f${f}_s${s}.epoch.csv" \
-    run prism reps     "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_prism_f${f}_s${s}"
-  run strack reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_strack_f${f}_s${s}"
-  run swift  reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_swift_f${f}_s${s}"
-  run mswift reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_mswift_f${f}_s${s}"
-  run mnscc  reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow,sink "expD2_4os_mnscc_f${f}_s${s}"
+    run prism reps     "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow "expD2_4os_prism_f${f}_s${s}"
+  run strack reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow "expD2_4os_strack_f${f}_s${s}"
+  run swift  reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow "expD2_4os_swift_f${f}_s${s}"
+  run mswift reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow "expD2_4os_mswift_f${f}_s${s}"
+  run mnscc  reps      "$f" fat_tree_1024_4os_100g.topo "$END_D1" "$s" "$CM" flow "expD2_4os_mnscc_f${f}_s${s}"
 done; done
 
 echo "== D2 8:1 sweep: fat_tree_1024_8os, -failed {0,1,2,4} x 7 arms x 5 seeds (END=$END_8OS) =="
 for f in 0 1 2 4; do for s in $SEEDS; do
-  run nscc   oblivious "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_ops_f${f}_s${s}"
-  run nscc   reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_reps_f${f}_s${s}"
+  run nscc   oblivious "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow "expD2_8os_ops_f${f}_s${s}"
+  run nscc   reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow "expD2_8os_reps_f${f}_s${s}"
   PRISM_EPOCH="$OUT/expD2_8os_prism_f${f}_s${s}.epoch.csv" \
-    run prism reps     "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_prism_f${f}_s${s}"
-  run strack reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_strack_f${f}_s${s}"
-  run swift  reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_swift_f${f}_s${s}"
-  run mswift reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_mswift_f${f}_s${s}"
-  run mnscc  reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow,sink "expD2_8os_mnscc_f${f}_s${s}"
+    run prism reps     "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow "expD2_8os_prism_f${f}_s${s}"
+  run strack reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow "expD2_8os_strack_f${f}_s${s}"
+  run swift  reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow "expD2_8os_swift_f${f}_s${s}"
+  run mswift reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow "expD2_8os_mswift_f${f}_s${s}"
+  run mnscc  reps      "$f" fat_tree_1024_8os.topo "$END_8OS" "$s" "$CM" flow "expD2_8os_mnscc_f${f}_s${s}"
 done; done
 
 echo "== D2 mechanism: 4:1 failed=4, seed 13, 2MB, all 4 arms w/ PRISM_PATHRTT =="
 PRISM_PATHRTT="$OUT/expD2_4os_ops_mech.pathrtt.csv" \
-  run nscc oblivious 4 fat_tree_1024_4os_100g.topo "$END_D1" 13 "$CM" flow,sink expD2_4os_ops_mech
+  run nscc oblivious 4 fat_tree_1024_4os_100g.topo "$END_D1" 13 "$CM" flow expD2_4os_ops_mech
 PRISM_PATHRTT="$OUT/expD2_4os_reps_mech.pathrtt.csv" \
-  run nscc reps 4 fat_tree_1024_4os_100g.topo "$END_D1" 13 "$CM" flow,sink expD2_4os_reps_mech
+  run nscc reps 4 fat_tree_1024_4os_100g.topo "$END_D1" 13 "$CM" flow expD2_4os_reps_mech
 PRISM_EPOCH="$OUT/expD2_4os_prism_mech.epoch.csv" PRISM_PATHRTT="$OUT/expD2_4os_prism_mech.pathrtt.csv" \
-  run prism reps 4 fat_tree_1024_4os_100g.topo "$END_D1" 13 "$CM" flow,sink expD2_4os_prism_mech
+  run prism reps 4 fat_tree_1024_4os_100g.topo "$END_D1" 13 "$CM" flow expD2_4os_prism_mech
 PRISM_PATHRTT="$OUT/expD2_4os_strack_mech.pathrtt.csv" \
-  run strack reps 4 fat_tree_1024_4os_100g.topo "$END_D1" 13 "$CM" flow,sink expD2_4os_strack_mech
+  run strack reps 4 fat_tree_1024_4os_100g.topo "$END_D1" 13 "$CM" flow expD2_4os_strack_mech
 
 echo "== offered-load sweep (Poisson, failed=16, 1:1): 7 arms x rho{10,30,50,70,90}% x 5 seeds =="
 LOAD_W_US=8000; LOAD_END=20; REF_GBPS=6400; LOAD_FAILED=16
@@ -106,13 +106,13 @@ for rho in 10 30 50 70 90; do
   for s in $SEEDS; do
     LCM="$OUT/m2m256_load_L${rho}_s${s}.cm"
     python3 "$COMMON/gen/poisson_load.py" "$LCM" 256 64 2000000 1024 64 "$rhof" "$LOAD_W_US" "$REF_GBPS" "$s"
-    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc   oblivious "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_ops_L${rho}_s${s}"    "$OUT"
-    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc   reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_reps_L${rho}_s${s}"   "$OUT"
-    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" prism  reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_prism_L${rho}_s${s}"  "$OUT"
-    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_strack_L${rho}_s${s}" "$OUT"
-    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift  reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_swift_L${rho}_s${s}"  "$OUT"
-    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_mswift_L${rho}_s${s}" "$OUT"
-    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc  reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow,sink "expD3load_mnscc_L${rho}_s${s}"  "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc   oblivious "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow "expD3load_ops_L${rho}_s${s}"    "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc   reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow "expD3load_reps_L${rho}_s${s}"   "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" prism  reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow "expD3load_prism_L${rho}_s${s}"  "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow "expD3load_strack_L${rho}_s${s}" "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift  reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow "expD3load_swift_L${rho}_s${s}"  "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow "expD3load_mswift_L${rho}_s${s}" "$OUT"
+    PATHS=8 NODES=1024 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc  reps      "$LOAD_FAILED" fat_tree_1024.topo "$s" "$LCM" flow "expD3load_mnscc_L${rho}_s${s}"  "$OUT"
   done
 done
 

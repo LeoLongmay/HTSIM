@@ -45,31 +45,31 @@ PY
 
 echo "== main sweep (delay-driven): 7 baselines x failed{0,2,4,6,8,10,12} x 5 seeds =="
 for f in $FAILEDS; do for s in $SEEDS; do
-  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious "$f" "$TOPO" "$s" "$CM" flow,sink "expA_ops_f${f}_s${s}" "$OUT"
-  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      "$f" "$TOPO" "$s" "$CM" flow,sink "expA_reps_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious "$f" "$TOPO" "$s" "$CM" flow "expA_ops_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      "$f" "$TOPO" "$s" "$CM" flow "expA_reps_f${f}_s${s}" "$OUT"
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_EPOCH="$OUT/expA_prism_f${f}_s${s}.epoch.csv" \
-    bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow,sink "expA_prism_f${f}_s${s}" "$OUT"
-  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps  "$f" "$TOPO" "$s" "$CM" flow,sink "expA_strack_f${f}_s${s}" "$OUT"
-  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc reps "$f" "$TOPO" "$s" "$CM" flow,sink "expA_mnscc_f${f}_s${s}" "$OUT"
-  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift reps "$f" "$TOPO" "$s" "$CM" flow,sink "expA_swift_f${f}_s${s}" "$OUT"
-  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps "$f" "$TOPO" "$s" "$CM" flow,sink "expA_mswift_f${f}_s${s}" "$OUT"
+    bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow "expA_prism_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps  "$f" "$TOPO" "$s" "$CM" flow "expA_strack_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc reps "$f" "$TOPO" "$s" "$CM" flow "expA_mnscc_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift reps "$f" "$TOPO" "$s" "$CM" flow "expA_swift_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps "$f" "$TOPO" "$s" "$CM" flow "expA_mswift_f${f}_s${s}" "$OUT"
 done; done
 
 echo "== mechanism condition: failed=8, seed=13, 4MB workload (CM_MECH), all 7 with PRISM_PATHRTT =="
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_ops_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc oblivious 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_ops_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc oblivious 8 "$TOPO" 13 "$CM_MECH" flow expA_ops_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_reps_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_reps_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc reps 8 "$TOPO" 13 "$CM_MECH" flow expA_reps_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_EPOCH="$OUT/expA_prism_mech.epoch.csv" PRISM_PATHRTT="$OUT/expA_prism_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" prism reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_prism_mech "$OUT"
+  bash "$COMMON/run_lib.sh" prism reps 8 "$TOPO" 13 "$CM_MECH" flow expA_prism_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_strack_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" strack reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_strack_mech "$OUT"
+  bash "$COMMON/run_lib.sh" strack reps 8 "$TOPO" 13 "$CM_MECH" flow expA_strack_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_mnscc_mech.pathrtt.csv" MNSCC_MEDIAN="$OUT/expA_mnscc_mech.median.csv" \
-  bash "$COMMON/run_lib.sh" mnscc reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_mnscc_mech "$OUT"
+  bash "$COMMON/run_lib.sh" mnscc reps 8 "$TOPO" 13 "$CM_MECH" flow expA_mnscc_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_swift_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" swift reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_swift_mech "$OUT"
+  bash "$COMMON/run_lib.sh" swift reps 8 "$TOPO" 13 "$CM_MECH" flow expA_swift_mech "$OUT"
 PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD" PRISM_PATHRTT="$OUT/expA_mswift_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" mswift reps 8 "$TOPO" 13 "$CM_MECH" flow,sink expA_mswift_mech "$OUT"
+  bash "$COMMON/run_lib.sh" mswift reps 8 "$TOPO" 13 "$CM_MECH" flow expA_mswift_mech "$OUT"
 
 echo "== offered-load sweep (Poisson, failed=8, 2MB): 7 arms x rho{10,30,50,70,90}% x 5 seeds =="
 LOAD_W_US=8000; LOAD_END=20; REF_GBPS=1600
@@ -78,13 +78,13 @@ for rho in 10 30 50 70 90; do
   for s in $SEEDS; do
     LCM="$OUT/m2m_load_L${rho}_s${s}.cm"
     python3 "$COMMON/gen/poisson_load.py" "$LCM" 64 16 2000000 128 16 "$rhof" "$LOAD_W_US" "$REF_GBPS" "$s"
-    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious 8 "$TOPO" "$s" "$LCM" flow,sink "expAload_ops_L${rho}_s${s}" "$OUT"
-    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      8 "$TOPO" "$s" "$LCM" flow,sink "expAload_reps_L${rho}_s${s}" "$OUT"
-    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" prism reps     8 "$TOPO" "$s" "$LCM" flow,sink "expAload_prism_L${rho}_s${s}" "$OUT"
-    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps    8 "$TOPO" "$s" "$LCM" flow,sink "expAload_strack_L${rho}_s${s}" "$OUT"
-    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc reps 8 "$TOPO" "$s" "$LCM" flow,sink "expAload_mnscc_L${rho}_s${s}" "$OUT"
-    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift reps 8 "$TOPO" "$s" "$LCM" flow,sink "expAload_swift_L${rho}_s${s}" "$OUT"
-    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps 8 "$TOPO" "$s" "$LCM" flow,sink "expAload_mswift_L${rho}_s${s}" "$OUT"
+    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc oblivious 8 "$TOPO" "$s" "$LCM" flow "expAload_ops_L${rho}_s${s}" "$OUT"
+    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" nscc reps      8 "$TOPO" "$s" "$LCM" flow "expAload_reps_L${rho}_s${s}" "$OUT"
+    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" prism reps     8 "$TOPO" "$s" "$LCM" flow "expAload_prism_L${rho}_s${s}" "$OUT"
+    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" strack reps    8 "$TOPO" "$s" "$LCM" flow "expAload_strack_L${rho}_s${s}" "$OUT"
+    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mnscc reps 8 "$TOPO" "$s" "$LCM" flow "expAload_mnscc_L${rho}_s${s}" "$OUT"
+    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" swift reps 8 "$TOPO" "$s" "$LCM" flow "expAload_swift_L${rho}_s${s}" "$OUT"
+    PATHS=8 END_MS="$LOAD_END" EXTRA_ARGS="$DD" bash "$COMMON/run_lib.sh" mswift reps 8 "$TOPO" "$s" "$LCM" flow "expAload_mswift_L${rho}_s${s}" "$OUT"
   done
 done
 

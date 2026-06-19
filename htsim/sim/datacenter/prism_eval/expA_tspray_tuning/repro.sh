@@ -32,7 +32,7 @@ fi
 echo "== Stage 1: T_spray {$(echo $TSLIST)} x failed {0,8} x 5 seeds =="
 for ts in $TSLIST; do for f in 0 8; do for s in $SEEDS; do
   PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD -prism_t_spray $ts" \
-    bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow,sink "tsweep_ts${ts}_f${f}_s${s}" "$OUT"
+    bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow "tsweep_ts${ts}_f${f}_s${s}" "$OUT"
 done; done; done
 
 echo "== Stage 1 analysis (knee fig + criterion + T_spray*) =="
@@ -42,7 +42,7 @@ if [ -n "${TS_STAR:-}" ]; then
   echo "== Stage 2: validate PRISM at T_spray=$TS_STAR over failed {0,2,4,8,12} x 5 seeds =="
   for f in 0 2 4 8 12; do for s in $SEEDS; do
     PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD -prism_t_spray $TS_STAR" \
-      bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow,sink "tsval_f${f}_s${s}" "$OUT"
+      bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow "tsval_f${f}_s${s}" "$OUT"
   done; done
   echo "== Stage 2 figure (figT2_compare) =="
   python3 "$HERE/make_figs.py" --stage2 --ts-star "$TS_STAR"

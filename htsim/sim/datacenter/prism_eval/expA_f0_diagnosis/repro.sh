@@ -30,15 +30,15 @@ CM="$DELAY_REL/m2m.cm"
 echo "== f0 mechanism logs: PRISM (pathrtt+epoch) and REPS+NSCC (pathrtt), seed 13 =="
 PATHS=8 END_MS=8 EXTRA_ARGS="-disable_trim" \
   PRISM_PATHRTT="$OUT/f0_prism.pathrtt.csv" PRISM_EPOCH="$OUT/f0_prism.epoch.csv" \
-  bash "$COMMON/run_lib.sh" prism reps 0 fat_tree_128_1os.topo 13 "$CM" flow,sink f0_prism "$OUT"
+  bash "$COMMON/run_lib.sh" prism reps 0 fat_tree_128_1os.topo 13 "$CM" flow f0_prism "$OUT"
 PATHS=8 END_MS=8 EXTRA_ARGS="-disable_trim" \
   PRISM_PATHRTT="$OUT/f0_reps.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc reps 0 fat_tree_128_1os.topo 13 "$CM" flow,sink f0_reps "$OUT"
+  bash "$COMMON/run_lib.sh" nscc reps 0 fat_tree_128_1os.topo 13 "$CM" flow f0_reps "$OUT"
 
 echo "== kappa sweep: kappa{0.25,0.5} x failed{0,8} x seeds{13..17} (kappa=1.0 reused from expA_delaydriven) =="
 for k in 0.25 0.5; do for f in 0 8; do for s in 13 14 15 16 17; do
   PATHS=8 END_MS=8 EXTRA_ARGS="-disable_trim -prism_kappa $k" \
-    bash "$COMMON/run_lib.sh" prism reps "$f" fat_tree_128_1os.topo "$s" "$CM" flow,sink "kap${k}_f${f}_s${s}" "$OUT"
+    bash "$COMMON/run_lib.sh" prism reps "$f" fat_tree_128_1os.topo "$s" "$CM" flow "kap${k}_f${f}_s${s}" "$OUT"
 done; done; done
 
 echo "== analyze + render figD1_undergrowth, figD2_kappa =="

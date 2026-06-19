@@ -26,19 +26,19 @@ CM="$REL/data/m2m.cm"; OUT="$REL/data"
 
 echo "== main sweep: 3 baselines x failed{0,2,4,8,12} x 5 seeds =="
 for f in $FAILEDS; do for s in $SEEDS; do
-  PATHS=8 END_MS=2 bash "$COMMON/run_lib.sh" nscc oblivious "$f" "$TOPO" "$s" "$CM" flow,sink "expA_ops_f${f}_s${s}" "$OUT"
-  PATHS=8 END_MS=2 bash "$COMMON/run_lib.sh" nscc reps      "$f" "$TOPO" "$s" "$CM" flow,sink "expA_reps_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS=2 bash "$COMMON/run_lib.sh" nscc oblivious "$f" "$TOPO" "$s" "$CM" flow "expA_ops_f${f}_s${s}" "$OUT"
+  PATHS=8 END_MS=2 bash "$COMMON/run_lib.sh" nscc reps      "$f" "$TOPO" "$s" "$CM" flow "expA_reps_f${f}_s${s}" "$OUT"
   PATHS=8 END_MS=2 PRISM_EPOCH="$OUT/expA_prism_f${f}_s${s}.epoch.csv" \
-    bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow,sink "expA_prism_f${f}_s${s}" "$OUT"
+    bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow "expA_prism_f${f}_s${s}" "$OUT"
 done; done
 
 echo "== mechanism condition: failed=8, seed=13, all 3 with PRISM_PATHRTT =="
 PATHS=8 END_MS=2 PRISM_PATHRTT="$OUT/expA_ops_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc oblivious 8 "$TOPO" 13 "$CM" flow,sink expA_ops_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc oblivious 8 "$TOPO" 13 "$CM" flow expA_ops_mech "$OUT"
 PATHS=8 END_MS=2 PRISM_PATHRTT="$OUT/expA_reps_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" nscc reps 8 "$TOPO" 13 "$CM" flow,sink expA_reps_mech "$OUT"
+  bash "$COMMON/run_lib.sh" nscc reps 8 "$TOPO" 13 "$CM" flow expA_reps_mech "$OUT"
 PATHS=8 END_MS=2 PRISM_EPOCH="$OUT/expA_prism_mech.epoch.csv" PRISM_PATHRTT="$OUT/expA_prism_mech.pathrtt.csv" \
-  bash "$COMMON/run_lib.sh" prism reps 8 "$TOPO" 13 "$CM" flow,sink expA_prism_mech "$OUT"
+  bash "$COMMON/run_lib.sh" prism reps 8 "$TOPO" 13 "$CM" flow expA_prism_mech "$OUT"
 
 echo "== render Fig1 + Fig2 =="
 python3 "$HERE/make_figs.py"
