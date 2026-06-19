@@ -132,7 +132,7 @@ def render_main_perf(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, f
             f"{token}{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0]:.0f}us,"
             f"cr={aggs[lab][f]['cr'][0]:.2f}" for f in failed if aggs[lab].get(f)))
 
-def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f", goodput_sci=False):
+def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f", goodput_tbps=False):
     """Same data as render_main_perf, but emits THREE standalone figures (one metric each):
     `{stem_prefix}_goodput` (Gbps), `{stem_prefix}_avg_fct` (ms), `{stem_prefix}_p99_fct` (ms).
     aggregate() stores FCT in microseconds, so the two FCT panels scale by 1e-3 -> milliseconds."""
@@ -143,7 +143,9 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
               ("avg_fct", "Avg FCT (ms)", "avg_fct", 1e-3),
               ("p99_fct", "P99 FCT (ms)", "p99_fct", 1e-3)]
     for key, ylabel, suffix, scale in panels:
-        fig, ax = plt.subplots(1, 1, figsize=(5.2, 3.6))
+        if goodput_tbps and key == "goodput":   # goodput in Tbps with plain ticks (no scientific notation)
+            ylabel, scale = "Goodput (Tbps)", 1e-3
+        fig, ax = plt.subplots(1, 1, figsize=(5.2, 3.8))
         for (lab, disp, ck) in baselines:
             xs = [f for f in failed if aggs[lab].get(f)]
             ys = [aggs[lab][f][key][0] * scale for f in xs]
@@ -151,20 +153,10 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
             ax.errorbar(xs, ys, yerr=es, marker="o", lw=2.0, ms=6, capsize=3,
                         color=plot_style.COLORS[ck], label=disp)
         ax.set_ylabel(ylabel)
-        if goodput_sci and key == "goodput":
-            from matplotlib.ticker import ScalarFormatter, MultipleLocator
-            class _FixedOrder(ScalarFormatter):   # force the offset to ×10^2 (not matplotlib's auto ×10^3)
-                def _set_order_of_magnitude(self):
-                    self.orderOfMagnitude = 2
-            fmt = _FixedOrder(useMathText=True)
-            fmt.set_scientific(True)
-            fmt.set_powerlimits((0, 0))           # show the shared "×10²" multiplier at the top
-            ax.yaxis.set_major_formatter(fmt)
-            ax.yaxis.set_major_locator(MultipleLocator(500))   # ticks 500,1000 -> shown as 5, 10
         ax.set_xlabel(xlabel)
         ax.set_xticks(failed)
         ax.grid(alpha=0.3)
-        ax.legend(fontsize=9)
+        # ax.legend(fontsize=9)
         incomplete = [(lab, f, aggs[lab][f]["cr"][0]) for (lab, _d, _c) in baselines
                       for f in failed if aggs[lab].get(f) and aggs[lab][f]["cr"][0] < 0.999]
         if incomplete:
@@ -179,20 +171,37 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
             f"p99={aggs[lab][f]['p99_fct'][0] / 1000:.3f}ms,cr={aggs[lab][f]['cr'][0]:.2f}"
             for f in failed if aggs[lab].get(f)))
 
-def render_legend(figs_dir, baselines, fig_stem, ncol=None):
-    """Standalone single-row legend image of the baseline arms, matching the line style of
+def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None):
+    """Standalone legend image of the baseline arms, matching the line style of
     render_main_perf_split (marker 'o', lw 2.0, ms 6, per-arm color). Saves {fig_stem}.{png,pdf}
-    (legend only, tight-cropped). ncol defaults to len(baselines) -> one row."""
+    (legend only, tight-cropped). Default: one row (ncol=len(baselines)). Pass row_counts=[3,4]
+    to stack rows of those sizes, each row horizontally centered (so the rows share a centerline)."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
+    from matplotlib.legend import Legend
     plot_style.apply_style(13)
     handles = [Line2D([], [], marker="o", lw=2.0, ms=6, color=plot_style.COLORS[ck], label=disp)
                for (lab, disp, ck) in baselines]
-    fig = plt.figure(figsize=(0.1, 0.1))
-    fig.legend(handles=handles, ncol=(ncol or len(baselines)), loc="center", frameon=True, fontsize=11)
+    if row_counts:
+        n = len(row_counts)
+        fig = plt.figure(figsize=(3.0 * max(row_counts), 1.0 * n))   # generous; tight-crop trims excess
+        ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
+        i = 0
+        for r, cnt in enumerate(row_counts):
+            row = handles[i:i + cnt]; i += cnt
+            y = 1.0 - (r + 0.5) / n   # rows top-to-bottom; each row centered on x=0.5 -> shared centerline
+            leg = Legend(ax, row, [h.get_label() for h in row], ncol=cnt, loc="center",
+                         bbox_to_anchor=(0.5, y), bbox_transform=ax.transAxes,
+                         frameon=False, fontsize=24)
+            ax.add_artist(leg)
+        desc = f"rows={row_counts}, centered"
+    else:
+        fig = plt.figure(figsize=(0.1, 0.1))
+        fig.legend(handles=handles, ncol=(ncol or len(baselines)), loc="center", frameon=False, fontsize=24)
+        desc = f"ncol={ncol or len(baselines)}, single row"
     plot_style.save(fig, fig_stem, figs_dir)
     plt.close(fig)
-    print(f"[{fig_stem}] standalone legend: {len(handles)} entries, ncol={ncol or len(baselines)}")
+    print(f"[{fig_stem}] standalone legend: {len(handles)} entries, {desc}")
 
 def render_fairness(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fig_stem, xlabel, token="f"):
     """Standalone Jain-fairness figure: fairness vs `failed`, one line per baseline + error bars.

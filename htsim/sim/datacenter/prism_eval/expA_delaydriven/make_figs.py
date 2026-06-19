@@ -27,8 +27,8 @@ if __name__ == "__main__":
         perf_figs.selftest()
     else:
         os.makedirs(FIGS, exist_ok=True)
-        perf_figs.render_main_perf_split(DATA, FIGS, "expA", BASELINES, FAILED, SEEDS, "figA1dd", XLABEL, goodput_sci=True)
-        perf_figs.render_legend(FIGS, BASELINES, "figA1dd_legend")
+        perf_figs.render_main_perf_split(DATA, FIGS, "expA", BASELINES, FAILED, SEEDS, "figA1dd", XLABEL, goodput_tbps=True)
+        perf_figs.render_legend(FIGS, BASELINES, "figA1dd_legend", row_counts=[3, 4])
         perf_figs.render_fairness(DATA, FIGS, "expA", BASELINES, FAILED, SEEDS, "figA1dd_fairness", XLABEL)
         perf_figs.render_mechanism_split(DATA, FIGS, "expA", "figA2dd", 8, xlim_ms=3.0)
         perf_figs.render_main_perf_split(DATA, FIGS, "expAload", BASELINES, LOADS, SEEDS,
