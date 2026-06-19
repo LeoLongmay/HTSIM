@@ -177,7 +177,7 @@ Under meaningful asymmetry (failed ≥ 8) PRISM beats all six baselines on goodp
 
 At **f0** (symmetric): PRISM carries its known under-growth penalty vs the NSCC-family arms (−9.6% goodput vs REPS+NSCC, −10.3% vs REPS+MNSCC). Both Swift-family arms (REPS+Swift, REPS+MSwift) have similar f0 goodput to PRISM — they also under-grow relative to NSCC under symmetric load.
 
-At **f8**: PRISM goodput leads REPS+NSCC by +14.0% and REPS+MNSCC by +6.3%, but avg-FCT is mixed at this transition point. PRISM already leads avg-FCT over REPS+Swift (+4.3%) and REPS+MSwift (+3.0%) at f8.
+At **f8**: PRISM goodput leads REPS+NSCC by +14.0% and REPS+MNSCC by +6.3%, but avg-FCT is mixed at this transition point. PRISM already leads avg-FCT over REPS+Swift and REPS+MSwift at f8 (FCT 4.3% / 3.0% lower).
 
 **STrack does not beat REPS+NSCC** throughout the sweep (e.g. f8: 1910.0 vs 1961.6 Gbps; f48: 1465.6 vs 1479.2). The Swift-family arms (REPS+Swift, REPS+MSwift) are weaker than REPS+NSCC at low-moderate asymmetry (f8: Swift 1789.4 vs NSCC 1961.6) but slightly exceed REPS+NSCC at high asymmetry (f32: Swift 1693.2 vs NSCC 1558.7; MSwift 1834.4 vs NSCC 1558.7). Despite this, both Swift-family arms lose to PRISM at every failed ≥ 8 point — the PRISM floor decomposition benefits equally from the Swift-type delay signal under asymmetry.
 
@@ -305,8 +305,9 @@ hard-saturated every arm at any failure (failed ≥ 2 → cr ≈ 0 for all arms)
 
 - **f0:** All arms tie on goodput (~727–730 Gbps, cr = 1.00). Prism carries the expected symmetric
   avg-FCT penalty (+9.9% vs REPS+NSCC; −0.2% goodput gap is noise).
-- **f1, f2:** All four arms complete (cr = 1.00 for REPS+NSCC, STrack, Prism; OPS drops to cr 0.88
-  at f2). PRISM leads goodput clearly: f1 +5.6%, f2 +14.2% vs REPS+NSCC — at full completion.
+- **f1, f2:** All six non-OPS arms complete at cr = 1.00 (REPS+NSCC, REPS+Swift, REPS+MSwift,
+  REPS+MNSCC, STrack, Prism all reach cr = 1.00 at f1 and f2; OPS drops to cr 0.88 at f2).
+  PRISM leads goodput clearly: f1 +5.6%, f2 +14.2% vs REPS+NSCC — at full completion.
 - **f4:** The averaging arms (REPS+NSCC and STrack) drop to cr = 0.36 (122–123 Gbps). OPS drops to
   cr = 0.13 (45 Gbps). Prism completes cr = 0.84 (286.8 Gbps) — a **+133% goodput / 2.3×
   completion advantage**.
@@ -317,9 +318,9 @@ decomposition exploits it while the averaging arms over-decrease and stall.
 
 **Honest framing — what is and is not clean:**
 
-- f0, f1, f2 cells for REPS+NSCC / STrack / Prism are all cr = 1.00 and FCT comparisons are
-  unconfounded.
-- At **f4, cr < 1.00 for every arm** (Prism 0.84, REPS 0.36, STrack 0.36). Avg-FCT at f4 is
+- f0, f1, f2 cells for all six non-OPS arms (REPS+NSCC, REPS+Swift, REPS+MSwift, REPS+MNSCC,
+  STrack, Prism) are all cr = 1.00 and FCT comparisons are unconfounded.
+- At **f4, cr < 1.00 for every arm** (Prism 0.84, REPS+Swift 0.53, REPS+MSwift 0.66, REPS+NSCC 0.36, REPS+MNSCC 0.37, STrack 0.36, OPS 0.13). Avg-FCT at f4 is
   therefore **confounded** — flows that completed early are selected; do not compare avg-FCT
   across arms at this point. The goodput and cr numbers are the valid comparison at f4.
 - This is a **scale-dependent strengthening** of the result, not just a replication. It must be
