@@ -132,18 +132,18 @@ def render_main_perf(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, f
             f"{token}{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0]:.0f}us,"
             f"cr={aggs[lab][f]['cr'][0]:.2f}" for f in failed if aggs[lab].get(f)))
 
-def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f"):
+def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f", goodput_sci=False):
     """Same data as render_main_perf, but emits THREE standalone figures (one metric each):
     `{stem_prefix}_goodput` (Gbps), `{stem_prefix}_avg_fct` (ms), `{stem_prefix}_p99_fct` (ms).
     aggregate() stores FCT in microseconds, so the two FCT panels scale by 1e-3 -> milliseconds."""
     import matplotlib.pyplot as plt
-    plot_style.apply_style(13)
+    plot_style.apply_style(24)
     aggs = {lab: aggregate(data_dir, tag_prefix, lab, failed, seeds, token) for (lab, _d, _c) in baselines}
-    panels = [("goodput", "Goodput (Gbps)", "goodput", 1.0),
-              ("avg_fct", "Avg FCT (ms)", "avg_fct", 1e-3),
-              ("p99_fct", "P99 FCT (ms)", "p99_fct", 1e-3)]
+    panels = [("goodput", "Goodput (Gbps)", "Goodput", 1.0),
+              ("avg_fct", "Avg FCT (ms)", "Avg_fct", 1e-3),
+              ("p99_fct", "P99 FCT (ms)", "P99_fct", 1e-3)]
     for key, ylabel, suffix, scale in panels:
-        fig, ax = plt.subplots(1, 1, figsize=(5.2, 3.4))
+        fig, ax = plt.subplots(1, 1, figsize=(5.2, 3.6))
         for (lab, disp, ck) in baselines:
             xs = [f for f in failed if aggs[lab].get(f)]
             ys = [aggs[lab][f][key][0] * scale for f in xs]
@@ -151,6 +151,11 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
             ax.errorbar(xs, ys, yerr=es, marker="o", lw=2.0, ms=6, capsize=3,
                         color=plot_style.COLORS[ck], label=disp)
         ax.set_ylabel(ylabel)
+        if goodput_sci and key == "goodput":
+            from matplotlib.ticker import ScalarFormatter
+            fmt = ScalarFormatter(useMathText=True)
+            fmt.set_powerlimits((0, 0))   # force offset notation -> shared "×10ⁿ" multiplier at top
+            ax.yaxis.set_major_formatter(fmt)
         ax.set_xlabel(xlabel)
         ax.set_xticks(failed)
         ax.grid(alpha=0.3)
@@ -168,6 +173,21 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
             f"{token}{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0] / 1000:.3f}ms,"
             f"p99={aggs[lab][f]['p99_fct'][0] / 1000:.3f}ms,cr={aggs[lab][f]['cr'][0]:.2f}"
             for f in failed if aggs[lab].get(f)))
+
+def render_legend(figs_dir, baselines, fig_stem, ncol=None):
+    """Standalone single-row legend image of the baseline arms, matching the line style of
+    render_main_perf_split (marker 'o', lw 2.0, ms 6, per-arm color). Saves {fig_stem}.{png,pdf}
+    (legend only, tight-cropped). ncol defaults to len(baselines) -> one row."""
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    plot_style.apply_style(13)
+    handles = [Line2D([], [], marker="o", lw=2.0, ms=6, color=plot_style.COLORS[ck], label=disp)
+               for (lab, disp, ck) in baselines]
+    fig = plt.figure(figsize=(0.1, 0.1))
+    fig.legend(handles=handles, ncol=(ncol or len(baselines)), loc="center", frameon=True, fontsize=11)
+    plot_style.save(fig, fig_stem, figs_dir)
+    plt.close(fig)
+    print(f"[{fig_stem}] standalone legend: {len(handles)} entries, ncol={ncol or len(baselines)}")
 
 def render_fairness(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fig_stem, xlabel, token="f"):
     """Standalone Jain-fairness figure: fairness vs `failed`, one line per baseline + error bars.
