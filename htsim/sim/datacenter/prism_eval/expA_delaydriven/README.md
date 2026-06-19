@@ -314,8 +314,10 @@ flow-scaled target; same ~14 µs operating point; ECN ignored):
    top of LSwift's consecutive-count guard.
 
 MSwift is built entirely on phase-A Swift: same REPS spray, same ~14 µs target, ECN ignored, cr = 1.00
-everywhere. The main comparison figures now show **MSwift in place of the earlier MNSCC line**
-(MNSCC remains on the mechanism panel for context).
+everywhere. The main comparison figures show **both robust-statistics arms — REPS+MSwift and
+REPS+MNSCC — as REPS-sprayed CC competitors** (every non-OPS arm shares the REPS spray, so only the
+CC differs). Legend order is OPS+NSCC, REPS+NSCC, REPS+Swift, REPS+MSwift, REPS+MNSCC, STrack, Prism
+(Prism last, STrack second-to-last).
 
 **Failed-sweep results (figA1dd; cr = 1.00 everywhere):**
 
