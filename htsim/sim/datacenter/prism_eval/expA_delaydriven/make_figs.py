@@ -31,5 +31,8 @@ if __name__ == "__main__":
         perf_figs.render_legend(FIGS, BASELINES, "figA1dd_legend", row_counts=[3, 4])
         perf_figs.render_fairness(DATA, FIGS, "expA", BASELINES, FAILED, SEEDS, "figA1dd_fairness", XLABEL)
         perf_figs.render_mechanism_split(DATA, FIGS, "expA", "figA2dd", 8, xlim_ms=3.0)
+        perf_figs.render_decomposition(DATA, FIGS, "expA",
+            [(0, "128 nodes, failed=0 (symmetric)"), (8, "128 nodes, failed=8 (asymmetric)")],
+            "figA2dd_decomp")
         perf_figs.render_main_perf_split(DATA, FIGS, "expAload", BASELINES, LOADS, SEEDS,
                                          "figA3dd_load", XLABEL_LOAD, token="L")

@@ -349,6 +349,45 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
         print(f"[{stem_prefix}] DISTINCTNESS (per-ACK cwnd-decreases @{lbl}): "
               f"STrack={strack_dec}  REPS+NSCC={reps_dec}")
 
+def render_decomposition(data_dir, figs_dir, tag_prefix, cells, fig_stem,
+                         seed=13, bin_w_ms=0.02, xlim_ms=None):
+    """PRISM's two decomposed signals as time series, one panel per cell.
+    `cells` = [(failed, panel_label), ...]. Reads {tag_prefix}_prism_f{failed}_s{seed}.epoch.csv
+    and plots, per panel: faint raw + bold 20us-binned C_cc (floor->CC) and C_spray (spread->spray),
+    a target line at ~1 RTT (base_rtt), and a mean-C_spray annotation (us)."""
+    import matplotlib.pyplot as plt
+    plot_style.apply_style(13)
+    n = len(cells)
+    fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 4.0), sharey=True)
+    if n == 1:
+        axes = [axes]
+    for ax, (failed, label) in zip(axes, cells):
+        path = os.path.join(data_dir, f"{tag_prefix}_prism_f{failed}_s{seed}.epoch.csv")
+        ep = metrics.parse_prism_epoch(path) if os.path.exists(path) else []
+        if not ep:
+            ax.set_title(f"{label}\n(no data)", fontsize=11); ax.set_xlabel("time (ms)"); continue
+        te = [r["time_ns"] / 1e6 for r in ep]        # ms
+        cc = [r["c_cc_ns"] / 1000.0 for r in ep]      # us
+        sp = [r["c_spray_ns"] / 1000.0 for r in ep]   # us
+        base_us = ep[0]["base_rtt_ns"] / 1000.0       # ~14 us
+        ax.plot(te, cc, color=plot_style.COLORS["ccc"], lw=0.6, alpha=0.20)
+        ax.plot(te, sp, color=plot_style.COLORS["spray"], lw=0.6, alpha=0.20)
+        bx, bcc = _bin_series(te, cc, bin_w_ms)
+        ax.plot(bx, bcc, color=plot_style.COLORS["ccc"], lw=2.2, label="C_cc (floor -> CC)")
+        sx, bsp = _bin_series(te, sp, bin_w_ms)
+        ax.plot(sx, bsp, color=plot_style.COLORS["spray"], lw=2.2, label="C_spray (spread -> spray)")
+        ax.axhline(base_us, color=plot_style.COLORS["target"], ls="--", lw=1.3,
+                   label=f"target (~1 RTT, {base_us:.0f}us)")
+        ax.text(0.97, 0.95, f"mean C_spray: {sum(sp)/len(sp):.0f} us",
+                transform=ax.transAxes, ha="right", va="top", fontsize=9,
+                bbox=dict(boxstyle="round", fc="white", alpha=0.7))
+        ax.set_title(label, fontsize=11); ax.set_xlabel("time (ms)"); ax.grid(alpha=0.3)
+        if xlim_ms:
+            ax.set_xlim(0, xlim_ms)
+    axes[0].set_ylabel("Queuing delay (us)")
+    axes[0].legend(fontsize=8, loc="upper left")
+    plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
+
 def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, target_us=6.0, base_ns=13945, mech_label=None):
     """Mechanism @ mech_failed: (a) REPS+NSCC avg/floor vs PRISM floor C_cc vs target;
     (b) cwnd(t) PRISM vs REPS+NSCC. Prints fair per-ACK cut counts + the floor-MD fraction

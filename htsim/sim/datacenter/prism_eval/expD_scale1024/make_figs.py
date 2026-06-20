@@ -48,6 +48,9 @@ if __name__ == "__main__":
         perf_figs.render_fairness(DATA, FIGS, "expD1", BASELINES, FAILED_D1, SEEDS, "figD1_fairness", XLABEL_D1)
         perf_figs.render_mechanism_split(DATA, FIGS, "expD1", "figD1_mech", 32, xlim_ms=3.0,
                                          mech_label="1:1, failed=32 (50% pod0 ingress)")
+        perf_figs.render_decomposition(DATA, FIGS, "expD1",
+            [(0, "1024 nodes, failed=0 (symmetric)"), (32, "1024 nodes, failed=32 (asymmetric)")],
+            "figD1_mech_decomp")
         # --- D2 (scales expB_oversub_asym) ---
         perf_figs.render_main_perf(DATA, FIGS, "expD2_4os", BASELINES, FAILED_4OS, SEEDS,
                                    "figD2_4os_main", XLABEL_4OS)
