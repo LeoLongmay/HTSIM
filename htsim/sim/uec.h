@@ -377,6 +377,8 @@ public:
     // PRISM params. T_cc IS _target_Qdelay (reused, not a separate knob).
     static simtime_picosec _prism_T_spray;  // tolerated spread; 0 = follow _target_Qdelay
     static double          _prism_kappa;    // epoch length = kappa * base_rtt; default 1.0
+    static double          _prism_spread_persist;       // -prism_spread_persist; HOLD needs c_spray>=δ*S_slow; 0 = off
+    static double          _prism_spread_persist_beta;  // -prism_spread_persist_beta; slow-EWMA weight β for S_slow; default 1/32
     // STrack (coupled-SOTA baseline) params. CC core reuses NSCC's _gamma/_eta/_target_Qdelay.
     static double _strack_beta;   // starvation-bump scale (Table 1 beta; dimensionless, default 5.0)
     static double _strack_h;      // per-hop target scale; default 0 (fixed target, see spec §3) (arg-parse symmetry in Task 3; not consumed while h=0)
@@ -487,6 +489,7 @@ private:
     int             _prism_region        = 0;  // 0 = INCREASE (cold-start ramp)
     simtime_picosec _prism_ccc           = 0;  // last epoch's C_cc (increase headroom + log)
     simtime_picosec _prism_cspray        = 0;  // last epoch's C_spray (log)
+    simtime_picosec _prism_cspray_slow   = 0;  // Scheme A: slow EWMA of scalar C_spray (0 = uninit); C_cc stays instantaneous
     bool            _prism_genuine_sample = false;  // set in processAck: true iff this ACK gave a
                                                     // genuine raw_rtt-base sample (not avg fallback)
 
