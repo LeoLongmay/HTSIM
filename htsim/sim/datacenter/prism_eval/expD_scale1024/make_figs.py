@@ -50,7 +50,7 @@ if __name__ == "__main__":
                                          mech_label="1:1, failed=32 (50% pod0 ingress)")
         perf_figs.render_decomposition(DATA, FIGS, "expD1",
             [(0, "1024 nodes, failed=0 (symmetric)"), (32, "1024 nodes, failed=32 (asymmetric)")],
-            "figD1_mech_decomp")
+            "figD1_mech_decomp", ylim_us=100)
         # --- D2 (scales expB_oversub_asym) ---
         perf_figs.render_main_perf(DATA, FIGS, "expD2_4os", BASELINES, FAILED_4OS, SEEDS,
                                    "figD2_4os_main", XLABEL_4OS)
