@@ -390,6 +390,41 @@ def render_decomposition(data_dir, figs_dir, tag_prefix, cells, fig_stem,
         axes[0].set_ylim(0, ylim_us)
     plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
 
+def render_decomposition_merged(figs_dir, fig_stem, panels, ylim_us=None, bin_w_ms=0.02):
+    """Merged PRISM decomposition: overlay scales per panel (solid vs dashed), 20us-binned only
+    (no faint raw). `panels` = [(panel_title, [(data_dir, tag_prefix, failed, seed, ls, series_label), ...])].
+    Color encodes the signal (C_cc red / C_spray green); linestyle encodes the scale."""
+    import matplotlib.pyplot as plt
+    plot_style.apply_style(13)
+    n = len(panels)
+    fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 4.0), sharey=True)
+    if n == 1:
+        axes = [axes]
+    for ax, (title, series) in zip(axes, panels):
+        base_us = None
+        for (data_dir, tag_prefix, failed, seed, ls, slabel) in series:
+            path = os.path.join(data_dir, f"{tag_prefix}_prism_f{failed}_s{seed}.epoch.csv")
+            ep = metrics.parse_prism_epoch(path) if os.path.exists(path) else []
+            if not ep:
+                continue
+            te = [r["time_ns"] / 1e6 for r in ep]
+            cc = [r["c_cc_ns"] / 1000.0 for r in ep]
+            sp = [r["c_spray_ns"] / 1000.0 for r in ep]
+            base_us = ep[0]["base_rtt_ns"] / 1000.0
+            bx, bcc = _bin_series(te, cc, bin_w_ms)
+            ax.plot(bx, bcc, color=plot_style.COLORS["ccc"], lw=2.2, ls=ls, label=f"C_cc {slabel}")
+            sx, bsp = _bin_series(te, sp, bin_w_ms)
+            ax.plot(sx, bsp, color=plot_style.COLORS["spray"], lw=2.2, ls=ls, label=f"C_spray {slabel}")
+        if base_us is not None:
+            ax.axhline(base_us, color=plot_style.COLORS["target"], ls=":", lw=1.3,
+                       label=f"target (~1 RTT, {base_us:.0f}us)")
+        ax.set_title(title, fontsize=11); ax.set_xlabel("time (ms)"); ax.grid(alpha=0.3)
+        if ylim_us is not None:
+            ax.set_ylim(0, ylim_us)
+    axes[0].set_ylabel("Queuing delay (us)")
+    axes[0].legend(fontsize=7, loc="upper left")
+    plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
+
 def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, target_us=6.0, base_ns=13945, mech_label=None):
     """Mechanism @ mech_failed: (a) REPS+NSCC avg/floor vs PRISM floor C_cc vs target;
     (b) cwnd(t) PRISM vs REPS+NSCC. Prints fair per-ACK cut counts + the floor-MD fraction

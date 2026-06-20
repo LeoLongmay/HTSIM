@@ -51,6 +51,16 @@ if __name__ == "__main__":
         perf_figs.render_decomposition(DATA, FIGS, "expD1",
             [(0, "1024 nodes, failed=0 (symmetric)"), (32, "1024 nodes, failed=32 (asymmetric)")],
             "figD1_mech_decomp", ylim_us=100)
+        # Merged decomposition: 128 (solid) + 1024 (dashed) overlaid, binned only (no raw).
+        EXPA_DATA = os.path.join(HERE, "..", "expA_delaydriven", "data")
+        perf_figs.render_decomposition_merged(FIGS, "figAD_decomp", [
+            ("Symmetric (failed=0)", [
+                (EXPA_DATA, "expA", 0, 13, "-", "(128)"),
+                (DATA, "expD1", 0, 13, "--", "(1024)")]),
+            ("Asymmetric (128:f8 / 1024:f32)", [
+                (EXPA_DATA, "expA", 8, 13, "-", "(128)"),
+                (DATA, "expD1", 32, 13, "--", "(1024)")]),
+        ], ylim_us=100)
         # --- D2 (scales expB_oversub_asym) ---
         perf_figs.render_main_perf(DATA, FIGS, "expD2_4os", BASELINES, FAILED_4OS, SEEDS,
                                    "figD2_4os_main", XLABEL_4OS)
