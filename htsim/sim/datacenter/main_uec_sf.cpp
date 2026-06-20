@@ -183,10 +183,6 @@ int main(int argc, char** argv) {
             UecSrc::_prism_kappa = atof(argv[i + 1]);
             cout << "prism_kappa " << UecSrc::_prism_kappa << endl;
             i++;
-        } else if (!strcmp(argv[i], "-prism_spread_ratio")) {
-            UecSrc::_prism_spread_ratio = atof(argv[i + 1]);
-            cout << "prism_spread_ratio " << UecSrc::_prism_spread_ratio << endl;
-            i++;
         } else if (!strcmp(argv[i], "-cwnd")) {
             cwnd_b = (mem_b)std::stoi(argv[i + 1]);
             i++;

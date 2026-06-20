@@ -377,7 +377,6 @@ public:
     // PRISM params. T_cc IS _target_Qdelay (reused, not a separate knob).
     static simtime_picosec _prism_T_spray;  // tolerated spread; 0 = follow _target_Qdelay
     static double          _prism_kappa;    // epoch length = kappa * base_rtt; default 1.0
-    static double          _prism_spread_ratio;  // -prism_spread_ratio; HOLD needs c_spray>=ratio*c_cc; 0 = off (today's rule)
     // STrack (coupled-SOTA baseline) params. CC core reuses NSCC's _gamma/_eta/_target_Qdelay.
     static double _strack_beta;   // starvation-bump scale (Table 1 beta; dimensionless, default 5.0)
     static double _strack_h;      // per-hop target scale; default 0 (fixed target, see spec §3) (arg-parse symmetry in Task 3; not consumed while h=0)

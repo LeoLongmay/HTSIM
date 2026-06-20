@@ -13,11 +13,9 @@ enum Region { INCREASE = 0, HOLD = 1, DECREASE = 2 };
 // ">=" counts as "high". P5 ablation variants will branch here (left as the single
 // decision point); P1 implements the default rule only.
 inline Region decide_region(uint64_t c_cc, uint64_t c_spray,
-                            uint64_t t_cc, uint64_t t_spray,
-                            double spread_ratio = 0.0) {
-    bool floor_high  = c_cc >= t_cc;
-    bool spread_high = (c_spray >= t_spray) &&
-                       (spread_ratio <= 0.0 || (double)c_spray >= spread_ratio * (double)c_cc);
+                            uint64_t t_cc, uint64_t t_spray) {
+    bool floor_high  = c_cc    >= t_cc;
+    bool spread_high = c_spray >= t_spray;
     if (!floor_high && !spread_high) return INCREASE;  // floor safe, paths balanced
     if (!floor_high &&  spread_high) return HOLD;       // clean path exists; let REPS rebalance
     return DECREASE;                                    // floor high: even the best path is queued
