@@ -2,7 +2,6 @@
 #include "uec.h"
 #include <math.h>
 #include <cstdlib>
-#include <limits>
 #include <cstdint>
 #include <fstream>
 #include <sstream>
@@ -100,8 +99,6 @@ simtime_picosec UecSrc::_adjust_period_threshold = timeFromUs(12u);
 simtime_picosec UecSrc::_target_Qdelay = timeFromUs(6u);
 simtime_picosec UecSrc::_prism_T_spray = 0;   // 0 sentinel: follow _target_Qdelay
 double UecSrc::_prism_kappa = 1.0;
-double UecSrc::_prism_spread_persist = 0.0;        // 0 = disabled: no persistence gate (today's PRISM)
-double UecSrc::_prism_spread_persist_beta = 0.03125;  // 1/32: slow baseline, ~32-epoch memory
 uint32_t UecSrc::_mnscc_h = 0;
 double          UecSrc::_swift_ai = 1.0;
 double          UecSrc::_swift_beta = 0.8;
@@ -1555,20 +1552,7 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             && _prism_epoch_samples >= PRISM_MIN_SAMPLES) {
         simtime_picosec c_cc = _prism_epoch_min;
         simtime_picosec c_spray = _prism_epoch_max - _prism_epoch_min;
-        // PRISM Scheme A (spread-persistence gate, default OFF): release HOLD on a draining transient
-        // -- a spread far below its own slow baseline. C_cc stays instantaneous (do NOT smooth the floor).
-        // compare-then-update: decide on the prior baseline, then fold in this epoch's spread.
-        simtime_picosec t_spray_eff = t_spray;
-        if (_prism_spread_persist > 0.0) {
-            bool persistent = (_prism_cspray_slow == 0) ||
-                ((double)c_spray >= _prism_spread_persist * (double)_prism_cspray_slow);
-            if (!persistent)
-                t_spray_eff = std::numeric_limits<simtime_picosec>::max();
-            _prism_cspray_slow = (_prism_cspray_slow == 0) ? c_spray
-                : (simtime_picosec)(_prism_spread_persist_beta * (double)c_spray
-                    + (1.0 - _prism_spread_persist_beta) * (double)_prism_cspray_slow);
-        }
-        int region = prism::decide_region(c_cc, c_spray, _target_Qdelay, t_spray_eff);
+        int region = prism::decide_region(c_cc, c_spray, _target_Qdelay, t_spray);
         if (region == prism::DECREASE && c_cc > _target_Qdelay
                 && eventlist().now() - _last_dec_time > _base_rtt) {
             mem_b before = _cwnd;

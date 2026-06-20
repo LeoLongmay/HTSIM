@@ -183,14 +183,6 @@ int main(int argc, char** argv) {
             UecSrc::_prism_kappa = atof(argv[i + 1]);
             cout << "prism_kappa " << UecSrc::_prism_kappa << endl;
             i++;
-        } else if (!strcmp(argv[i], "-prism_spread_persist")) {
-            UecSrc::_prism_spread_persist = atof(argv[i + 1]);
-            cout << "prism_spread_persist " << UecSrc::_prism_spread_persist << endl;
-            i++;
-        } else if (!strcmp(argv[i], "-prism_spread_persist_beta")) {
-            UecSrc::_prism_spread_persist_beta = atof(argv[i + 1]);
-            cout << "prism_spread_persist_beta " << UecSrc::_prism_spread_persist_beta << endl;
-            i++;
         } else if (!strcmp(argv[i], "-cwnd")) {
             cwnd_b = (mem_b)std::stoi(argv[i + 1]);
             i++;
