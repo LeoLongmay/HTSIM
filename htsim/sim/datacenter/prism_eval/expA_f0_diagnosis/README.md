@@ -108,6 +108,25 @@ more often does not change *which* region PRISM picks (it still HOLDs on the sam
   O(1) and removed the prototype.** The f0 symmetric penalty therefore stands as an
   honestly-characterized cost of PRISM's O(1) decomposition, not a defect we patched over.
   (Prototype controller code reverted; the eval lives on only as this summary + `../NARRATIVE.md`.)
+- **Fix direction tried — an O(1) spread/floor ratio gate — and REFUTED (honest-null, reverted).** A
+  read-only epoch-log screen looked promising: *within HOLD epochs*, the f8-win spread/floor ratio
+  `C_spray/C_cc` has median **16.5×** vs the f0/incast-cost **3.4–3.9×** — apparently separable, so a
+  ratio threshold ought to drop the transient-driven HOLDs while keeping the structural ones. Unlike
+  the per-path EWMA above this stays **O(1)** (no per-path state): we tightened the HOLD-entry test
+  to `spread_high ⟺ C_spray ≥ max(T_spray, ρ·C_cc)` (combined-AND, flag-gated `-prism_spread_ratio`,
+  ρ=0 = OFF = byte-identical). A 5-seed f0+f8 sweep over ρ∈{0,3,5,8}: ρ=0 reproduced PRISM-default
+  **exactly** (f0 868.6/945, f8 504.2/1518 — regression confirmed), but **no ρ recovered f0** —
+  goodput 868.6→868.1→861.2→858.5 (flat-to-slightly-worse, all within ±14 seed noise), avg-FCT flat
+  944–945 — while the f8 win held at ρ≤5 (507.6 / 502.3 vs 504.2) and eroded at ρ=8 (486.7).
+  **Why the screen over-predicted:** the flip-% was *observational* on current-controller logs; once
+  the gate actually flips HOLD→INCREASE the closed-loop window trajectory changes, and the re-grown
+  window at f0 just re-hits the same draining transient/shared bottleneck — loosening HOLD *entry*
+  does not convert into throughput. This is **consistent with the root cause**: the f0 deficit is
+  under-growth bounded by the floor and the transient itself, not by *which* epochs enter HOLD.
+  Prototype reverted (O(1) preserved); design/plan retained as `docs/superpowers/{specs,plans}/
+  2026-06-20-prism-ratio-gate-*`. So the symmetric cost now has **three** refuted fixes on record —
+  `T_spray`/`kappa` (knobs), the per-path EWMA (backfired −18%), and this O(1) ratio gate (do-no-harm
+  null) — reinforcing that it is an intrinsic cost of the O(1) decomposition, not a tunable defect.
 
 ## Honest caveats
 - The proximate cause (under-growth: cut counts, region split, cwnd) and the f8-persistent /
