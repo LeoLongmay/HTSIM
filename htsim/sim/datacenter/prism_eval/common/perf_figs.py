@@ -350,7 +350,7 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
               f"STrack={strack_dec}  REPS+NSCC={reps_dec}")
 
 def render_decomposition(data_dir, figs_dir, tag_prefix, cells, fig_stem,
-                         seed=13, bin_w_ms=0.02, xlim_ms=None):
+                         seed=13, bin_w_ms=0.02, xlim_ms=None, ylim_us=None):
     """PRISM's two decomposed signals as time series, one panel per cell.
     `cells` = [(failed, panel_label), ...]. Reads {tag_prefix}_prism_f{failed}_s{seed}.epoch.csv
     and plots, per panel: faint raw + bold 20us-binned C_cc (floor->CC) and C_spray (spread->spray),
@@ -386,6 +386,8 @@ def render_decomposition(data_dir, figs_dir, tag_prefix, cells, fig_stem,
             ax.set_xlim(0, xlim_ms)
     axes[0].set_ylabel("Queuing delay (us)")
     axes[0].legend(fontsize=8, loc="upper left")
+    if ylim_us is not None:
+        axes[0].set_ylim(0, ylim_us)
     plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
 
 def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, target_us=6.0, base_ns=13945, mech_label=None):

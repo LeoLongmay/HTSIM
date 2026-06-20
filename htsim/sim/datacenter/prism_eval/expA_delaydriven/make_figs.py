@@ -33,6 +33,6 @@ if __name__ == "__main__":
         perf_figs.render_mechanism_split(DATA, FIGS, "expA", "figA2dd", 8, xlim_ms=3.0)
         perf_figs.render_decomposition(DATA, FIGS, "expA",
             [(0, "128 nodes, failed=0 (symmetric)"), (8, "128 nodes, failed=8 (asymmetric)")],
-            "figA2dd_decomp")
+            "figA2dd_decomp", ylim_us=100)
         perf_figs.render_main_perf_split(DATA, FIGS, "expAload", BASELINES, LOADS, SEEDS,
                                          "figA3dd_load", XLABEL_LOAD, token="L")
