@@ -38,9 +38,10 @@ def aggregate_cct(data_dir, tag_prefix, label, failed, seeds, size_bytes,
 
 def render_cct_bars(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fig_stem, size_bytes,
                     link_gbps=100.0, base_rtt_s=14e-6, token="f"):
-    """Grouped bar chart of CCT inflation (%) vs failed-links (MSwift Fig. 7/11 aesthetic): x-axis
-    groups = failed levels, one bar per baseline arm, log-y, value labels, SEM error bars, legend
-    on top. baselines = (label, display, color_key) triples."""
+    """Grouped bar chart of CCT slowdown (= CCT / zero-queue lower bound; 1.0 = ideal) vs failed-links
+    (MSwift Fig. 7/11 aesthetic): x-axis groups = failed levels, one bar per baseline arm, linear-y
+    with plain numeric ticks, SEM error bars, legend on top. baselines = (label, display, color_key)
+    triples. (aggregate_cct returns inflation%; slowdown = inflation/100 + 1, an exact linear map.)"""
     import matplotlib.pyplot as plt
     plot_style.apply_style(13)
     aggs = {lab: aggregate_cct(data_dir, tag_prefix, lab, failed, seeds, size_bytes,
@@ -49,14 +50,14 @@ def render_cct_bars(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fi
     n = len(baselines); group_w = 0.66; bw = group_w / n
     x = list(range(len(failed)))
     for j, (lab, disp, ck) in enumerate(baselines):
-        means = [aggs[lab].get(f, (float("nan"), 0.0))[0] for f in failed]
-        sems  = [aggs[lab].get(f, (float("nan"), 0.0))[1] for f in failed]
+        means = [aggs[lab].get(f, (float("nan"), 0.0))[0] / 100.0 + 1.0 for f in failed]  # %->slowdown
+        sems  = [aggs[lab].get(f, (float("nan"), 0.0))[1] / 100.0 for f in failed]
         offs  = [xi - group_w / 2 + bw * (j + 0.5) for xi in x]
         ax.bar(offs, means, bw, yerr=sems, capsize=2,
                color=plot_style.COLORS.get(ck), label=disp)
-    ax.set_yscale("log")
+    ax.axhline(1.0, color="gray", ls="--", lw=1.0, zorder=0)   # slowdown 1.0 = zero-queue ideal
     ax.set_xticks(x); ax.set_xticklabels([str(f) for f in failed])
-    ax.set_xlabel("Number of failed links"); ax.set_ylabel("CCT Increase (%)")
+    ax.set_xlabel("Number of failed links"); ax.set_ylabel("CCT slowdown")
     ax.grid(axis="y", alpha=0.3)
     ax.legend(ncol=min(len(baselines), 4), fontsize=7, loc="upper center",
               bbox_to_anchor=(0.5, 1.18), frameon=False)

@@ -13,7 +13,7 @@ axis, as our extension.
 | Aspect | Faithful | Our extension / deviation |
 |---|---|---|
 | Workload | HSDP ring single step (stride-8, 13 MB/flow, 128 GPU, random placement) | — |
-| Metric | CCT = worst-case FCT; CCT inflation over a zero-queue lower bound | — |
+| Metric | CCT = worst-case FCT; CCT slowdown over a zero-queue lower bound | — |
 | Figure | grouped bar chart, log-y, value labels, SEM error bars | — |
 | Fabric | 3-tier non-blocking 128-node fat-tree, ECN, no trimming | **100 G / 1 µs-hop / COMPOSITE** (ours), not MSwift's 800 G / 0.5 µs / 4 KB / droptail |
 | Asymmetry | MSwift fails 1 % of links on its *baseline* (Fig. 11), not on the AI workload | We sweep **failed-links {0,4,8,12}** on the AI workload |
@@ -35,8 +35,9 @@ axis, as our extension.
 
 ## 3. Metric
 
-CCT = worst-case FCT across the 128 ring flows. **CCT Increase (%)** = (CCT − LB)/LB×100, where the
-zero-queue lower bound LB = base_rtt + size×8/100 Gbps ≈ 1.11 ms. Error bars = SEM across seeds.
+CCT = worst-case FCT across the 128 ring flows. **CCT slowdown** = CCT / LB, where the zero-queue
+lower bound LB = base_rtt + size×8/100 Gbps ≈ 1.11 ms (slowdown 1.0 = ideal/no queueing; 2.0 = twice
+the ideal). Error bars = SEM across seeds. (Equivalently, "CCT increase %" = (slowdown − 1)×100.)
 
 ## 4. Honest pre-registration
 
@@ -54,35 +55,35 @@ All 140 cells completed; **137/140 at cr = 1.00** (the 3 exceptions are the OPS+
 **PRISM gives the lowest collective completion time on the AI ring at every failure level, and the
 margin grows with failures.** It is the single best arm at f0, f4, f8, and f12.
 
-### CCT Increase (%) — mean ± SEM, 5 seeds (lower is better)
+### CCT slowdown (CCT / ideal) — mean ± SEM, 5 seeds (lower is better; 1.0 = ideal)
 
 | Arm | f0 | f4 | f8 | f12 |
 |---|---|---|---|---|
-| OPS+NSCC | 146 ± 15 | 379 ± 62 | 448 ± 77 | 477 ± 58 |
-| REPS+NSCC | 95 ± 8 | 260 ± 46 | 285 ± 26 | 328 ± 42 |
-| REPS+Swift | 114 ± 7 | 292 ± 47 | 307 ± 31 | 339 ± 36 |
-| REPS+MSwift | 111 ± 7 | 226 ± 34 | 258 ± 16 | 304 ± 33 |
-| REPS+MNSCC | 97 ± 8 | 249 ± 43 | 278 ± 28 | 316 ± 38 |
-| STrack | 94 ± 9 | 258 ± 45 | 302 ± 27 | 348 ± 47 |
-| **Prism** | **78 ± 4** | **157 ± 19** | **170 ± 11** | **213 ± 23** |
+| OPS+NSCC | 2.46 ± 0.15 | 4.79 ± 0.62 | 5.48 ± 0.77 | 5.77 ± 0.58 |
+| REPS+NSCC | 1.95 ± 0.08 | 3.60 ± 0.46 | 3.85 ± 0.26 | 4.28 ± 0.42 |
+| REPS+Swift | 2.14 ± 0.07 | 3.92 ± 0.47 | 4.07 ± 0.31 | 4.39 ± 0.36 |
+| REPS+MSwift | 2.11 ± 0.07 | 3.26 ± 0.34 | 3.58 ± 0.16 | 4.04 ± 0.33 |
+| REPS+MNSCC | 1.97 ± 0.08 | 3.49 ± 0.43 | 3.78 ± 0.28 | 4.16 ± 0.38 |
+| STrack | 1.94 ± 0.09 | 3.58 ± 0.45 | 4.02 ± 0.27 | 4.48 ± 0.47 |
+| **Prism** | **1.78 ± 0.04** | **2.57 ± 0.19** | **2.70 ± 0.11** | **3.13 ± 0.23** |
 
-### Prism vs REPS+NSCC (the UEC reference arm) — CCT-inflation reduction
+### Prism vs REPS+NSCC (the UEC reference arm)
 
-| failed | Prism | REPS+NSCC | Δ |
-|---|---|---|---|
-| f0 | 78% | 95% | **−17 pts** |
-| f4 | 157% | 260% | **−103 pts** |
-| f8 | 170% | 285% | **−115 pts** |
-| f12 | 213% | 328% | **−114 pts** |
+| failed | Prism | REPS+NSCC |
+|---|---|---|
+| f0 | **1.78×** | 1.95× |
+| f4 | **2.57×** | 3.60× |
+| f8 | **2.70×** | 3.85× |
+| f12 | **3.13×** | 4.28× |
 
-At f8, PRISM's CCT inflation (170%) is **1.7× smaller** than REPS+NSCC's (285%) and **2.6× smaller**
-than OPS+NSCC's (448%).
+At f8, PRISM's **excess time over ideal** (slowdown − 1 = 1.70) is **1.7× smaller** than REPS+NSCC's
+(2.85) and **2.9× smaller** than OPS+NSCC's (4.48).
 
 ### f0 exceeds the pre-registration — and the mechanism explains why
 
 §4 pre-registered f0 as "do-no-harm / roughly neutral, not a win," on the assumption that a healthy
 ring has `C_spray ≈ 0`. **That premise was wrong, and the result beats it: PRISM is the best arm at
-f0 (−17 pts vs REPS+NSCC).** `figF4_ai_decomp` shows why — even on the *symmetric* ring the
+f0 (slowdown 1.78× vs REPS+NSCC's 1.95×).** `figF4_ai_decomp` shows why — even on the *symmetric* ring the
 congestion is **spread-dominated**: `C_spray ≈ 34 µs` (rising to ≈ 38 µs at f8) while the floor
 `C_cc` stays pinned near zero, well below the ~14 µs target, throughout. The HSDP ring's bursty
 all-lanes-at-once traffic produces large per-path spread but almost no persistent floor. A CC that
@@ -101,16 +102,17 @@ OPS+NSCC stretch to 5–8 ms. CCT is a worst-case metric, so the tail is what th
 ### Verdict
 
 On MSwift's own AI-training collective, PRISM's congestion-decomposition advantage **holds and grows
-with fabric degradation** — best arm at every level, 1.7× lower CCT inflation than the UEC reference
-at f8. The win is driven by spread-dominated ring congestion (`figF4`), and it shows up even on the
+with fabric degradation** — best arm at every level (CCT slowdown 1.78×/2.57×/2.70×/3.13× at
+f0/f4/f8/f12), with 1.7× lower excess-over-ideal than the UEC reference at f8. The win is driven by
+spread-dominated ring congestion (`figF4`), and it shows up even on the
 healthy fabric, exceeding the do-no-harm bar we pre-registered.
 
 ## 6. Caveats (honest)
 
 1. **Failure on-path check (passed).** The failed links must lie on paths the spatially-uniform ring
-   traverses, else the sweep would be meaningless. They do: CCT rises monotonically f0→f12 across all
-   arms (e.g. REPS+NSCC 95%→328%, PRISM 78%→213%), confirming the `-failed K` choke bites the ring
-   traffic.
+   traverses, else the sweep would be meaningless. They do: CCT slowdown rises monotonically f0→f12
+   across all arms (e.g. REPS+NSCC 1.95×→4.28×, PRISM 1.78×→3.13×), confirming the `-failed K` choke
+   bites the ring traffic.
 2. **OPS+NSCC does not fully drain under failures.** 3 of 140 cells have cr < 1.00 — all **OPS+NSCC**,
    all seed 16 (f4/f8/f12, cr ≈ 0.94, ~7–8 of 128 flows unfinished at END = 8 ms). Oblivious spraying
    has no way to avoid degraded links, so on a choked fabric some flows starve. CCT there is computed
