@@ -7,6 +7,7 @@ import incast  # noqa: E402
 import ai_ring  # noqa: E402
 import coll_ring  # noqa: E402
 import coll_butterfly  # noqa: E402
+import coll_alltoall  # noqa: E402
 
 def _parse_cm(text):
     """Parse a .cm string into [(src,dst),...] and validate the header counts."""
@@ -152,6 +153,21 @@ def test_coll_butterfly():
         pass
     print("ok coll_butterfly")
 
+def test_coll_alltoall():
+    text, nc, nt = coll_alltoall.build(nodes=128, groupsize=128, parallel=32, flowsize=131072, seed=13)
+    assert nc == 128 * 127 == 16256, nc
+    assert nt == 128 * ((128 - 1) // 32) == 384, nt    # (conns-1)%parallel != 0 branch
+    lines = text.strip().split("\n")
+    assert lines[0] == "Nodes 128" and lines[1] == "Connections 16256" and lines[2] == "Triggers 384"
+    assert " start 0" not in text, "no flow may start at t=0"
+    assert text.count(" start ") == 128 * 32, "first wave: parallel starts per rank"
+    # differential: identical to the htsim original (gen_serialn_alltoall.py) modulo the start value
+    orig = _orig_gen("gen_serialn_alltoall.py", [128, 128, 128, 32, 131072, 0, 13])
+    assert _norm_start(text) == _norm_start(orig), "port must match the native generator exactly"
+    assert coll_alltoall.build(seed=13)[0] == text
+    assert coll_alltoall.build(seed=14)[0] != text
+    print("ok coll_alltoall")
+
 if __name__ == "__main__":
     test_permutation()
     test_many2many_pairs()
@@ -160,4 +176,5 @@ if __name__ == "__main__":
     test_ai_ring()
     test_coll_ring()
     test_coll_butterfly()
+    test_coll_alltoall()
     print("ALL PASS")
