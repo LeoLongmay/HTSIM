@@ -27,7 +27,7 @@ axis, as our extension.
 | Nodes | 128 (= 16 servers × 8 GPUs) |
 | Workload | HSDP ring single step, GPU `i → (i+8) mod 128`, 13,697,024 B/flow, random server placement per seed |
 | Failed-link sweep | `{0, 4, 8, 12}` |
-| Regime | delay-driven (`-disable_trim`), PATHS=8, END probed for cr≈1 |
+| Regime | delay-driven (`-disable_trim`), PATHS=8, END=8 ms (gives cr≈1; override via `EXP_END`) |
 | Arms | OPS+NSCC, REPS+NSCC, REPS+Swift, REPS+MSwift, REPS+MNSCC, STrack, **Prism** (7) |
 | Seeds | 13–17 (5) → 7×4×5 = **140 runs** |
 

@@ -56,7 +56,8 @@ def render_cct_bars(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fi
                color=plot_style.COLORS.get(ck), label=disp)
         for off, m in zip(offs, means):
             if m == m and m > 0:               # not nan, positive (log axis)
-                ax.text(off, m, f"{m:.0f}", ha="center", va="bottom", fontsize=6, rotation=90)
+                ax.annotate(f"{m:.0f}", (off, m), textcoords="offset points", xytext=(0, 2),
+                            ha="center", va="bottom", fontsize=6, rotation=90)
     ax.set_yscale("log")
     ax.set_xticks(x); ax.set_xticklabels([f"f{f}" for f in failed])
     ax.set_xlabel("Number of failed links"); ax.set_ylabel("CCT Increase (%)")
@@ -86,7 +87,7 @@ def render_fct_cdf(data_dir, figs_dir, tag_prefix, baselines, failed_level, seed
         ys = [(i + 1) / len(fcts) for i in range(len(fcts))]
         ax.plot(fcts, ys, lw=1.8, color=plot_style.COLORS.get(ck), label=disp)
     ax.set_xlabel("Flow Completion Time (ms)"); ax.set_ylabel("CDF")
-    ax.set_ylim(0, 1.0); ax.grid(alpha=0.3); ax.legend(fontsize=8)
+    ax.set_ylim(0, 1.0); ax.grid(alpha=0.3); ax.legend(fontsize=8, loc="lower right")
     if title:
         ax.set_title(title, fontsize=11)
     plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
