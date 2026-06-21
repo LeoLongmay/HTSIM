@@ -55,7 +55,7 @@ def render_cct_bars(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fi
         offs  = [xi - group_w / 2 + bw * (j + 0.5) for xi in x]
         ax.bar(offs, means, bw, yerr=sems, capsize=2,
                color=plot_style.COLORS.get(ck), label=disp)
-    ax.axhline(1.0, color="gray", ls="--", lw=1.0, zorder=0)   # slowdown 1.0 = zero-queue ideal
+    ax.set_ylim(bottom=1.0)                                     # slowdown >= 1 (1.0 = zero-queue ideal)
     ax.set_xticks(x); ax.set_xticklabels([str(f) for f in failed])
     ax.set_xlabel("Number of failed links"); ax.set_ylabel("CCT slowdown")
     ax.grid(axis="y", alpha=0.3)
