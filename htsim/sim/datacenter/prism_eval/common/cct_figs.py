@@ -36,6 +36,61 @@ def aggregate_cct(data_dir, tag_prefix, label, failed, seeds, size_bytes,
         out[f] = _sem(infl)
     return out
 
+def render_cct_bars(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fig_stem, size_bytes,
+                    link_gbps=100.0, base_rtt_s=14e-6, token="f"):
+    """Grouped bar chart of CCT inflation (%) vs failed-links (MSwift Fig. 7/11 aesthetic): x-axis
+    groups = failed levels, one bar per baseline arm, log-y, value labels, SEM error bars, legend
+    on top. baselines = (label, display, color_key) triples."""
+    import matplotlib.pyplot as plt
+    plot_style.apply_style(13)
+    aggs = {lab: aggregate_cct(data_dir, tag_prefix, lab, failed, seeds, size_bytes,
+                               link_gbps, base_rtt_s, token) for lab, _d, _c in baselines}
+    fig, ax = plt.subplots(figsize=(1.7 * len(failed) + 2.0, 4.0))
+    n = len(baselines); group_w = 0.82; bw = group_w / n
+    x = list(range(len(failed)))
+    for j, (lab, disp, ck) in enumerate(baselines):
+        means = [aggs[lab].get(f, (float("nan"), 0.0))[0] for f in failed]
+        sems  = [aggs[lab].get(f, (float("nan"), 0.0))[1] for f in failed]
+        offs  = [xi - group_w / 2 + bw * (j + 0.5) for xi in x]
+        ax.bar(offs, means, bw, yerr=sems, capsize=2,
+               color=plot_style.COLORS.get(ck), label=disp)
+        for off, m in zip(offs, means):
+            if m == m and m > 0:               # not nan, positive (log axis)
+                ax.text(off, m, f"{m:.0f}", ha="center", va="bottom", fontsize=6, rotation=90)
+    ax.set_yscale("log")
+    ax.set_xticks(x); ax.set_xticklabels([f"f{f}" for f in failed])
+    ax.set_xlabel("Number of failed links"); ax.set_ylabel("CCT Increase (%)")
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend(ncol=min(len(baselines), 4), fontsize=7, loc="upper center",
+              bbox_to_anchor=(0.5, 1.18), frameon=False)
+    plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
+
+def render_fct_cdf(data_dir, figs_dir, tag_prefix, baselines, failed_level, seeds, fig_stem,
+                   title=None, token="f"):
+    """CDF of per-flow FCT (ms) at one failed level, one curve per arm (MSwift Fig. 5 aesthetic).
+    Pools completed-flow FCTs across seeds. baselines = (label, display, color_key) triples."""
+    import matplotlib.pyplot as plt
+    plot_style.apply_style(13)
+    fig, ax = plt.subplots(figsize=(5.0, 4.0))
+    for lab, disp, ck in baselines:
+        fcts = []
+        for s in seeds:
+            flow = os.path.join(data_dir, f"{tag_prefix}_{lab}_{token}{failed_level}_s{s}.flow.txt")
+            if not os.path.exists(flow):
+                continue
+            starts, finishes = metrics.parse_flow_events(flow)
+            fcts += [(finishes[k][0] - starts[k]) * 1e3 for k in finishes if k in starts]  # ms
+        if not fcts:
+            continue
+        fcts.sort()
+        ys = [(i + 1) / len(fcts) for i in range(len(fcts))]
+        ax.plot(fcts, ys, lw=1.8, color=plot_style.COLORS.get(ck), label=disp)
+    ax.set_xlabel("Flow Completion Time (ms)"); ax.set_ylabel("CDF")
+    ax.set_ylim(0, 1.0); ax.grid(alpha=0.3); ax.legend(fontsize=8)
+    if title:
+        ax.set_title(title, fontsize=11)
+    plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
+
 def selftest():
     import tempfile, shutil
     d = tempfile.mkdtemp()
