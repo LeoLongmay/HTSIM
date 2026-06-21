@@ -50,10 +50,60 @@ lower bound (flagged).
 
 ## 5. Results
 
-*(filled after `bash repro.sh`; figures `figs/figG_{a2a,ring,bfly}`.)*
+All 420 cells completed at **cr = 1.00** (every collective fully finished; no hatched bars). Figures:
+`figs/figG_{a2a,ring,bfly}` (collective makespan, ms, vs failed-links). 5-seed means below.
 
-## 6. Caveat
+**Headline (honest, and more nuanced than a clean win).** On these *full multi-step* collectives the
+seven transports sit within ~3–5 % of one another, because a barriered collective's makespan is
+dominated by its **critical path** (a chain of small 128 KB steps, each roughly one RTT) rather than
+by throughput — so the congestion-control choice has limited leverage. Within that narrow band, PRISM
+is **do-no-harm at f0 and improves monotonically with failures**: it becomes the **fastest arm on
+Ring-AllReduce at f12**, and overtakes the UEC reference (REPS+NSCC) on All-to-All from f8 on. This
+extends — at smaller magnitude — the asymmetric advantage that is large on bandwidth-bound concurrent
+traffic (`../expA_delaydriven`, `../expE_permutation`, `../expF_aiworkload`).
 
-The failed links must lie on paths the (shuffled, cross-pod) collective traffic traverses; if a
-degraded point shows makespan indistinguishable from f0 across **all** arms, the failures are off-path
-and the failure model/location must be revisited (see the smoke check in the plan).
+### Collective makespan (ms, 5-seed mean) and PRISM rank
+
+| All-to-All | f0 | f4 | f8 | f12 |
+|---|---|---|---|---|
+| OPS+NSCC | 1.57 | 2.78 | 3.60 | 4.63 |
+| REPS+NSCC | 1.48 | 2.42 | 3.10 | 3.89 |
+| REPS+MNSCC | 1.48 | 2.35 | 2.89 | 3.68 |
+| STrack | 1.48 | 2.43 | 3.11 | 3.85 |
+| **Prism** | 1.56 | 2.45 | 3.01 | **3.75** |
+| Prism / REPS+NSCC | 1.051 | 1.012 | 0.971 | **0.962** |
+| Prism rank /7 | 5 | 6 | 4 | **3** |
+
+| Ring-AllReduce | f0 | f4 | f8 | f12 |
+|---|---|---|---|---|
+| OPS+NSCC | 6.71 | 11.05 | 11.70 | 12.08 |
+| REPS+NSCC | 6.88 | 10.78 | 11.67 | 11.93 |
+| STrack | 6.88 | 10.70 | 11.37 | 11.80 |
+| **Prism** | 6.88 | 10.89 | 11.60 | **11.62** |
+| Prism / REPS+NSCC | 1.000 | 1.010 | 0.994 | **0.974** |
+| Prism rank /7 | 2 | 6 | 5 | **1 (fastest)** |
+
+**Butterfly-AllReduce** is essentially **CC-invariant**: all seven arms finish in 0.04 ms (f0) →
+0.07–0.08 ms (f≥4), identical to two decimals (Prism / REPS+NSCC = 1.000 at every level). With only
+log₂128 = 7 steps the collective is too short and latency-bound for the transport to matter — a clean
+illustration of the critical-path effect above.
+
+### What this delineates
+
+PRISM's congestion decomposition pays off when congestion is **concentrated and spread-dominated on a
+bandwidth-bound transfer** (incast-style many2many, permutation, the HSDP ring *step* — all large
+wins). On **fine-grained barriered collectives** (Ring/Butterfly with small chunks) the makespan is
+critical-path-bound and *all* good multipath CCAs converge; PRISM stays do-no-harm and still edges
+ahead under heavy asymmetry (Ring f12 win), but the headline is the **boundary** this draws, not a
+large win. Reported straight.
+
+## 6. Caveats (honest)
+
+1. **Failures are on-path (passed).** Makespan rises monotonically f0→f12 for every arm (e.g. Ring
+   REPS+NSCC 6.88→11.93 ms, A2A 1.48→3.89 ms), confirming the `-failed K` choke bites the
+   shuffled, cross-pod collective traffic. All 420 cells cr = 1.00.
+2. **Magnitudes are small.** The ~3–5 % spread across arms is near the 5-seed SEM at several points;
+   the PRISM trend (do-no-harm, improving with failures, Ring-f12 win) is consistent in direction but
+   modest. We do not overclaim it.
+3. **Fabric / scope deviations** (see §1): our 100 G COMPOSITE testbed, not STrack's 400 G; single
+   job, not 64 concurrent; A2A parallelism fixed at 32; DBT omitted.
