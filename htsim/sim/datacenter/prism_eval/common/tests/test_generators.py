@@ -6,6 +6,7 @@ import many2many  # noqa: E402
 import incast  # noqa: E402
 import ai_ring  # noqa: E402
 import coll_ring  # noqa: E402
+import coll_butterfly  # noqa: E402
 
 def _parse_cm(text):
     """Parse a .cm string into [(src,dst),...] and validate the header counts."""
@@ -98,6 +99,28 @@ def _orig_gen(script, args):
 def _norm_start(text):
     return re.sub(r" start \d+", " start X", text)
 
+def _validate_collective_cm(text, exp_conns, exp_trigs, exp_starts):
+    """Structural validation of a triggered collective .cm: header counts match line counts,
+    every flow has exactly one of start/trigger, all trigger refs resolve to a declared id."""
+    lines = text.strip().split("\n")
+    assert lines[0].startswith("Nodes "), lines[0]
+    assert lines[1] == f"Connections {exp_conns}", lines[1]
+    assert lines[2] == f"Triggers {exp_trigs}", lines[2]
+    flows = [l for l in lines[3:] if "->" in l]
+    decls = [l for l in lines[3:] if l.startswith("trigger id ")]
+    assert len(flows) == exp_conns, (len(flows), exp_conns)
+    assert len(decls) == exp_trigs, (len(decls), exp_trigs)
+    assert " start 0" not in text, "no flow may start at t=0"
+    assert sum(1 for l in flows if " start " in l) == exp_starts, "start count"
+    for l in flows:
+        assert (" start " in l) ^ (" trigger " in l), f"flow needs exactly one of start/trigger: {l}"
+    declared = set(int(l.split()[2]) for l in decls)
+    assert declared == set(range(1, exp_trigs + 1)), "trigger ids must be 1..N contiguous"
+    import re
+    for l in flows:
+        for ref in re.findall(r"(?:^| )(?:trigger|send_done_trigger|recv_done_trigger) (\d+)", l):
+            assert int(ref) in declared, f"dangling trigger ref {ref} in {l}"
+
 def test_coll_ring():
     text, nc, nt = coll_ring.build(nodes=128, groupsize=128, flowsize=131072, seed=13)
     assert nc == 128 * (2 * 128 - 1) == 32640, nc
@@ -115,6 +138,20 @@ def test_coll_ring():
     assert coll_ring.build(seed=14)[0] != text
     print("ok coll_ring")
 
+def test_coll_butterfly():
+    text, nc, nt = coll_butterfly.build(nodes=128, groupsize=128, flowsize=131072, seed=13)
+    assert nc == 128 * 7 == 896, nc          # groupsize * log2(groupsize)
+    assert nt == 896 - 128 == 768, nt
+    _validate_collective_cm(text, 896, 768, exp_starts=128)   # step d=0 has 128 start flows
+    assert coll_butterfly.build(seed=13)[0] == text
+    assert coll_butterfly.build(seed=14)[0] != text, "per-seed placement (added shuffle)"
+    try:
+        coll_butterfly.build(groupsize=100)   # not a power of 2
+        assert False, "expected ValueError for non-power-of-2 groupsize"
+    except ValueError:
+        pass
+    print("ok coll_butterfly")
+
 if __name__ == "__main__":
     test_permutation()
     test_many2many_pairs()
@@ -122,4 +159,5 @@ if __name__ == "__main__":
     test_incast()
     test_ai_ring()
     test_coll_ring()
+    test_coll_butterfly()
     print("ALL PASS")
