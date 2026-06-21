@@ -125,6 +125,21 @@ def test_fct_slowdown():
     assert abs(sd["mean"] - 2.0) < 1e-9, sd
     print("ok fct_slowdown")
 
+def test_cct_inflation():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "c.flow.txt")
+    with open(p, "w") as fh:
+        # 2 flows start ~0; finish at 2 ms and 3 ms -> CCT (worst FCT) = 3 ms
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 1000000\n")
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 2 Ev START FlowID 2 Flowsize 1000000\n")
+        fh.write("0.002000000 Type FLOW_EVENT SrcID 1 Ev FINISH FlowID 1 Bytes 1000000 Pkts 1\n")
+        fh.write("0.003000000 Type FLOW_EVENT SrcID 2 Ev FINISH FlowID 2 Bytes 1000000 Pkts 1\n")
+    cct, infl = metrics.cct_inflation(p, size_bytes=1_000_000, link_gbps=100.0, base_rtt_s=14e-6)
+    assert abs(cct - 0.003) < 1e-9, cct
+    lb = 14e-6 + 1_000_000 * 8.0 / 1e11           # = 9.4e-5 s
+    assert abs(infl - (0.003 - lb) / lb * 100.0) < 1e-6, infl
+    print("ok cct_inflation")
+
 if __name__ == "__main__":
     test_fct_stats()
     test_goodput()
@@ -133,4 +148,5 @@ if __name__ == "__main__":
     test_parse_prism_epoch_and_qbins()
     test_jain_fairness()
     test_fct_slowdown()
+    test_cct_inflation()
     print("ALL PASS")

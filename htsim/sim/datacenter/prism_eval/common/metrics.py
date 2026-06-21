@@ -56,6 +56,18 @@ def fct_stats(flow_path):
         "max_s": fcts[-1] if fcts else float("nan"),
     }
 
+def cct_inflation(flow_path, size_bytes, link_gbps=100.0, base_rtt_s=14e-6):
+    """Collective Completion Time and its inflation over a zero-queue lower bound (MSwift,
+    Gerstein et al. 2026). CCT = worst-case FCT across the collective's COMPLETED flows
+    (fct_stats max_s). Zero-queue lower bound LB = base_rtt_s + size_bytes*8/(link_gbps*1e9).
+    Returns (cct_s, inflation_pct) where inflation_pct = (cct_s - LB)/LB*100; (nan, nan) if no
+    flow completed."""
+    cct = fct_stats(flow_path)["max_s"]
+    if cct != cct:                              # nan -> nothing completed
+        return (float("nan"), float("nan"))
+    lb = base_rtt_s + size_bytes * 8.0 / (link_gbps * 1e9)
+    return (cct, (cct - lb) / lb * 100.0)
+
 def aggregate_goodput_gbps(flow_path):
     """Window-free aggregate goodput (Gbps) for a finite workload: total bytes of COMPLETED
     flows * 8 / makespan, where makespan = last finish - first start of the COMPLETED flows
