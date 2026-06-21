@@ -140,6 +140,24 @@ def test_cct_inflation():
     assert abs(infl - (0.003 - lb) / lb * 100.0) < 1e-6, infl
     print("ok cct_inflation")
 
+def test_collective_makespan():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "c.flow.txt")
+    with open(p, "w") as fh:
+        # 3 flows: starts 0.000/0.001/0.000, finishes 0.002/0.005/0.003
+        # makespan = max(finish) - min(start) = 0.005 - 0.000 = 0.005 s; one started-but-unfinished
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 1000\n")
+        fh.write("0.001000000 Type FLOW_EVENT SrcID 2 Ev START FlowID 2 Flowsize 1000\n")
+        fh.write("0.000000000 Type FLOW_EVENT SrcID 3 Ev START FlowID 3 Flowsize 1000\n")
+        fh.write("0.000500000 Type FLOW_EVENT SrcID 4 Ev START FlowID 4 Flowsize 1000\n")  # never finishes
+        fh.write("0.002000000 Type FLOW_EVENT SrcID 1 Ev FINISH FlowID 1 Bytes 1000 Pkts 1\n")
+        fh.write("0.005000000 Type FLOW_EVENT SrcID 2 Ev FINISH FlowID 2 Bytes 1000 Pkts 1\n")
+        fh.write("0.003000000 Type FLOW_EVENT SrcID 3 Ev FINISH FlowID 3 Bytes 1000 Pkts 1\n")
+    mk, cr = metrics.collective_makespan(p)
+    assert abs(mk - 0.005) < 1e-9, mk
+    assert abs(cr - 0.75) < 1e-9, cr        # 3 of 4 completed
+    print("ok collective_makespan")
+
 if __name__ == "__main__":
     test_fct_stats()
     test_goodput()
@@ -149,4 +167,5 @@ if __name__ == "__main__":
     test_jain_fairness()
     test_fct_slowdown()
     test_cct_inflation()
+    test_collective_makespan()
     print("ALL PASS")

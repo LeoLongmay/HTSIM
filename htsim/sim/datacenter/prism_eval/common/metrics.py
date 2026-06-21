@@ -68,6 +68,21 @@ def cct_inflation(flow_path, size_bytes, link_gbps=100.0, base_rtt_s=14e-6):
     lb = base_rtt_s + size_bytes * 8.0 / (link_gbps * 1e9)
     return (cct, (cct - lb) / lb * 100.0)
 
+def collective_makespan(flow_path):
+    """Collective completion time = makespan = max(finish) - min(start) over the COMPLETED flows of a
+    single-job collective (first message out -> last message in), in seconds. For a multi-step
+    collective this -- not the slowest single-flow FCT -- is the collective time. Returns
+    (makespan_s, completion_rate); (nan, cr) if no flow completed. A cr < 1 makespan is a lower bound
+    (the collective did not finish)."""
+    starts, finishes = parse_flow_events(flow_path)
+    done = [k for k in finishes if k in starts]
+    total = len(starts)
+    cr = (len(done) / total) if total else float("nan")
+    if not done:
+        return (float("nan"), cr)
+    makespan = max(finishes[k][0] for k in done) - min(starts[k] for k in done)
+    return (makespan, cr)
+
 def aggregate_goodput_gbps(flow_path):
     """Window-free aggregate goodput (Gbps) for a finite workload: total bytes of COMPLETED
     flows * 8 / makespan, where makespan = last finish - first start of the COMPLETED flows
