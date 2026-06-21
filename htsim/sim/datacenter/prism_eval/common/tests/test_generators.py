@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "gen"))
 import permutation  # noqa: E402
 import many2many  # noqa: E402
 import incast  # noqa: E402
+import ai_ring  # noqa: E402
 
 def _parse_cm(text):
     """Parse a .cm string into [(src,dst),...] and validate the header counts."""
@@ -65,9 +66,28 @@ def test_incast():
     assert all(s > 0 for s in starts), "no flow may start at t=0 (simulator drops START)"
     print("ok incast")
 
+def test_ai_ring():
+    text, conns = ai_ring.build(nodes=128, servers=16, gpus_per_server=8,
+                                stride=8, size=13697024, seed=1)
+    assert _parse_cm(text) == conns
+    assert " start 0 " not in text, "no flow may start at t=0"
+    assert len(conns) == 128, len(conns)
+    srcs = [s for s, _ in conns]; dsts = [d for _, d in conns]
+    assert len(set(srcs)) == 128 and len(set(dsts)) == 128, "permutation: distinct src and dst"
+    assert all(s != d for s, d in conns), "no self-pair"
+    assert all(0 <= s < 128 and 0 <= d < 128 for s, d in conns), "valid host ids"
+    assert all(s // 8 != d // 8 for s, d in conns), "every flow inter-server (server s -> s+1)"
+    assert " size 13697024" in text, "MSwift Llama-70B HSDP flow size"
+    text2, _ = ai_ring.build(seed=1)
+    assert text2 == text, "deterministic per seed"
+    text3, _ = ai_ring.build(seed=2)
+    assert text3 != text, "random server placement varies with seed"
+    print("ok ai_ring")
+
 if __name__ == "__main__":
     test_permutation()
     test_many2many_pairs()
     test_many2many_all()
     test_incast()
+    test_ai_ring()
     print("ALL PASS")
