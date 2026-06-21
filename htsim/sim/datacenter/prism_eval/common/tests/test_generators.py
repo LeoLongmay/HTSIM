@@ -1,10 +1,11 @@
-import os, sys
+import os, sys, subprocess, re
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "gen"))
 import permutation  # noqa: E402
 import many2many  # noqa: E402
 import incast  # noqa: E402
 import ai_ring  # noqa: E402
+import coll_ring  # noqa: E402
 
 def _parse_cm(text):
     """Parse a .cm string into [(src,dst),...] and validate the header counts."""
@@ -84,10 +85,41 @@ def test_ai_ring():
     assert text3 != text, "random server placement varies with seed"
     print("ok ai_ring")
 
+def _orig_gen(script, args):
+    """Run an htsim native generator into a temp .cm and return its text."""
+    import tempfile, subprocess, sys as _sys, os as _os
+    orig = _os.path.join(HERE, "..", "..", "..", "connection_matrices", script)
+    out = tempfile.mktemp(suffix=".cm")
+    subprocess.run([_sys.executable, orig, out, *[str(a) for a in args]],
+                   capture_output=True, check=True)
+    with open(out) as fh:
+        return fh.read()
+
+def _norm_start(text):
+    return re.sub(r" start \d+", " start X", text)
+
+def test_coll_ring():
+    text, nc, nt = coll_ring.build(nodes=128, groupsize=128, flowsize=131072, seed=13)
+    assert nc == 128 * (2 * 128 - 1) == 32640, nc
+    assert nt == 128 * (2 * 128 - 2) == 32512, nt
+    lines = text.strip().split("\n")
+    assert lines[0] == "Nodes 128" and lines[1] == "Connections 32640" and lines[2] == "Triggers 32512"
+    assert " start 0" not in text, "no flow may start at t=0"
+    assert text.count(" start ") == 128, "one start per ring chain"
+    assert text.count("trigger id ") == 32512, "trigger declarations"
+    # differential: identical to the htsim original (gen_allreduce.py) modulo the start value
+    orig = _orig_gen("gen_allreduce.py", [128, 128, 128, 131072, 0, 13])
+    assert _norm_start(text) == _norm_start(orig), "port must match the native generator exactly"
+    # determinism + seed-variance
+    assert coll_ring.build(seed=13)[0] == text
+    assert coll_ring.build(seed=14)[0] != text
+    print("ok coll_ring")
+
 if __name__ == "__main__":
     test_permutation()
     test_many2many_pairs()
     test_many2many_all()
     test_incast()
     test_ai_ring()
+    test_coll_ring()
     print("ALL PASS")
