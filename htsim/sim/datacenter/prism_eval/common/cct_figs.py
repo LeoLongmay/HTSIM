@@ -45,8 +45,8 @@ def render_cct_bars(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fi
     plot_style.apply_style(13)
     aggs = {lab: aggregate_cct(data_dir, tag_prefix, lab, failed, seeds, size_bytes,
                                link_gbps, base_rtt_s, token) for lab, _d, _c in baselines}
-    fig, ax = plt.subplots(figsize=(1.7 * len(failed) + 2.0, 4.0))
-    n = len(baselines); group_w = 0.82; bw = group_w / n
+    fig, ax = plt.subplots(figsize=(0.95 * len(failed) + 1.6, 4.0))
+    n = len(baselines); group_w = 0.66; bw = group_w / n
     x = list(range(len(failed)))
     for j, (lab, disp, ck) in enumerate(baselines):
         means = [aggs[lab].get(f, (float("nan"), 0.0))[0] for f in failed]
@@ -54,12 +54,8 @@ def render_cct_bars(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fi
         offs  = [xi - group_w / 2 + bw * (j + 0.5) for xi in x]
         ax.bar(offs, means, bw, yerr=sems, capsize=2,
                color=plot_style.COLORS.get(ck), label=disp)
-        for off, m in zip(offs, means):
-            if m == m and m > 0:               # not nan, positive (log axis)
-                ax.annotate(f"{m:.0f}", (off, m), textcoords="offset points", xytext=(0, 2),
-                            ha="center", va="bottom", fontsize=6, rotation=90)
     ax.set_yscale("log")
-    ax.set_xticks(x); ax.set_xticklabels([f"f{f}" for f in failed])
+    ax.set_xticks(x); ax.set_xticklabels([str(f) for f in failed])
     ax.set_xlabel("Number of failed links"); ax.set_ylabel("CCT Increase (%)")
     ax.grid(axis="y", alpha=0.3)
     ax.legend(ncol=min(len(baselines), 4), fontsize=7, loc="upper center",
