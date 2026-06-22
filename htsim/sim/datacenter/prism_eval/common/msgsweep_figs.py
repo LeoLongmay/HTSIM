@@ -60,6 +60,56 @@ def _size_label(b):
         return f"{b >> 10}K"
     return str(b)
 
+def render_slowdown_lines(data_dir, figs_dir, tag_prefix, baselines, k_steps, sizes, seeds,
+                          fig_stem, xlabel="Message size", token="sz",
+                          base_rtt_s=14e-6, link_gbps=100.0):
+    """Line chart of collective CCT slowdown (makespan / zero-queue lower bound) vs message size:
+    x = message size (log2), y = CCT slowdown (linear, from 1.0), one line per arm with SEM error
+    bars. Points whose min completion-rate < 1 (collective did not fully finish -> lower bound) are
+    overplotted with a hollow marker. baselines = (label, display, color_key) triples. No inline
+    legend (use render_legend for a shared standalone legend)."""
+    import matplotlib.pyplot as plt
+    plot_style.apply_style(12)
+    NA = (float("nan"), 0.0, float("nan"))
+    aggs = {lab: aggregate_slowdown(data_dir, tag_prefix, lab, k_steps, sizes, seeds,
+                                    base_rtt_s, link_gbps, token)
+            for lab, _d, _c in baselines}
+    fig, ax = plt.subplots(figsize=(4.2, 3.0))
+    any_incomplete = False
+    for lab, disp, ck in baselines:
+        means = [aggs[lab].get(sz, NA)[0] for sz in sizes]
+        sems  = [aggs[lab].get(sz, NA)[1] for sz in sizes]
+        crs   = [aggs[lab].get(sz, NA)[2] for sz in sizes]
+        ax.errorbar(sizes, means, yerr=sems, marker="o", ms=4, capsize=2,
+                    color=plot_style.COLORS.get(ck), label=disp)
+        hollow_x = [sz for sz, cr in zip(sizes, crs) if cr == cr and cr < 1.0]
+        hollow_y = [m for m, cr in zip(means, crs) if cr == cr and cr < 1.0]
+        if hollow_x:
+            ax.scatter(hollow_x, hollow_y, facecolors="white",
+                       edgecolors=plot_style.COLORS.get(ck), s=55, zorder=5)
+            any_incomplete = True
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(sizes); ax.set_xticklabels([_size_label(s) for s in sizes])
+    ax.minorticks_off()
+    ax.set_xlabel(xlabel); ax.set_ylabel("CCT slowdown")
+    ax.set_ylim(bottom=1.0)
+    ax.grid(True, alpha=0.3)
+    if any_incomplete:
+        ax.text(0.99, 0.03, "hollow = cr<1 (lower bound)", transform=ax.transAxes,
+                ha="right", va="bottom", fontsize=6, color="0.3")
+    plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
+
+def render_legend(figs_dir, baselines, fig_stem):
+    """Standalone shared legend (one row of arm swatches) for the message-size panels."""
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    plot_style.apply_style(12)
+    handles = [Line2D([0], [0], color=plot_style.COLORS.get(ck), marker="o", ms=4, label=disp)
+               for _lab, disp, ck in baselines]
+    fig = plt.figure(figsize=(1.1 * len(baselines), 0.5))
+    fig.legend(handles=handles, ncol=len(baselines), loc="center", frameon=False, fontsize=8)
+    plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
+
 def selftest():
     import tempfile, shutil
     d = tempfile.mkdtemp()
