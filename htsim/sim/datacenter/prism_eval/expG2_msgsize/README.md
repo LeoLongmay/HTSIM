@@ -8,10 +8,11 @@ question: a barriered collective is latency-bound when each step is sub-BDP (all
 as the message grows past one BDP each step becomes bandwidth-bound, where PRISM's congestion
 decomposition (floor→CC, spread→spraying) should pull ahead. This figure makes that transition visible.
 
-The figure follows **STrack**'s line-chart-of-completion-time-vs-message-size form (Le et al.); the
-y-axis is the collective completion time **relative to the REPS+NSCC (UEC) baseline** (each arm's
-makespan divided by REPS+NSCC's, paired per seed), so the reference sits at 1.0 and an arm below 1.0
-is faster than the UEC baseline. Generators are reused unchanged from expG (`coll_alltoall.py`,
+The figure sweeps collective completion time vs message size (after **STrack**, Le et al.), drawn as
+**grouped bars** (one bar per arm, grouped by message size). The y-axis is the collective completion
+time **relative to the REPS+NSCC (UEC) baseline** (each arm's makespan divided by REPS+NSCC's, paired
+per seed): bars are linear from 0 with a dashed reference line at 1.0, so a bar below 1.0 is faster
+than the UEC baseline. Generators are reused unchanged from expG (`coll_alltoall.py`,
 `coll_butterfly.py`); only `flowsize` is swept.
 
 ## 2. Setup

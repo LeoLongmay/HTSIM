@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Message-size-sweep CCT figures for prism_eval (separate module: cct_figs.py and perf_figs.py hold
-uncommitted WIP and must not be touched; metrics.py is reused unchanged). Line chart of collective
-CCT relative to a reference transport (REPS+NSCC, the UEC baseline) vs per-flow message size, at a
-fixed failed-links level. Faithful to STrack's line-chart-vs-message-size form; the y-axis is a
-relative-CCT normalization (each arm / the reference arm, paired per seed), with the reference at 1.0.
+uncommitted WIP and must not be touched; metrics.py is reused unchanged). Grouped bar chart of
+collective CCT relative to a reference transport (REPS+NSCC, the UEC baseline) vs per-flow message
+size, at a fixed failed-links level. The y-axis is a relative-CCT normalization (each arm / the
+reference arm, paired per seed); bars are linear from 0 with a dashed reference line at 1.0, so a bar
+below 1.0 is faster than the UEC baseline.
 
 (An earlier analytical zero-queue lower bound was replaced by this relative-to-baseline normalization:
 the analytical k*(base_rtt+size*8/rate) bound was non-physical here -- it undercounts A2A's per-wave
@@ -61,50 +62,48 @@ def _size_label(b):
         return f"{b >> 10}K"
     return str(b)
 
-def render_relative_lines(data_dir, figs_dir, tag_prefix, baselines, ref_label, sizes, seeds,
-                          fig_stem, xlabel="Message size", ylabel="CCT relative to REPS+NSCC",
-                          token="sz"):
-    """Line chart of collective CCT relative to the reference arm vs message size: x = message size
-    (log2) with _size_label ticks, y = CCT / reference-arm CCT (linear, autoscaled; a dashed line at
-    1.0 marks the reference), one errorbar line per arm with SEM. Points whose min completion-rate < 1
-    are overplotted with a hollow marker. baselines = (label, display, color_key) triples. No inline
-    legend (use render_legend for a shared standalone legend)."""
+def render_relative_bars(data_dir, figs_dir, tag_prefix, baselines, ref_label, sizes, seeds,
+                         fig_stem, xlabel="Message size", ylabel="CCT relative to REPS+NSCC",
+                         token="sz"):
+    """Grouped bar chart of collective CCT relative to the reference arm vs message size: x-axis
+    groups = message sizes (_size_label ticks), one bar per arm, linear y from 0 with a dashed
+    reference line at 1.0 (a bar below 1.0 is faster than the reference arm), SEM error bars. A bar
+    whose min completion-rate < 1 is hatched (lower bound). baselines = (label, display, color_key)
+    triples. No inline legend (use render_legend for a shared standalone legend)."""
     import matplotlib.pyplot as plt
     plot_style.apply_style(12)
     NA = (float("nan"), 0.0, float("nan"))
     aggs = {lab: aggregate_relative(data_dir, tag_prefix, lab, ref_label, sizes, seeds, token)
             for lab, _d, _c in baselines}
-    fig, ax = plt.subplots(figsize=(4.2, 3.0))
-    ax.axhline(1.0, color="0.6", ls="--", lw=1.0, zorder=1)
+    fig, ax = plt.subplots(figsize=(1.1 * len(sizes) + 1.8, 3.0))
+    n = len(baselines); group_w = 0.82; bw = group_w / n
+    x = list(range(len(sizes)))
     any_incomplete = False
-    for lab, disp, ck in baselines:
+    for j, (lab, disp, ck) in enumerate(baselines):
         means = [aggs[lab].get(sz, NA)[0] for sz in sizes]
         sems  = [aggs[lab].get(sz, NA)[1] for sz in sizes]
         crs   = [aggs[lab].get(sz, NA)[2] for sz in sizes]
-        ax.errorbar(sizes, means, yerr=sems, marker="o", ms=4, capsize=2,
-                    color=plot_style.COLORS.get(ck), label=disp, zorder=3)
-        hollow_x = [sz for sz, cr in zip(sizes, crs) if cr == cr and cr < 1.0]
-        hollow_y = [m for m, cr in zip(means, crs) if cr == cr and cr < 1.0]
-        if hollow_x:
-            ax.scatter(hollow_x, hollow_y, facecolors="white",
-                       edgecolors=plot_style.COLORS.get(ck), s=55, zorder=5)
-            any_incomplete = True
-    ax.set_xscale("log", base=2)
-    ax.set_xticks(sizes); ax.set_xticklabels([_size_label(s) for s in sizes])
-    ax.minorticks_off()
+        offs  = [xi - group_w / 2 + bw * (j + 0.5) for xi in x]
+        bars = ax.bar(offs, means, bw, yerr=sems, capsize=2,
+                      color=plot_style.COLORS.get(ck), label=disp)
+        for bar, cr in zip(bars, crs):
+            if cr == cr and cr < 1.0:           # incomplete -> lower bound
+                bar.set_hatch("///"); any_incomplete = True
+    ax.axhline(1.0, color="0.35", ls="--", lw=1.0, zorder=4)
+    ax.set_xticks(x); ax.set_xticklabels([_size_label(s) for s in sizes])
     ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
-    ax.grid(True, alpha=0.3)
+    ax.grid(axis="y", alpha=0.3)
     if any_incomplete:
-        ax.text(0.99, 0.03, "hollow = cr<1 (lower bound)", transform=ax.transAxes,
-                ha="right", va="bottom", fontsize=6, color="0.3")
+        ax.text(0.99, 0.97, "/// = cr<1 (lower bound)", transform=ax.transAxes,
+                ha="right", va="top", fontsize=6, color="0.3")
     plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
 
 def render_legend(figs_dir, baselines, fig_stem):
-    """Standalone shared legend (one row of arm swatches) for the message-size panels."""
+    """Standalone shared legend (one row of arm color patches) for the message-size bar panels."""
     import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
     plot_style.apply_style(12)
-    handles = [Line2D([0], [0], color=plot_style.COLORS.get(ck), marker="o", ms=4, label=disp)
+    handles = [Patch(facecolor=plot_style.COLORS.get(ck), label=disp)
                for _lab, disp, ck in baselines]
     fig = plt.figure(figsize=(1.1 * len(baselines), 0.5))
     fig.legend(handles=handles, ncol=len(baselines), loc="center", frameon=False, fontsize=8)

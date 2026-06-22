@@ -2,8 +2,8 @@
 """expG2_msgsize figures -- thin wrapper. STrack-style collective CCT vs per-flow message size,
 relative to the REPS+NSCC (UEC) baseline, at fixed -failed 8 on the 128-node 100G testbed.
 Renders into ./figs:
-  figH_a2a_msgsize / figH_bfly_msgsize   line charts (x=message size log2, y=CCT relative to
-                                         REPS+NSCC, 7 arms; dashed reference at 1.0)
+  figH_a2a_msgsize / figH_bfly_msgsize   grouped bar charts (x groups=message size, y=CCT relative
+                                         to REPS+NSCC, 7 arms/bars; dashed reference at 1.0)
   figH_legend                            shared standalone legend
   python3 make_figs.py            # render
   python3 make_figs.py --selftest # aggregation self-check (shared math)
@@ -29,6 +29,6 @@ if __name__ == "__main__":
     else:
         os.makedirs(FIGS, exist_ok=True)
         for coll, stem in COLLECTIVES:
-            msgsweep_figs.render_relative_lines(DATA, FIGS, f"expG2{coll}", BASELINES, REF,
-                                                SIZES, SEEDS, stem)
+            msgsweep_figs.render_relative_bars(DATA, FIGS, f"expG2{coll}", BASELINES, REF,
+                                               SIZES, SEEDS, stem)
         msgsweep_figs.render_legend(FIGS, BASELINES, "figH_legend")
