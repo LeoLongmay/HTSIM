@@ -24,10 +24,10 @@ python3 "$HERE/make_figs.py" --selftest
 echo "== workload (many2many 64->16 pod0 2MB; identical args to expA_delaydriven) =="
 python3 "$COMMON/gen/many2many.py" "$OUT/m2m.cm" 64 16 pairs 2000000 128 16
 CM="$OUT/m2m.cm"
-if [ -f "$DC/prism_eval/expA_delaydriven/data/m2m.cm" ]; then
-  diff -q "$CM" "$DC/prism_eval/expA_delaydriven/data/m2m.cm" \
-    || { echo "ERROR: workload differs from expA_delaydriven -- default-center reuse not apples-to-apples"; exit 1; }
-fi
+REFCM="$DC/prism_eval/expA_delaydriven/data/m2m.cm"
+[ -f "$REFCM" ] || { echo "ERROR: reference workload $REFCM missing -- run expA_delaydriven/repro.sh first"; exit 1; }
+diff -q "$CM" "$REFCM" \
+  || { echo "ERROR: workload differs from expA_delaydriven -- default-center reuse not apples-to-apples"; exit 1; }
 
 echo "== guard: reused default-center baselines present =="
 for tag in expA_prism expA_reps; do for f in 0 8; do for s in $SEEDS; do
