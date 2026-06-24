@@ -158,6 +158,45 @@ def test_collective_makespan():
     assert abs(cr - 0.75) < 1e-9, cr        # 3 of 4 completed
     print("ok collective_makespan")
 
+def test_sink_rate_series():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "s.sink.txt")
+    with open(p, "w") as fh:
+        # 2 connections (ID 100, 101); ID 100 has 2 samples out of order in time
+        fh.write("0.000500000 Type UEC_SINK ID 100 Ev RATE CAck 1 ReorderBuffer 0 Rate 40000000000\n")
+        fh.write("0.000100000 Type UEC_SINK ID 100 Ev RATE CAck 1 ReorderBuffer 0 Rate 20000000000\n")
+        fh.write("0.000300000 Type UEC_SINK ID 101 Ev RATE CAck 1 ReorderBuffer 0 Rate 10000000000\n")
+    s = metrics.sink_rate_series(p)
+    assert set(s.keys()) == {100, 101}, s
+    # ID 100 sorted by t: (0.0001,20Gbps) then (0.0005,40Gbps)
+    assert s[100][0] == (0.0001, 20.0) and s[100][1] == (0.0005, 40.0), s[100]
+    assert s[101] == [(0.0003, 10.0)], s[101]
+    print("ok sink_rate_series")
+
+def test_tor_downqueue_delay_series():
+    d = tempfile.mkdtemp()
+    idmap = os.path.join(d, "r.idmap")
+    with open(idmap, "w") as fh:
+        fh.write("164 QueuelogSampling\n")
+        fh.write("165 LS0->DST0(0)\n")      # the dest-0 last-hop downlink queue
+        fh.write("168 SRC0->LS0(0)\n")      # uplink (decoy, must NOT match)
+        fh.write("171 LS0->DST1(0)\n")      # another host (decoy)
+    assert metrics.find_dest_downqueue_id(idmap, 0) == 165, metrics.find_dest_downqueue_id(idmap, 0)
+    assert metrics.find_dest_downqueue_id(idmap, 9) is None
+    q = os.path.join(d, "r.q.txt")
+    with open(q, "w") as fh:
+        # id 165 over time (MaxQ token at the end); plus a decoy id 171 to be filtered out.
+        # 41500 B * 8 / 100e9 * 1e6 = 3.32 us ; 83000 B -> 6.64 us
+        fh.write("0.000008000 Type QUEUE_APPROX ID 165 Ev RANGE LastQ 41500 MinQ 0 MaxQ 41500\n")
+        fh.write("0.000004000 Type QUEUE_APPROX ID 165 Ev RANGE LastQ 83000 MinQ 0 MaxQ 83000\n")
+        fh.write("0.000004000 Type QUEUE_APPROX ID 171 Ev RANGE LastQ 99999 MinQ 0 MaxQ 99999\n")
+    s = metrics.tor_downqueue_delay_series(q, idmap, 0, link_gbps=100.0)
+    assert len(s) == 2, s                      # only id 165 rows, decoy 171 filtered
+    assert s[0][0] == 0.000004 and abs(s[0][1] - 6.64) < 1e-9, s   # sorted by t
+    assert s[1][0] == 0.000008 and abs(s[1][1] - 3.32) < 1e-9, s
+    assert metrics.tor_downqueue_delay_series(q, idmap, 9) == []   # queue not found
+    print("ok tor_downqueue_delay_series")
+
 if __name__ == "__main__":
     test_fct_stats()
     test_goodput()
@@ -168,4 +207,6 @@ if __name__ == "__main__":
     test_fct_slowdown()
     test_cct_inflation()
     test_collective_makespan()
+    test_sink_rate_series()
+    test_tor_downqueue_delay_series()
     print("ALL PASS")
