@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     double ns_swift = bench_ns([&](long i){ u64 q=q_of(i); u64 tgt=swift::target_delay_q((double)(i%64+1), T_CC, a_, b_, 20000.0); double m = (q>tgt)? swift::md_factor(q,tgt,0.8,0.5):1.0; return tgt ^ (u64)(m*1e6); }, N);
     // MNSCC / MSwift per-ACK: ring push + median_of(window,H).
     MnsccState ms{}; auto mnscc_at=[&](int H){ ms.window[ms.whead]=0; return bench_ns([&](long i){ ms.window[ms.whead]=q_of(i); ms.whead=(ms.whead+1)%H; return mnscc::median_of(ms.window,H); }, N/4); };
-    MswiftState mw{}; auto mswift_at=[&](int H){ return bench_ns([&](long i){ mw.window[mw.whead]=q_of(i); mw.whead=(mw.whead+1)%H; return mnscc::median_of(mw.window,H); }, N/4); };
+    MswiftState mw{}; auto mswift_at=[&](int H){ return bench_ns([&](long i){ mw.window[mw.whead]=q_of(i); mw.whead=(mw.whead+1)%H; return mnscc::median_of(mw.window,H); }, N/4); };  // MSwift reuses mnscc::median_of (mnscc_median.h:16-24); only window size differs (64 vs MNSCC's 32)
 
     // ---- write bench_compute.csv ----
     FILE* f = fopen((dir+"/bench_compute.csv").c_str(), "w");
@@ -78,10 +78,11 @@ int main(int argc, char** argv) {
 
     // ---- bench_state.csv (signal-state bytes per flow) ----
     f = fopen((dir+"/bench_state.csv").c_str(), "w");
+    if(!f){ fprintf(stderr,"BENCH FAIL: cannot open %s/bench_state.csv\n", dir.c_str()); return 1; }
     fprintf(f, "algo,bytes\n");
     fprintf(f, "prism,%zu\n", sizeof(PrismState));
     fprintf(f, "nscc,%zu\n",  sizeof(NsccState));
-    fprintf(f, "strack,%zu\n",sizeof(NsccState));
+    fprintf(f, "strack,%zu\n",sizeof(NsccState));  // STrack: O(1), stateless decision logic (strack_cc.h) reusing NSCC's base scalars -> same minimal footprint
     fprintf(f, "swift,%zu\n", sizeof(SwiftState));
     fprintf(f, "mnscc,%zu\n", sizeof(MnsccState));
     fprintf(f, "mswift,%zu\n",sizeof(MswiftState));
@@ -90,8 +91,9 @@ int main(int argc, char** argv) {
 
     // ---- bench_state_paths.csv (bytes vs #paths: prism/reps flat, bitmap O(#paths)) ----
     f = fopen((dir+"/bench_state_paths.csv").c_str(), "w");
+    if(!f){ fprintf(stderr,"BENCH FAIL: cannot open %s/bench_state_paths.csv\n", dir.c_str()); return 1; }
     fprintf(f, "paths,prism,reps,bitmap\n");
-    for(int p : {8,16,32,64,128}) fprintf(f, "%d,%zu,%zu,%d\n", p, sizeof(PrismState), sizeof(RepsState), p); // bitmap = vector<uint8_t>[#paths]
+    for(int p : {8,16,32,64,128}) fprintf(f, "%d,%zu,%zu,%d\n", p, sizeof(PrismState), sizeof(RepsState), p); // bitmap = vector<uint8_t> _ev_skip_bitmap (uec_mp.cpp:61-149), sized #paths -> one byte per path
     fclose(f);
 
     // ---- sanity invariants (the test) ----
