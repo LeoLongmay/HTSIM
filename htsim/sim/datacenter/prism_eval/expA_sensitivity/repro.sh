@@ -56,6 +56,21 @@ for v in $KLIST; do for f in 0 8; do for s in $SEEDS; do
     bash "$COMMON/run_lib.sh" prism reps "$f" "$TOPO" "$s" "$CM" flow "expSens_kappa_prism_k${v}_f${f}_s${s}" "$OUT"
 done; done; done
 
-echo "== render figK_sensitivity + robustness table =="
+# Queuing-delay companion (figK3): re-run the f8 sweeps WITH PRISM_PATHRTT logging so we can extract
+# end-to-end per-packet queuing delay (raw_rtt-base). Adds the path-RTT log only; the sim is
+# unchanged (flow.txt identical). Default center (qd_default_f8) is shared by all three knobs.
+echo "== queuing-delay companion (figK3): f8 sweeps with PRISM_PATHRTT =="
+qd_run() {  # $1=tag  $2=extra_args
+  for s in $SEEDS; do
+    PATHS=8 END_MS="$ENDV" EXTRA_ARGS="$DD $2" PRISM_PATHRTT="$OUT/$1_s${s}.pathrtt.csv" \
+      bash "$COMMON/run_lib.sh" prism reps 8 "$TOPO" "$s" "$CM" flow "$1_s${s}" "$OUT"
+  done
+}
+qd_run qd_default_f8 ""
+for v in $TSLIST; do qd_run "qd_tspray_ts${v}_f8" "-prism_t_spray $v"; done
+for v in $QLIST;  do qd_run "qd_tcc_q${v}_f8"     "-target_q_delay $v"; done
+for v in $KLIST;  do qd_run "qd_kappa_k${v}_f8"   "-prism_kappa $v"; done
+
+echo "== render figK_sensitivity + figK2 + figK3 + robustness table =="
 python3 "$HERE/make_figs.py" --render
-echo "== done: figs/figK_sensitivity.* =="
+echo "== done: figs/figK_sensitivity.* figK2_kappa_tradeoff.* figK3_*.* =="

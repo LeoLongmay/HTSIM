@@ -22,9 +22,11 @@ cover the dense OFAT grids below.
 | `T_cc`    | `-target_q_delay` | **14 µs** | 5, 7, 10, **14**, 17, 20, 24, 28, 40 µs |
 | `kappa`   | `-prism_kappa`    | **1**      | 0.125, 0.25, 0.375, 0.5, 0.75, **1**, 1.5, 2, 3, 4, 6, 8 |
 
-Figures: `figs/figK_sensitivity.{pdf,png}` (one panel per knob; PRISM goodput normalised to the
-PRISM default; `kappa` on a log₂ x-axis) and `figs/figK2_kappa_tradeoff.{pdf,png}` (the kappa
-throughput↔fairness knee — the basis for the default; see § kappa).
+Figures: `figs/figK_sensitivity.{pdf,png}` (one panel per knob; **absolute f8 goodput of PRISM vs
+REPS+NSCC**, the shaded band = PRISM's advantage (green) / deficit (red); `kappa` on a log₂ x-axis),
+`figs/figK2_kappa_tradeoff.{pdf,png}` (the kappa throughput↔fairness knee), and
+`figs/figK_qd_{tspray,tcc,kappa}.{pdf,png}` (throughput↔queuing-delay per knob; see § Throughput vs
+queuing delay).
 
 ## Results
 
@@ -138,6 +140,51 @@ default and kappa>1 is an operator dial for throughput-over-fairness.  Stress pr
 oversub 4:1 (f8 +31.8%@k1 → +41.7%@k4 vs REPS), trimming-incast 64→host 0 (~97 Gbps flat), and
 dynamic open-loop Poisson load (rho 0.5/0.9 both improved).
 
+## Throughput vs queuing delay (figK_qd_*)
+
+A companion to figK2: instead of fairness, the right axis is the **mean end-to-end per-packet
+queuing delay** = mean over the whole run and 5 seeds of `(raw_rtt − base)`, base = 13945 ns (the
+128-node base RTT). This is the latency a packet actually waits in queues, summed over every switch
+on its path — so it sidesteps any "which switch" choice — and it is exactly the signal PRISM senses.
+PRISM-only, f8 anchor (matches figK2). Measured by re-running the f8 sweeps with `PRISM_PATHRTT`
+logging (the simulation is unchanged; goodput is identical to figK/figK2).
+
+The three knobs behave differently, and the relationships are NOT a uniform "pay latency for
+throughput":
+
+- **T_spray** — smaller is better on **both** axes: f8 goodput 552→475 Gbps and queuing delay
+  14.3→19.0 µs as T_spray goes 5→40 µs. Lower T_spray sprays more aggressively → balances load →
+  shallower queues AND higher throughput. Not a tradeoff — a win-win for small T_spray.
+- **T_cc** — the **latency dial**: realised queuing delay tracks T_cc almost linearly (9.6 µs at
+  q=5 → 20.4 µs at q=40), because T_cc *is* the queuing-delay target. Goodput is roughly flat.
+  Tightening T_cc cuts latency at little goodput cost.
+- **kappa** — buys throughput at **flat latency**: f8 goodput 504→645 Gbps (k=1→6) while queuing
+  delay stays ≈16–17 µs up to k=4 (rising only at k≥6). The floor-MD pins queuing near T_cc
+  regardless of epoch. So kappa's cost is **fairness** (figK2), **not** latency.
+
+### On the default (14, 14, 1): principled and conservative, not performance-maximal
+
+These figures make plain that, on this workload, **(14, 14, 1) is not the goodput/latency optimum** —
+lower T_spray, tighter T_cc, and larger kappa each improve at least one axis without obviously
+hurting the others (e.g. (7, 10, 1) ≈ dominates it). The default is nonetheless the right choice for
+the published experiments, for three reasons:
+
+1. It is **principled, not tuned**: kappa=1 = one control-loop RTT (the natural signal timescale)
+   and the f8-fairness maximum (figK2); T_cc=14 µs ≈ one network RTT, the standard NSCC queuing
+   target **shared by all arms**; T_spray follows T_cc. Choosing these avoids overfitting to the
+   eval workload.
+2. The eval's claim is **"PRISM beats the baselines," measured under identical, fair conditions** —
+   every arm at its principled default, same shared T_cc. "(14,14,1) is suboptimal *for PRISM*" does
+   **not** mean PRISM loses to the baselines; it still wins. The reported advantage is therefore a
+   **conservative lower bound** — tuning only widens it (+17% → +28% at (7,10,2)).
+3. Re-running the other experiment groups with tuned params would be **overfitting** (tuned on this
+   workload) **and unfair** (baselines were not co-tuned; T_cc is shared) — it would weaken
+   credibility, not strengthen it. Adopting a tuned default would first require cross-scale (1024)
+   and mixed-flow validation with the baselines co-tuned.
+
+So the other groups (all at the default) remain valid as a fair, conservative comparison and are
+**not re-run**; this section documents PRISM's tuning headroom, not a defect.
+
 ## Robustness verdict
 
 Pre-registered light criterion (spec §4): within each bracket, (i) cr=1.00 everywhere, (ii) f8
@@ -172,14 +219,15 @@ than 5 percentage points.
 ## Reproduce
 
 ```bash
-# From sim/datacenter — regenerates the 350-run dense OFAT grids + both figures
+# From sim/datacenter — regenerates the 350-run dense OFAT grids, the 140-run f8 PRISM_PATHRTT
+# companion (queuing delay), and all figures (figK_sensitivity, figK2, figK_qd_*)
 bash prism_eval/expA_sensitivity/repro.sh
 ```
 
-Output figures: `figs/figK_sensitivity.{pdf,png}` and `figs/figK2_kappa_tradeoff.{pdf,png}`.
-Raw data is gitignored.
+Output figures: `figs/figK_sensitivity.{pdf,png}`, `figs/figK2_kappa_tradeoff.{pdf,png}`, and
+`figs/figK_qd_{tspray,tcc,kappa}.{pdf,png}`. Raw data is gitignored.
 
 **Note on kappa follow-up probes**: the dip mechanism table (§ kappa), the stress probes
 (oversub/incast/Poisson), and the reuse-soundness rerun were controller-run follow-up
 investigations and are **not** regenerated by `repro.sh`, which covers the 350-run dense OFAT
-grids, the per-flow Jain fairness curve, and both figures.
+grids, the 140-run queuing-delay companion, the per-flow Jain fairness curve, and all figures.

@@ -20,9 +20,9 @@ FAILED = [0, 8]  # f0 = symmetric cost anchor; f8 = headline asymmetric win anch
 # OFAT knob configs. Dense grids span ~0.35-3x the default to expose the full curve shape; 'default'
 # x reuses the expA_* center cell. kappa is a multiplier -> plotted on a log x-axis ("logx").
 KNOBS = [
-    {"name": "tspray", "title": "T_spray (us)",        "token": "ts", "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
-    {"name": "tcc",    "title": "T_cc (us)",           "token": "q",  "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
-    {"name": "kappa",  "title": "epoch  k x base_rtt", "token": "k",  "default": 1.0, "logx": True,
+    {"name": "tspray", "title": r"$T_{spray}$ (us)",        "token": "ts", "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
+    {"name": "tcc",    "title": r"$T_{cc}$ (us)",           "token": "q",  "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
+    {"name": "kappa",  "title": r"epoch $\kappa$ x base_rtt", "token": "k",  "default": 1.0, "logx": True,
      "xs": [0.125, 0.25, 0.375, 0.5, 0.75, 1.0, 1.5, 2, 3, 4, 6, 8]},
 ]
 
@@ -68,29 +68,32 @@ def knob_series(knob):
     return out
 
 def render():
-    """Inline 3-panel figure: per knob, goodput normalized to the PRISM default vs the knob value;
-    two Prism series (f0 cost, f8 win); the T_cc panel adds a REPS+NSCC f8 reference line."""
+    """3-panel sensitivity figure: ABSOLUTE f8 goodput (Gbps), Prism vs REPS+NSCC, per knob.
+    The shaded band between the two curves is Prism's advantage (green) or deficit (red), so the
+    reader sees directly whether the win survives each knob. T_spray and kappa are PRISM-private,
+    so REPS is a flat reference at its default; T_cc is the SHARED NSCC target, so REPS varies with
+    it and catches up at loose T_cc (shown honestly, not hidden). kappa on a log2 x-axis."""
     import matplotlib.pyplot as plt
     os.makedirs(FIGS, exist_ok=True)
     plot_style.apply_style(15)
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.2), sharey=True)
-    handles = {}
+    reps_f8_def = agg_arm(REUSE, "expA_reps", FAILED, SEEDS)[8]["goodput"]
+    fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6), sharey=True)
+    hP = hR = None
     for ax, knob in zip(axes, KNOBS):
         ser = knob_series(knob); prism = ser["prism"]
-        denom = {f: prism[knob["default"]][f]["goodput"] for f in FAILED}
-        for f, style, lab in [(0, "o--", "Prism @f0 (cost)"), (8, "s-", "Prism @f8 (win)")]:
-            xs = [x for x in knob["xs"] if f in prism[x]]
-            ys = [prism[x][f]["goodput"] / denom[f] for x in xs]
-            ln, = ax.plot(xs, ys, style, lw=2, ms=6, color=plot_style.COLORS["prism"], label=lab)
-            handles[lab] = ln
+        xs = [x for x in knob["xs"] if 8 in prism[x]]
+        yp = [prism[x][8]["goodput"] for x in xs]
         if knob["name"] == "tcc":
-            reps = ser["reps"]; rdenom = reps[knob["default"]][8]["goodput"]
-            xs = [x for x in knob["xs"] if 8 in reps[x]]
-            ys = [reps[x][8]["goodput"] / rdenom for x in xs]
-            ln, = ax.plot(xs, ys, "^:", lw=1.8, ms=6, color=plot_style.COLORS["reps"], label="REPS+NSCC @f8 (ref)")
-            handles["REPS+NSCC @f8 (ref)"] = ln
-        ax.axhline(1.0, color="0.4", lw=0.9, zorder=0)
-        ax.axvline(knob["default"], color="0.7", ls=":", lw=1.0, zorder=0)
+            yr = [ser["reps"][x][8]["goodput"] for x in xs]
+        else:
+            yr = [reps_f8_def for _ in xs]
+        adv = [p >= r for p, r in zip(yp, yr)]
+        ax.fill_between(xs, yp, yr, where=adv, interpolate=True, color="#1a9850", alpha=0.18)
+        ax.fill_between(xs, yp, yr, where=[not a for a in adv], interpolate=True, color="#d73027", alpha=0.18)
+        lP, = ax.plot(xs, yp, "s-", lw=2.3, ms=6, color=plot_style.COLORS["prism"], label="Prism")
+        lR, = ax.plot(xs, yr, "^--", lw=2.0, ms=6, color=plot_style.COLORS["reps"], label="REPS+NSCC")
+        hP, hR = lP, lR
+        ax.axvline(knob["default"], color="0.55", ls=":", lw=1.2, zorder=0)
         if knob.get("logx"):
             ax.set_xscale("log", base=2)
             ax.set_xticks(knob["xs"])
@@ -98,12 +101,16 @@ def render():
         ax.set_title(knob["title"], fontsize=14)
         ax.set_xlabel(f"{knob['title']}  (default = {'%g' % knob['default']})")
         ax.grid(alpha=0.3)
-    axes[0].set_ylabel("Goodput (norm. to Prism default)")
-    fig.legend(handles.values(), handles.keys(), ncol=3, fontsize=12,
+    axes[0].set_ylabel("f8 goodput (Gbps)")
+    fig.legend([hP, hR], ["Prism", "REPS+NSCC"], ncol=2, fontsize=12,
                loc="lower center", bbox_to_anchor=(0.5, 1.0), frameon=False)
-    plt.tight_layout(rect=(0, 0, 1, 0.93))
+    fig.text(0.5, 0.015, "Shaded band = Prism's f8 advantage (green) / deficit (red). T_spray & kappa "
+             "are Prism-private (REPS flat at its default); T_cc is the shared NSCC target, so REPS "
+             "rises with it and catches up at loose T_cc.", ha="center", fontsize=9, color="0.35")
+    plt.tight_layout(rect=(0, 0.06, 1, 0.91))
     plot_style.save(fig, "figK_sensitivity", FIGS); plt.close(fig)
     render_kappa_tradeoff()
+    render_qd()
     print_table()
 
 def render_kappa_tradeoff():
@@ -142,6 +149,60 @@ def render_kappa_tradeoff():
                loc="lower center", bbox_to_anchor=(0.5, 0.99), frameon=False)
     plt.tight_layout(rect=(0, 0, 1, 0.95))
     plot_style.save(fig, "figK2_kappa_tradeoff", FIGS); plt.close(fig)
+
+def render_qd():
+    """figK3_{tspray,tcc,kappa}: throughput<->queuing-delay characterization vs each knob. Left y =
+    f8 goodput (Gbps); right y = mean END-TO-END per-packet queuing delay (us) = mean over the whole
+    run & seeds of (raw_rtt - base), base 13945 ns (the topo base RTT). PRISM-only, f8 (matches
+    figK2's anchor). Reads the qd_* PRISM_PATHRTT runs from repro.sh; skips if that data is absent."""
+    import matplotlib.pyplot as plt
+    BASE_NS = 13945.0; QCOL = "#e67e22"
+    if not os.path.exists(os.path.join(DATA, "qd_default_f8_s13.pathrtt.csv")):
+        print("[figK3] qd_* path-RTT data absent -- run repro.sh; skipping figK3"); return
+    def qdelay_us(p):
+        s = n = 0
+        with open(p) as fh:
+            for ln in fh:
+                c = ln.split(",")
+                if len(c) >= 4:
+                    s += float(c[3]); n += 1
+        return ((s / n) - BASE_NS) / 1000.0 if n else float("nan")
+    def point(tag):
+        g, q = [], []
+        for s in SEEDS:
+            fp = os.path.join(DATA, f"{tag}_s{s}.flow.txt")
+            pr = os.path.join(DATA, f"{tag}_s{s}.pathrtt.csv")
+            if os.path.exists(fp):
+                g.append(metrics.aggregate_goodput_gbps(fp))
+            if os.path.exists(pr):
+                q.append(qdelay_us(pr))
+        return _mean(g), _mean(q)
+    plot_style.apply_style(24)
+    for knob in KNOBS:
+        xs = knob["xs"]
+        good, qd = [], []
+        for x in xs:
+            tag = ("qd_default_f8" if x == knob["default"]
+                   else f"qd_{knob['name']}_{knob['token']}{'%g' % x}_f8")
+            g, q = point(tag); good.append(g); qd.append(q)
+        fig, axg = plt.subplots(figsize=(6.4, 4.3)); axq = axg.twinx()
+        lg, = axg.plot(xs, good, "s-", lw=2.3, ms=7, color=plot_style.COLORS["prism"], label="f8 goodput (Gbps)")
+        lq, = axq.plot(xs, qd, "o--", lw=2.2, ms=7, color=QCOL, label="mean queuing delay (us)")
+        axg.axvline(knob["default"], color="0.55", ls=":", lw=1.4, zorder=0)
+        if knob.get("logx"):
+            axg.set_xscale("log", base=2); axg.set_xticks(xs)
+            axg.set_xticklabels([("%g" % x) for x in xs], fontsize=10)
+        axg.set_xlabel(f"{knob['title']}") # (default = {'%g' % knob['default']})
+        axg.set_ylabel("Goodput (Gbps)")
+        axq.set_ylabel("Queuing delay (us)")
+        axg.tick_params(axis="y")
+        axq.tick_params(axis="y")
+        # axg.set_title(f"Throughput vs queuing-delay: {knob['title'].split(' ')[0]}", fontsize=12)
+        axg.grid(alpha=0.3)
+        fig.legend([lg, lq], ["Goodput (Gbps)", "Queuing delay (us)"], ncol=2,
+                   fontsize=18, loc="lower center", bbox_to_anchor=(0.5, 0.95), frameon=False)
+        plt.tight_layout(rect=(0, 0, 1, 0.88))
+        plot_style.save(fig, f"figK_qd_{knob['name']}", FIGS); plt.close(fig)
 
 def print_table():
     """Per knob: avg-FCT/P99/cr at every swept point + the f8 win-vs-REPS range over the bracket.
