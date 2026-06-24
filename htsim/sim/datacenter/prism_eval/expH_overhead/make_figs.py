@@ -146,7 +146,9 @@ def render_latency():
         for fp in _epoch_files(k):
             cad, b, _ = epoch_stats(fp)
             if cad == cad:  # not NaN
-                cads.append(cad); base = b
+                cads.append(cad)
+                if base is None:
+                    base = b
         if cads:
             xs.append(k); ys.append(statistics.mean(cads))
     plot_style.apply_style(15)
