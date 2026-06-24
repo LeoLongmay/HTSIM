@@ -17,11 +17,11 @@ typedef uint64_t u64;
 using clk = std::chrono::steady_clock;
 
 // --- representative signal-state groups, mirroring the real UecSrc members (file:line) ---
-struct PrismState  { u64 start,min,max,ccc,cspray; uint32_t samples; int region; bool genuine; };   // uec.cpp:482-491
-struct MnsccState  { u64 window[32]; uint32_t wcount, whead; };                                      // uec.cpp:495-498 (MNSCC_MAX_H=32)
-struct MswiftState { u64 window[64]; uint32_t wcount, whead, overcount; };                           // uec.cpp:502-505 (SWIFT_MAX_H=64)
-struct SwiftState  { u64 last_dec; };                                                                // uec.cpp:~1699
-struct NsccState   { u64 reuse; };          // NSCC reuses base UecSrc scalars; no signal buffer     // uec.cpp:1460-1507
+struct PrismState  { u64 start,min,max,ccc,cspray; uint32_t samples; int region; bool genuine; };   // uec.h:483-490
+struct MnsccState  { u64 window[32]; uint32_t wcount, whead; };                                      // uec.h:495-498 (MNSCC_MAX_H=32)
+struct MswiftState { u64 window[64]; uint32_t wcount, whead; };                                      // uec.h:502-505 median window (SWIFT_MAX_H=64); overcount is LSwift-base state, excluded for apples-to-apples vs MNSCC
+struct SwiftState  { u64 last_dec; };                                                                // uec.h:~1699
+struct NsccState   { u64 reuse; };          // NSCC reuses base UecSrc scalars; no signal buffer     // uec.h:1460-1507
 struct RepsElem    { uint16_t value; bool isValid; int usable_lifetime; };                           // buffer_reps.h
 struct RepsState   { RepsElem buf[8]; int16_t head, tail; uint16_t count; };                         // repsBufferSize=8
 

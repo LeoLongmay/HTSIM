@@ -24,7 +24,7 @@ Wire column: none of these schemes add any extra header fields.
 | STrack      |         8 | O(1)        | O(1)        | none |
 | Swift       |         8 | O(1)        | O(1)        | none |
 | MNSCC       |       264 | O(1) [32-win] | O(H log H) | none |
-| MSwift      |       528 | O(1) [64-win] | O(H log H) | none |
+| MSwift      |       520 | O(1) [64-win] | O(H log H) | none |
 | REPS (LB)   |        72 | O(8)        | O(1)        | none |
 | BITMAP\*    |    O(#paths) | O(#paths) | O(#paths)  | none |
 
@@ -39,17 +39,17 @@ Its state grows linearly with the number of monitored paths; shown in figO1 (rig
 
 **Reading.** Prism holds 56 B per flow (two uint32 running-min/max accumulators plus scalars).
 NSCC, STrack, and Swift each need 8 B (one or two scalars).  MNSCC carries a 32-sample circular
-buffer (264 B) and MSwift a 64-sample buffer (528 B) — 4.7× and 9.4× more than Prism.  REPS
+buffer (264 B) and MSwift a 64-sample buffer (520 B) — 4.7× and 9.3× more than Prism.  REPS
 (the load balancer) holds a per-path bitmask, fixed at 72 B for 8 paths.  The right panel
 shows that Prism and REPS are flat as #paths grows, while a hypothetical per-path design scales
 linearly.
 
 ### figO2 — Per-ACK compute
 
-**Reading.** Prism's signal-extraction routine takes **1.87 ns/ACK** (microbench, isolated timing;
-machine-specific — see caveat 1).  NSCC is 1.24 ns, STrack 2.04 ns, Swift 10.29 ns — all O(1)
-and in the same single-digit-ns range.  MNSCC at its default window of H=32 costs **284 ns/ACK**
-and MSwift at H=64 costs **742 ns/ACK** — 152× and 397× more than Prism respectively.  The right
+**Reading.** Prism's signal-extraction routine takes **1.25 ns/ACK** (microbench, isolated timing;
+machine-specific — see caveat 1).  NSCC is 1.17 ns, STrack 1.64 ns, Swift 9.45 ns — all O(1)
+and in the same single-digit-ns range.  MNSCC at its default window of H=32 costs **252 ns/ACK**
+and MSwift at H=64 costs **696 ns/ACK** — 203× and 559× more than Prism respectively.  The right
 panel shows both median schemes scale super-linearly with window size H (O(H log H) sorting),
 while Prism's cost (dashed line) stays flat.
 
