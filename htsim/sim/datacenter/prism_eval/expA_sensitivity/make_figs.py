@@ -22,7 +22,7 @@ FAILED = [0, 8]  # f0 = symmetric cost anchor; f8 = headline asymmetric win anch
 KNOBS = [
     {"name": "tspray", "title": r"$T_{spray}$ (us)",        "token": "ts", "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
     {"name": "tcc",    "title": r"$T_{cc}$ (us)",           "token": "q",  "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
-    {"name": "kappa",  "title": r"epoch $\kappa$ x base_rtt", "token": "k",  "default": 1.0, "logx": True,
+    {"name": "kappa",  "title": r"$k$ x base_rtt", "token": "k",  "default": 1.0, "logx": True,
      "xs": [0.125, 0.25, 0.375, 0.5, 0.75, 1.0, 1.5, 2, 3, 4, 6, 8]},
 ]
 
@@ -151,14 +151,16 @@ def render_kappa_tradeoff():
     plot_style.save(fig, "figK2_kappa_tradeoff", FIGS); plt.close(fig)
 
 def render_qd():
-    """figK3_{tspray,tcc,kappa}: throughput<->queuing-delay characterization vs each knob. Left y =
+    """figK_qd_{tspray,tcc,kappa}: throughput<->queuing-delay characterization vs each knob. Left y =
     f8 goodput (Gbps); right y = mean END-TO-END per-packet queuing delay (us) = mean over the whole
     run & seeds of (raw_rtt - base), base 13945 ns (the topo base RTT). PRISM-only, f8 (matches
-    figK2's anchor). Reads the qd_* PRISM_PATHRTT runs from repro.sh; skips if that data is absent."""
+    figK2's anchor). Reads the qd_* PRISM_PATHRTT runs from repro.sh; skips if that data is absent.
+    The shared legend is saved standalone as figK_qd_legend; the three panels omit their own legend."""
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
     BASE_NS = 13945.0; QCOL = "#e67e22"
     if not os.path.exists(os.path.join(DATA, "qd_default_f8_s13.pathrtt.csv")):
-        print("[figK3] qd_* path-RTT data absent -- run repro.sh; skipping figK3"); return
+        print("[figK_qd] qd_* path-RTT data absent -- run repro.sh; skipping figK_qd"); return
     def qdelay_us(p):
         s = n = 0
         with open(p) as fh:
@@ -177,7 +179,7 @@ def render_qd():
             if os.path.exists(pr):
                 q.append(qdelay_us(pr))
         return _mean(g), _mean(q)
-    plot_style.apply_style(24)
+    plot_style.apply_style(26)
     for knob in KNOBS:
         xs = knob["xs"]
         good, qd = [], []
@@ -185,24 +187,29 @@ def render_qd():
             tag = ("qd_default_f8" if x == knob["default"]
                    else f"qd_{knob['name']}_{knob['token']}{'%g' % x}_f8")
             g, q = point(tag); good.append(g); qd.append(q)
-        fig, axg = plt.subplots(figsize=(6.4, 4.3)); axq = axg.twinx()
-        lg, = axg.plot(xs, good, "s-", lw=2.3, ms=7, color=plot_style.COLORS["prism"], label="f8 goodput (Gbps)")
-        lq, = axq.plot(xs, qd, "o--", lw=2.2, ms=7, color=QCOL, label="mean queuing delay (us)")
-        axg.axvline(knob["default"], color="0.55", ls=":", lw=1.4, zorder=0)
-        if knob.get("logx"):
-            axg.set_xscale("log", base=2); axg.set_xticks(xs)
-            axg.set_xticklabels([("%g" % x) for x in xs], fontsize=10)
-        axg.set_xlabel(f"{knob['title']}") # (default = {'%g' % knob['default']})
+        fig, axg = plt.subplots(figsize=(6.8, 4.4)); axq = axg.twinx()
+        axg.plot(xs, good, "s-", lw=2.3, ms=7, color=plot_style.COLORS["prism"])
+        axq.plot(xs, qd, "o--", lw=2.2, ms=7, color=QCOL)
+        if knob.get("logx"):                 # kappa: sparser log2 ticks; font inherits (== y ticks)
+            axg.set_xscale("log", base=2)
+            kticks = [0.125, 1, 2, 4, 8]
+            axg.set_xticks(kticks); axg.set_xticklabels([("%g" % t) for t in kticks])
+        else:                                # T_spray / T_cc: label 10, 20, 30, 40
+            axg.set_xticks([10, 20, 30, 40])
+        axg.set_xlabel(f"{knob['title']}")
         axg.set_ylabel("Goodput (Gbps)")
+        axg.yaxis.set_label_coords(-0.27, 0.40)
         axq.set_ylabel("Queuing delay (us)")
-        axg.tick_params(axis="y")
-        axq.tick_params(axis="y")
-        # axg.set_title(f"Throughput vs queuing-delay: {knob['title'].split(' ')[0]}", fontsize=12)
+        axq.yaxis.set_label_coords(1.2, 0.38)
         axg.grid(alpha=0.3)
-        fig.legend([lg, lq], ["Goodput (Gbps)", "Queuing delay (us)"], ncol=2,
-                   fontsize=18, loc="lower center", bbox_to_anchor=(0.5, 0.95), frameon=False)
-        plt.tight_layout(rect=(0, 0, 1, 0.88))
+        plt.tight_layout()
         plot_style.save(fig, f"figK_qd_{knob['name']}", FIGS); plt.close(fig)
+    proxies = [Line2D([0], [0], marker="s", ls="-", lw=2.3, ms=7, color=plot_style.COLORS["prism"]),
+               Line2D([0], [0], marker="o", ls="--", lw=2.2, ms=7, color=QCOL)]
+    figL = plt.figure(figsize=(7.0, 0.6))
+    figL.legend(proxies, ["Goodput (Gbps)", "Queuing delay (us)"], ncol=2,
+                loc="center", frameon=False, fontsize=18)
+    plot_style.save(figL, "figK_qd_legend", FIGS); plt.close(figL)
 
 def print_table():
     """Per knob: avg-FCT/P99/cr at every swept point + the f8 win-vs-REPS range over the bracket.
