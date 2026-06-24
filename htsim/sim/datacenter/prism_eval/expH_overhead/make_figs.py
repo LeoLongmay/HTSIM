@@ -50,7 +50,8 @@ def render_state():
         ax1.text(i, v, str(v), ha="center", va="bottom", fontsize=9)
     ax1.tick_params(axis="x", rotation=35)
     # state vs #paths
-    rows = list(csv.DictReader(open(os.path.join(DATA, "bench_state_paths.csv"))))
+    with open(os.path.join(DATA, "bench_state_paths.csv")) as fh:
+        rows = list(csv.DictReader(fh))
     P = [int(r["paths"]) for r in rows]
     ax2.plot(P, [int(r["prism"]) for r in rows], "o-", color=plot_style.COLORS["prism"], lw=2, label="Prism (O(1))")
     ax2.plot(P, [int(r["reps"]) for r in rows], "s-", color=plot_style.COLORS["reps"], lw=2, label="REPS (O(1))")
