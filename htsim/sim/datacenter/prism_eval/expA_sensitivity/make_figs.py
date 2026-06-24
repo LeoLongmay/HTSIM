@@ -17,22 +17,24 @@ REUSE = os.path.join(HERE, "..", "expA_delaydriven", "data")  # committed defaul
 SEEDS = [13, 14, 15, 16, 17]
 FAILED = [0, 8]  # f0 = symmetric cost anchor; f8 = headline asymmetric win anchor
 
-# OFAT knob configs. xs span ~0.5-2x the default (bold). 'default' x reuses the expA_* center cell.
+# OFAT knob configs. Dense grids span ~0.35-3x the default to expose the full curve shape; 'default'
+# x reuses the expA_* center cell. kappa is a multiplier -> plotted on a log x-axis ("logx").
 KNOBS = [
-    {"name": "tspray", "title": "T_spray (us)",        "token": "ts", "default": 14,  "xs": [7, 10, 14, 20, 28]},
-    {"name": "tcc",    "title": "T_cc (us)",           "token": "q",  "default": 14,  "xs": [7, 10, 14, 20, 28]},
-    {"name": "kappa",  "title": "epoch  k x base_rtt", "token": "k",  "default": 1.0, "xs": [0.25, 0.5, 1.0, 2, 4]},
+    {"name": "tspray", "title": "T_spray (us)",        "token": "ts", "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
+    {"name": "tcc",    "title": "T_cc (us)",           "token": "q",  "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
+    {"name": "kappa",  "title": "epoch  k x base_rtt", "token": "k",  "default": 1.0, "logx": True,
+     "xs": [0.125, 0.25, 0.375, 0.5, 0.75, 1.0, 1.5, 2, 3, 4, 6, 8]},
 ]
 
 def _mean(xs):
     return statistics.mean(xs) if xs else float("nan")
 
 def agg_arm(data_dir, tag, failed_list, seeds):
-    """{failed: {'goodput','avg_fct'(us),'p99_fct'(us),'cr'}} for {data_dir}/{tag}_f{f}_s{s}.flow.txt;
-    skips missing cells. Copied verbatim from expA_tspray_tuning/make_figs.py."""
+    """{failed: {'goodput','avg_fct'(us),'p99_fct'(us),'cr','jain'}} for {data_dir}/{tag}_f{f}_s{s}.flow.txt;
+    skips missing cells. Based on expA_tspray_tuning/make_figs.py, plus Jain fairness for the kappa tradeoff."""
     out = {}
     for f in failed_list:
-        g, a, p, c = [], [], [], []
+        g, a, p, c, j = [], [], [], [], []
         for s in seeds:
             fp = os.path.join(data_dir, f"{tag}_f{f}_s{s}.flow.txt")
             if not os.path.exists(fp):
@@ -40,8 +42,10 @@ def agg_arm(data_dir, tag, failed_list, seeds):
             st = metrics.fct_stats(fp)
             g.append(metrics.aggregate_goodput_gbps(fp))
             a.append(st["avg_s"] * 1e6); p.append(st["p99_s"] * 1e6); c.append(st["completion_rate"])
+            j.append(metrics.jain_fairness(fp))
         if g:
-            out[f] = {"goodput": _mean(g), "avg_fct": _mean(a), "p99_fct": _mean(p), "cr": _mean(c)}
+            out[f] = {"goodput": _mean(g), "avg_fct": _mean(a), "p99_fct": _mean(p),
+                      "cr": _mean(c), "jain": _mean(j)}
     return out
 
 def _tag(knob_name, arm, token, x):
@@ -87,6 +91,10 @@ def render():
             handles["REPS+NSCC @f8 (ref)"] = ln
         ax.axhline(1.0, color="0.4", lw=0.9, zorder=0)
         ax.axvline(knob["default"], color="0.7", ls=":", lw=1.0, zorder=0)
+        if knob.get("logx"):
+            ax.set_xscale("log", base=2)
+            ax.set_xticks(knob["xs"])
+            ax.set_xticklabels([("%g" % x) for x in knob["xs"]], fontsize=10)
         ax.set_title(knob["title"], fontsize=14)
         ax.set_xlabel(f"{knob['title']}  (default = {'%g' % knob['default']})")
         ax.grid(alpha=0.3)
@@ -95,7 +103,45 @@ def render():
                loc="lower center", bbox_to_anchor=(0.5, 1.0), frameon=False)
     plt.tight_layout(rect=(0, 0, 1, 0.93))
     plot_style.save(fig, "figK_sensitivity", FIGS); plt.close(fig)
+    render_kappa_tradeoff()
     print_table()
+
+def render_kappa_tradeoff():
+    """Why default kappa=1: the headline (f8 asymmetric) regime is a throughput<->fairness tradeoff.
+    For kappa<=1 both f8 goodput and f8 Jain sit on a flat high plateau (insensitive); kappa=1 is the
+    largest epoch on that plateau (the 'knee'). For kappa>1 goodput rises but f8 fairness falls off a
+    cliff. Single twin-axis figure: f8 goodput (left) and f8 Jain (right) vs kappa (log2)."""
+    import matplotlib.pyplot as plt
+    os.makedirs(FIGS, exist_ok=True)
+    plot_style.apply_style(15)
+    knob = next(k for k in KNOBS if k["name"] == "kappa")
+    prism = {x: arm_point(knob, "prism", x, "expA_prism") for x in knob["xs"]}
+    xs = [x for x in knob["xs"] if 8 in prism[x]]
+    good = [prism[x][8]["goodput"] for x in xs]
+    jain = [prism[x][8]["jain"] for x in xs]
+    fig, axg = plt.subplots(figsize=(7.0, 4.4))
+    axj = axg.twinx()
+    axg.axvspan(min(xs), knob["default"], color="0.85", alpha=0.5, zorder=0)  # k<=1 plateau
+    lg, = axg.plot(xs, good, "s-", lw=2.2, ms=7, color=plot_style.COLORS["prism"], label="f8 goodput (Gbps)")
+    lj, = axj.plot(xs, jain, "o--", lw=2.2, ms=7, color="#d1495b", label="f8 Jain fairness")
+    axg.axvline(knob["default"], color="0.35", ls=":", lw=1.4, zorder=1)
+    axg.set_xscale("log", base=2); axg.set_xticks(knob["xs"])
+    axg.set_xticklabels([("%g" % x) for x in knob["xs"]], fontsize=10)
+    axg.set_xlabel("epoch length  kappa x base_rtt   (default = 1)")
+    axg.set_ylabel("f8 goodput (Gbps)", color=plot_style.COLORS["prism"])
+    axj.set_ylabel("f8 Jain fairness", color="#d1495b")
+    axg.tick_params(axis="y", labelcolor=plot_style.COLORS["prism"])
+    axj.tick_params(axis="y", labelcolor="#d1495b")
+    axg.set_title("Why default kappa=1: headline-regime throughput vs fairness", fontsize=13)
+    axg.text(0.04, 0.30, "kappa<=1: high-fairness\nplateau (knee at 1)",
+             transform=axg.transAxes, fontsize=10, color="0.25", va="center")
+    axg.text(0.62, 0.16, "kappa>1: trade fairness\nfor throughput",
+             transform=axg.transAxes, fontsize=10, color="0.25", va="center")
+    axg.grid(alpha=0.3)
+    fig.legend([lg, lj], ["f8 goodput (Gbps)", "f8 Jain fairness"], ncol=2, fontsize=11,
+               loc="lower center", bbox_to_anchor=(0.5, 0.99), frameon=False)
+    plt.tight_layout(rect=(0, 0, 1, 0.95))
+    plot_style.save(fig, "figK2_kappa_tradeoff", FIGS); plt.close(fig)
 
 def print_table():
     """Per knob: avg-FCT/P99/cr at every swept point + the f8 win-vs-REPS range over the bracket.

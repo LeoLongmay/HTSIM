@@ -13,9 +13,10 @@ SEEDS="13 14 15 16 17"; TOPO=fat_tree_128_1os.topo
 DD="-disable_trim"
 ENDV="${EXP_END:-8}"
 OUT="$REL/data"
-TSLIST="7 10 20 28"     # T_spray us (default 14 reused from expA_delaydriven)
-QLIST="7 10 20 28"      # T_cc us  (-target_q_delay; default ~14 reused)
-KLIST="0.25 0.5 2 4"    # kappa    (default 1.0 reused)
+# Dense OFAT grids (off-default values only; the default center is reused from expA_delaydriven).
+TSLIST="5 7 10 17 20 24 28 40"                  # T_spray us (default 14 reused)
+QLIST="5 7 10 17 20 24 28 40"                   # T_cc us  (-target_q_delay; default ~14 reused)
+KLIST="0.125 0.25 0.375 0.5 0.75 1.5 2 3 4 6 8" # kappa    (default 1.0 reused)
 
 echo "== self-tests =="
 python3 "$HERE/make_figs.py" --selftest
