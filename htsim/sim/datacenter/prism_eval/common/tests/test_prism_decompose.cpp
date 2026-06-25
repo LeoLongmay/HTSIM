@@ -29,6 +29,19 @@ int main() {
     assert(decide_loss(false, true,  false, false) == LOSS_CUT);   // uniform loss -> cut
     printf("ok decide_loss\n");
 
+    // decide_region_hyst: sticky regions with a dead-band. T_cc=10, T_spray=8, h=0.25.
+    // floor: enter DECREASE at >=12 (10*1.25); leave at <=7 (10*0.75) — strict > keeps you in while 8..11.
+    assert(decide_region_hyst(11, 0, 10, 8, 0.25, INCREASE) == INCREASE); // below enter band -> low
+    assert(decide_region_hyst(12, 0, 10, 8, 0.25, INCREASE) == DECREASE); // at/above enter band -> high
+    assert(decide_region_hyst(8,  0, 10, 8, 0.25, DECREASE) == DECREASE); // 8>7 -> still high (sticky)
+    assert(decide_region_hyst(7,  0, 10, 8, 0.25, DECREASE) == INCREASE); // 7<=7 -> floor leaves high
+    // spread: enter HOLD at >=10 (8*1.25); leave at <=6 (8*0.75).
+    assert(decide_region_hyst(0, 9,  10, 8, 0.25, INCREASE) == INCREASE); // below enter band -> low
+    assert(decide_region_hyst(0, 10, 10, 8, 0.25, INCREASE) == HOLD);     // at/above enter band -> high
+    assert(decide_region_hyst(0, 7,  10, 8, 0.25, HOLD)     == HOLD);     // 7>6 -> still high (sticky)
+    assert(decide_region_hyst(0, 6,  10, 8, 0.25, HOLD)     == INCREASE); // 6<=6 -> spread leaves high
+    printf("ok decide_region_hyst\n");
+
     printf("ALL PASS\n");
     return 0;
 }

@@ -309,6 +309,10 @@ public:
     void quick_adapt(bool trimmed);
     void updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void prismUpdateSignals(simtime_picosec c_cc, simtime_picosec c_spray);
+    void prismEpochLog(simtime_picosec c_cc, simtime_picosec c_spray, int region, bool cut);
+    simtime_picosec prismEngageThresh() const;
+    simtime_picosec prismDisengageThresh() const;
     void updateCwndOnAck_STRACK(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_MNSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_SWIFT(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
@@ -377,6 +381,13 @@ public:
     // PRISM params. T_cc IS _target_Qdelay (reused, not a separate knob).
     static simtime_picosec _prism_T_spray;  // tolerated spread; 0 = follow _target_Qdelay
     static double          _prism_kappa;    // epoch length = kappa * base_rtt; default 1.0
+    static double          _prism_smooth_beta;       // A1: EWMA weight for floor/spread (1.0 = off)
+    static double          _prism_hysteresis;        // A2: region dead-band fraction (0.0 = off)
+    static simtime_picosec _prism_engage_spread;     // C: engage threshold on spread_long (0 = always engaged)
+    static simtime_picosec _prism_disengage_spread;  // C: disengage threshold (inert when engage==0)
+    static double          _prism_engage_beta;       // C: slow-EWMA weight for spread_long
+    static double _prism_engage_mult;       // C: engage = mult*T_cc when >0 (relative); else use engage_spread
+    static double _prism_disengage_ratio;   // C: disengage = ratio*engage (relative form)
     // STrack (coupled-SOTA baseline) params. CC core reuses NSCC's _gamma/_eta/_target_Qdelay.
     static double _strack_beta;   // starvation-bump scale (Table 1 beta; dimensionless, default 5.0)
     static double _strack_h;      // per-hop target scale; default 0 (fixed target, see spec §3) (arg-parse symmetry in Task 3; not consumed while h=0)
@@ -489,6 +500,11 @@ private:
     simtime_picosec _prism_cspray        = 0;  // last epoch's C_spray (log)
     bool            _prism_genuine_sample = false;  // set in processAck: true iff this ACK gave a
                                                     // genuine raw_rtt-base sample (not avg fallback)
+    simtime_picosec _prism_floor_s       = 0;   // A1: smoothed floor (EWMA of epoch_min)
+    simtime_picosec _prism_spread_s      = 0;   // A1: smoothed spread (EWMA of epoch_max-epoch_min)
+    simtime_picosec _prism_spread_long   = 0;   // C: slow EWMA of spread_s (engagement detector)
+    bool            _prism_engaged       = false; // C: false = NSCC mode, true = decomposition engaged
+    bool            _prism_engaged_init  = false;  // one-shot: engaged initialized from the flag
 
     // MNSCC median-window state. Ring buffer of recent per-ACK delays; the median of the last
     // min(H, _mnscc_wcount) entries drives NSCC. H = _mnscc_h>0 ? _mnscc_h : nyquist_h(cwnd_pkts).

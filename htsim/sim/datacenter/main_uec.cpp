@@ -198,6 +198,34 @@ int main(int argc, char **argv) {
             UecSrc::_prism_kappa = atof(argv[i+1]);
             cout << "prism_kappa " << UecSrc::_prism_kappa << endl;
             i++;
+        } else if (!strcmp(argv[i],"-prism_smooth_beta")) {
+            UecSrc::_prism_smooth_beta = atof(argv[i+1]);
+            cout << "prism_smooth_beta " << UecSrc::_prism_smooth_beta << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_hysteresis")) {
+            UecSrc::_prism_hysteresis = atof(argv[i+1]);
+            cout << "prism_hysteresis " << UecSrc::_prism_hysteresis << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_engage_spread")) {
+            UecSrc::_prism_engage_spread = timeFromUs(atof(argv[i+1]));
+            cout << "prism_engage_spread " << atof(argv[i+1]) << " us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_disengage_spread")) {
+            UecSrc::_prism_disengage_spread = timeFromUs(atof(argv[i+1]));
+            cout << "prism_disengage_spread " << atof(argv[i+1]) << " us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_engage_beta")) {
+            UecSrc::_prism_engage_beta = atof(argv[i+1]);
+            cout << "prism_engage_beta " << UecSrc::_prism_engage_beta << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_engage_mult")) {
+            UecSrc::_prism_engage_mult = atof(argv[i+1]);
+            cout << "prism_engage_mult " << UecSrc::_prism_engage_mult << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_disengage_ratio")) {
+            UecSrc::_prism_disengage_ratio = atof(argv[i+1]);
+            cout << "prism_disengage_ratio " << UecSrc::_prism_disengage_ratio << endl;
+            i++;
         } else if (!strcmp(argv[i],"-mnscc_h")) {
             UecSrc::_mnscc_h = atoi(argv[i+1]);
             cout << "mnscc_h " << UecSrc::_mnscc_h << endl;

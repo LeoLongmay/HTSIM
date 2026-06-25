@@ -99,6 +99,13 @@ simtime_picosec UecSrc::_adjust_period_threshold = timeFromUs(12u);
 simtime_picosec UecSrc::_target_Qdelay = timeFromUs(6u);
 simtime_picosec UecSrc::_prism_T_spray = 0;   // 0 sentinel: follow _target_Qdelay
 double UecSrc::_prism_kappa = 1.0;
+double          UecSrc::_prism_smooth_beta      = 1.0;   // OFF: smoothed == raw (byte-identical)
+double          UecSrc::_prism_hysteresis       = 0.0;   // OFF: sharp thresholds
+simtime_picosec UecSrc::_prism_engage_spread    = 0;     // OFF: always engaged (today's PRISM)
+simtime_picosec UecSrc::_prism_disengage_spread = 0;     // inert when engage==0
+double          UecSrc::_prism_engage_beta      = 0.1;   // ~10-epoch detector horizon
+double          UecSrc::_prism_engage_mult     = 0.0;   // OFF: use absolute engage_spread
+double          UecSrc::_prism_disengage_ratio = 0.7;   // disengage = 0.7 * engage (relative form)
 uint32_t UecSrc::_mnscc_h = 0;
 double          UecSrc::_swift_ai = 1.0;
 double          UecSrc::_swift_beta = 0.8;
@@ -1510,19 +1517,92 @@ void UecSrc::updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_
 // by the (C_cc, C_spray) decomposition instead of avg_delay/ECN. See prism_decompose.h.
 static constexpr uint32_t PRISM_MIN_SAMPLES = 3;  // don't decide on a near-empty epoch
 
+// C: resolve engagement thresholds. Relative form (engage_mult>0) derives both from T_cc so they
+// auto-scale with the network RTT and are topology-independent: engage = mult*T_cc, disengage = ratio*engage.
+// Absolute fallback keeps back-compat (engage_spread/disengage_spread); both 0 => gating off.
+simtime_picosec UecSrc::prismEngageThresh() const {
+    return _prism_engage_mult > 0.0 ? (simtime_picosec)(_prism_engage_mult * _target_Qdelay)
+                                    : _prism_engage_spread;
+}
+simtime_picosec UecSrc::prismDisengageThresh() const {
+    // disengage = ratio * engage (structural: derive from prismEngageThresh so the two stay in sync).
+    return _prism_engage_mult > 0.0
+        ? (simtime_picosec)(_prism_disengage_ratio * prismEngageThresh())
+        : _prism_disengage_spread;
+}
+
+// A1+C: EWMA-smooth the epoch extremes (floor_s/spread_s, seed on cold start) and update the slow
+// spread_long detector. beta=1.0 => floor_s/spread_s == raw exactly (byte-identical default).
+void UecSrc::prismUpdateSignals(simtime_picosec c_cc, simtime_picosec c_spray) {
+    double b = _prism_smooth_beta;
+    if (_prism_floor_s == 0 && _prism_spread_s == 0) { _prism_floor_s = c_cc; _prism_spread_s = c_spray; }
+    else { _prism_floor_s  = (simtime_picosec)(b * c_cc    + (1.0 - b) * _prism_floor_s);
+           _prism_spread_s = (simtime_picosec)(b * c_spray + (1.0 - b) * _prism_spread_s); }
+    double bl = _prism_engage_beta;
+    _prism_spread_long = (simtime_picosec)(bl * _prism_spread_s + (1.0 - bl) * _prism_spread_long);
+}
+
+// PRISM: read-only per-epoch log, gated by env var PRISM_EPOCH. One CSV row per epoch:
+//   time_ns,flow_id,base_rtt_ns,c_cc_ns,c_spray_ns,region,cwnd_bytes,epoch_samples,cut,engaged,floor_s_ns,spread_s_ns
+// region==-1 marks a disengaged (NSCC-mode) epoch. No simulation-behavior change.
+void UecSrc::prismEpochLog(simtime_picosec c_cc, simtime_picosec c_spray, int region, bool cut) {
+    static std::ofstream* prism_epoch_log = [](){
+        const char* p = getenv("PRISM_EPOCH");
+        return (p && *p) ? new std::ofstream(p) : nullptr;
+    }();
+    if (!prism_epoch_log) return;
+    (*prism_epoch_log)
+        << (uint64_t)timeAsNs(eventlist().now()) << ',' << flowId() << ','
+        << (uint64_t)timeAsNs(_base_rtt) << ','
+        << (uint64_t)timeAsNs(c_cc) << ',' << (uint64_t)timeAsNs(c_spray) << ','
+        << region << ',' << (uint64_t)_cwnd << ',' << _prism_epoch_samples << ','
+        << (cut ? 1 : 0) << ',' << (_prism_engaged ? 1 : 0) << ','
+        << (uint64_t)timeAsNs(_prism_floor_s) << ',' << (uint64_t)timeAsNs(_prism_spread_s) << '\n';
+    prism_epoch_log->flush();
+}
+
 void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
+    // C: one-shot engagement init. Default engage_spread==0 -> always engaged (today's PRISM);
+    //    v2 (engage_spread>0) -> start in NSCC mode until asymmetry is detected.
+    if (!_prism_engaged_init) { _prism_engaged = (prismEngageThresh() == 0); _prism_engaged_init = true; }
+
+    // C: disengaged = NSCC mode. Read-only detector (epoch min/max + smoothed signals + spread_long);
+    //    engage when spread_long crosses the threshold. NSCC owns quick_adapt + the cwnd.
+    if (!_prism_engaged) {
+        simtime_picosec qd = (delay > 0) ? delay : 0;
+        if (_prism_genuine_sample) {
+            if (_prism_epoch_samples == 0) {
+                _prism_epoch_start = eventlist().now();
+                _prism_epoch_min = qd; _prism_epoch_max = qd;
+            } else {
+                _prism_epoch_min = min(_prism_epoch_min, qd);
+                _prism_epoch_max = max(_prism_epoch_max, qd);
+            }
+            _prism_epoch_samples++;
+        }
+        if (eventlist().now() - _prism_epoch_start >= (simtime_picosec)(_prism_kappa * _base_rtt)
+                && _prism_epoch_samples >= PRISM_MIN_SAMPLES) {
+            simtime_picosec c_cc = _prism_epoch_min, c_spray = _prism_epoch_max - _prism_epoch_min;
+            prismUpdateSignals(c_cc, c_spray);
+            simtime_picosec eng_th = prismEngageThresh();
+            if (eng_th > 0 && _prism_spread_long >= eng_th) {
+                _prism_engaged = true;
+                _prism_region = prism::INCREASE;   // resume neutral; floor_s/spread_s already warm
+            }
+            prismEpochLog(c_cc, c_spray, -1, false);   // region=-1: disengaged/NSCC epoch
+            _prism_epoch_samples = 0;
+        }
+        updateCwndOnAck_NSCC(skip, delay, newly_acked_bytes);
+        return;
+    }
+
+    // ===== ENGAGED path (default + v2-engaged): today's PRISM, driven by smoothed signals =====
     if (quick_adapt(false, skip, delay))   // reuse NSCC loss/quick adaptation
         return;
 
     simtime_picosec q = (delay > 0) ? delay : 0;
 
-    // (a) accumulate epoch min/max of q -- ONLY genuine per-path samples (raw_rtt-base). ACKs
-    //     whose delay is the get_avg_delay() fallback (RTS / no-send-record) are skipped: a
-    //     smoothed value is not a per-path sample and would pollute the floor/spread. Among
-    //     genuine samples we DO include ECN-marked (skip==true) ones: the min picks the
-    //     least-congested path (unaffected by high samples), and the max must include congested
-    //     paths or C_spray would under-count reroutable congestion. The epoch only DECIDES once
-    //     it has >= PRISM_MIN_SAMPLES genuine samples (boundary check below); otherwise it extends.
+    // (a) accumulate epoch min/max -- genuine per-path samples only.
     if (_prism_genuine_sample) {
         if (_prism_epoch_samples == 0) {
             _prism_epoch_start = eventlist().now();
@@ -1535,9 +1615,7 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         _prism_epoch_samples++;
     }
 
-    // (b) in-epoch action: only the INCREASE region runs NSCC's per-ACK increase machinery,
-    //     fed the decided floor (< _target_Qdelay by construction; clamped defensively).
-    //     Cold start: _prism_ccc == 0 -> inc_delay 0 -> NSCC fast_increase ramps (intended).
+    // (b) in-epoch increase -- only INCREASE region, fed the smoothed floor (_prism_ccc).
     if (_prism_region == prism::INCREASE) {
         simtime_picosec inc_delay = _prism_ccc;
         if (_target_Qdelay > 0 && inc_delay > _target_Qdelay - 1)
@@ -1545,65 +1623,48 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         proportional_increase(newly_acked_bytes, inc_delay);
     }
 
-    // (c) epoch boundary: decide region from the decomposition; floor-driven cut at the boundary
+    // (c) epoch boundary: smooth, decide region, floor-driven cut, commit.
     simtime_picosec t_spray = _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
     bool cut = false;
     if (eventlist().now() - _prism_epoch_start >= (simtime_picosec)(_prism_kappa * _base_rtt)
             && _prism_epoch_samples >= PRISM_MIN_SAMPLES) {
         simtime_picosec c_cc = _prism_epoch_min;
         simtime_picosec c_spray = _prism_epoch_max - _prism_epoch_min;
-        int region = prism::decide_region(c_cc, c_spray, _target_Qdelay, t_spray);
-        if (region == prism::DECREASE && c_cc > _target_Qdelay
+        prismUpdateSignals(c_cc, c_spray);              // A1 floor_s/spread_s + C spread_long
+        simtime_picosec f_cc = _prism_floor_s, f_spray = _prism_spread_s;
+        // C: sustained low spread -> disengage; hands back to NSCC on the next ACK.
+        simtime_picosec eng_th2 = prismEngageThresh();
+        if (eng_th2 > 0 && _prism_spread_long <= prismDisengageThresh())
+            _prism_engaged = false;
+        int region = (_prism_hysteresis > 0.0)
+            ? prism::decide_region_hyst(f_cc, f_spray, _target_Qdelay, t_spray,
+                                        _prism_hysteresis, (prism::Region)_prism_region)
+            : prism::decide_region(f_cc, f_spray, _target_Qdelay, t_spray);
+        if (region == prism::DECREASE && f_cc > _target_Qdelay
                 && eventlist().now() - _last_dec_time > _base_rtt) {
             mem_b before = _cwnd;
-            _cwnd = (mem_b)(_cwnd * prism::md_factor(c_cc, _target_Qdelay, _gamma));
+            _cwnd = (mem_b)(_cwnd * prism::md_factor(f_cc, _target_Qdelay, _gamma));
             _cwnd = max(_cwnd, _min_cwnd);
             _last_dec_time = eventlist().now();
             cut = (_cwnd < before);
         }
         _prism_region = region;
-        _prism_ccc = c_cc;
-        _prism_cspray = c_spray;
+        _prism_ccc = f_cc;
+        _prism_cspray = f_spray;
         if (region != prism::INCREASE) {
-            // HOLD/DECREASE must not grow cwnd: drop any increase budget accumulated in the
-            // prior INCREASE epoch and clear NSCC's fast-increase state, so the gated
-            // fulfill_adjustment() below (which also adds _eta) does not creep cwnd upward.
             _inc_bytes = 0;
             _increase = false;
             _fi_count = 0;
         }
-        // PRISM: read-only per-epoch log, gated by env var PRISM_EPOCH. One CSV row per epoch:
-        //   time_ns,flow_id,base_rtt_ns,c_cc_ns,c_spray_ns,region,cwnd_bytes,epoch_samples,cut
-        {
-            static std::ofstream* prism_epoch_log = [](){
-                const char* p = getenv("PRISM_EPOCH");
-                return (p && *p) ? new std::ofstream(p) : nullptr;
-            }();
-            if (prism_epoch_log) {
-                (*prism_epoch_log)
-                    << (uint64_t)timeAsNs(eventlist().now()) << ','
-                    << flowId() << ','
-                    << (uint64_t)timeAsNs(_base_rtt) << ','
-                    << (uint64_t)timeAsNs(c_cc) << ','
-                    << (uint64_t)timeAsNs(c_spray) << ','
-                    << region << ','
-                    << (uint64_t)_cwnd << ','
-                    << _prism_epoch_samples << ','
-                    << (cut ? 1 : 0) << '\n';
-                prism_epoch_log->flush();
-            }
-        }
+        prismEpochLog(c_cc, c_spray, region, cut);
         if (_prism_loss_decomp) {
             _prism_loss_evs_good.clear();
             _prism_loss_evs_nacked.clear();
         }
-        _prism_epoch_samples = 0;  // next ACK starts a fresh epoch (sets min=max=q)
+        _prism_epoch_samples = 0;
     }
 
-    // (d) reuse NSCC: apply accumulated _inc_bytes to _cwnd -- ONLY in the INCREASE region.
-    // fulfill_adjustment() also adds the periodic _eta term, so running it in HOLD/DECREASE
-    // would creep cwnd up regardless of the floor; gating it keeps HOLD holding and the
-    // floor-driven cut intact.
+    // (d) reuse NSCC fulfill -- only INCREASE region.
     set_cwnd_bounds();
     if (_prism_region == prism::INCREASE
             && (_received_bytes > _adjust_bytes_threshold

@@ -21,6 +21,23 @@ inline Region decide_region(uint64_t c_cc, uint64_t c_spray,
     return DECREASE;                                    // floor high: even the best path is queued
 }
 
+// Hysteretic variant of decide_region: the region is "sticky" so it does not chatter on a signal
+// hovering at a threshold. prev encodes the last region; entering a high state needs signal >= t*(1+h),
+// leaving needs signal <= t*(1-h). h=0 is NOT used (callers use decide_region when h==0).
+inline Region decide_region_hyst(uint64_t c_cc, uint64_t c_spray,
+                                 uint64_t t_cc, uint64_t t_spray,
+                                 double h, Region prev) {
+    bool prev_floor_high  = (prev == DECREASE);
+    bool prev_spread_high = (prev == HOLD);
+    uint64_t cc_enter = (uint64_t)(t_cc    * (1.0 + h)), cc_leave = (uint64_t)(t_cc    * (1.0 - h));
+    uint64_t sp_enter = (uint64_t)(t_spray * (1.0 + h)), sp_leave = (uint64_t)(t_spray * (1.0 - h));
+    bool floor_high  = prev_floor_high  ? (c_cc    >  cc_leave) : (c_cc    >= cc_enter);
+    bool spread_high = prev_spread_high ? (c_spray >  sp_leave) : (c_spray >= sp_enter);
+    if (!floor_high && !spread_high) return INCREASE;
+    if (!floor_high &&  spread_high) return HOLD;
+    return DECREASE;
+}
+
 // Multiplicative-decrease multiplier (NSCC's formula, fed the floor): max(1 - g*(Ccc-Tcc)/Ccc, 0.5).
 // Returns 1.0 (no cut) when C_cc <= T_cc.
 inline double md_factor(uint64_t c_cc, uint64_t t_cc, double gamma) {
