@@ -264,6 +264,11 @@ public:
 
     virtual vector<const Route*>* get_bidir_paths(uint32_t src, uint32_t dest, bool reverse);
 
+    // Resolve one sender entropy through the live ECMP FIB without mutating it.
+    // Returns false until all FIB entries on that entropy path have been populated.
+    bool resolve_ecmp_path(uint32_t src, uint32_t dest, uint32_t flow_id,
+                           uint32_t entropy, vector<const BaseQueue*>& queues);
+
     BaseQueue* alloc_src_queue(QueueLogger* q);
     BaseQueue* alloc_queue(QueueLogger* q, const mem_b queuesize, link_direction dir, int switch_tier, bool tor=false);
     BaseQueue* alloc_queue(QueueLogger* q, linkspeed_bps speed, const mem_b queuesize, link_direction dir,  int switch_tier, bool tor, bool reduced_speed);

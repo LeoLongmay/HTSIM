@@ -102,6 +102,10 @@ public:
     virtual Route* getNextHop(Packet& pkt, BaseQueue* ingress_port);
     virtual uint32_t getType() {return _type;}
 
+    // Validation-only ECMP lookup. This reads the already-populated FIB using the
+    // same hash as packet forwarding and never creates or reorders routes.
+    BaseQueue* oracleEcmpEgress(uint32_t destination, uint32_t flow_id, uint32_t path_id);
+
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);
     uint32_t adaptive_route_p2c(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));

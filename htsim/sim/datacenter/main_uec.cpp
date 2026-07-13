@@ -226,6 +226,26 @@ int main(int argc, char **argv) {
             UecSrc::_prism_disengage_ratio = atof(argv[i+1]);
             cout << "prism_disengage_ratio " << UecSrc::_prism_disengage_ratio << endl;
             i++;
+        } else if (!strcmp(argv[i],"-prism_n_min")) {
+            UecSrc::_prism_n_min = atoi(argv[i+1]);
+            cout << "prism_n_min " << UecSrc::_prism_n_min << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-enable_prism_oracle_validation")) {
+            UecSrc::_prism_oracle_validation = (atoi(argv[i+1]) != 0);
+            cout << "enable_prism_oracle_validation " << UecSrc::_prism_oracle_validation << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_oracle_log")) {
+            UecSrc::_prism_oracle_log_path = argv[i+1];
+            cout << "prism_oracle_log " << UecSrc::_prism_oracle_log_path << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_oracle_run_id")) {
+            UecSrc::_prism_oracle_run_id = argv[i+1];
+            cout << "prism_oracle_run_id " << UecSrc::_prism_oracle_run_id << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-prism_oracle_scenario")) {
+            UecSrc::_prism_oracle_scenario = argv[i+1];
+            cout << "prism_oracle_scenario " << UecSrc::_prism_oracle_scenario << endl;
+            i++;
         } else if (!strcmp(argv[i],"-mnscc_h")) {
             UecSrc::_mnscc_h = atoi(argv[i+1]);
             cout << "mnscc_h " << UecSrc::_mnscc_h << endl;
@@ -645,6 +665,7 @@ int main(int argc, char **argv) {
 
     srand(seed);
     srandom(seed);
+    UecSrc::_prism_oracle_seed = seed;
     cout << "Parsed args\n";
     Packet::set_packet_size(packet_size);
 
@@ -1017,6 +1038,16 @@ int main(int argc, char **argv) {
             }
 
             uec_src = new UecSrc(traffic_logger, eventlist, move(mp), *nics.at(src), ports);
+            if (UecSrc::_prism_oracle_validation) {
+                FatTreeTopology* oracle_topology = topo[0].get();
+                uec_src->prismSetOraclePathResolver(
+                    [oracle_topology, src, dest](uint32_t flow_id, uint32_t entropy,
+                                                 vector<const BaseQueue*>& queues) {
+                        return oracle_topology->resolve_ecmp_path(src, dest, flow_id,
+                                                                  entropy, queues);
+                    },
+                    path_entropy_size);
+            }
 
             if (crt->flowid) {
                 uec_src->setFlowId(crt->flowid);
@@ -1271,4 +1302,3 @@ int main(int argc, char **argv) {
 
     return EXIT_SUCCESS;
 }
-

@@ -1,12 +1,17 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 #include "uec.h"
 #include <math.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstdint>
 #include <fstream>
+#include <iomanip>
+#include <limits>
+#include <map>
 #include <sstream>
 #include "circular_buffer.h"
 #include "data_collector.h"
+#include "queue.h"
 #include "uec_logger.h"
 #include "pciemodel.h"
 #include "prism_decompose.h"  // PRISM decomposition logic (used by updateCwndOnAck_PRISM)
@@ -99,13 +104,19 @@ simtime_picosec UecSrc::_adjust_period_threshold = timeFromUs(12u);
 simtime_picosec UecSrc::_target_Qdelay = timeFromUs(6u);
 simtime_picosec UecSrc::_prism_T_spray = 0;   // 0 sentinel: follow _target_Qdelay
 double UecSrc::_prism_kappa = 1.0;
-double          UecSrc::_prism_smooth_beta      = 1.0;   // OFF: smoothed == raw (byte-identical)
-double          UecSrc::_prism_hysteresis       = 0.0;   // OFF: sharp thresholds
-simtime_picosec UecSrc::_prism_engage_spread    = 0;     // OFF: always engaged (today's PRISM)
-simtime_picosec UecSrc::_prism_disengage_spread = 0;     // inert when engage==0
-double          UecSrc::_prism_engage_beta      = 0.1;   // ~10-epoch detector horizon
-double          UecSrc::_prism_engage_mult     = 0.0;   // OFF: use absolute engage_spread
-double          UecSrc::_prism_disengage_ratio = 0.7;   // disengage = 0.7 * engage (relative form)
+double          UecSrc::_prism_smooth_beta      = 1.0;
+double          UecSrc::_prism_hysteresis       = 0.0;
+simtime_picosec UecSrc::_prism_engage_spread    = 0;
+simtime_picosec UecSrc::_prism_disengage_spread = 0;
+double          UecSrc::_prism_engage_beta      = 0.1;
+double          UecSrc::_prism_engage_mult      = 0.0;
+double          UecSrc::_prism_disengage_ratio  = 0.7;
+uint32_t        UecSrc::_prism_n_min            = 3;
+bool            UecSrc::_prism_oracle_validation = false;
+std::string     UecSrc::_prism_oracle_log_path = "";
+std::string     UecSrc::_prism_oracle_run_id = "";
+std::string     UecSrc::_prism_oracle_scenario = "";
+uint32_t        UecSrc::_prism_oracle_seed = 0;
 uint32_t UecSrc::_mnscc_h = 0;
 double          UecSrc::_swift_ai = 1.0;
 double          UecSrc::_swift_beta = 0.8;
@@ -1123,15 +1134,18 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             update_delay(raw_rtt, true, pkt.ecn_echo());
             delay = raw_rtt - _base_rtt;
             _prism_genuine_sample = true;   // genuine per-path RTT sample (PRISM accumulates only these)
+            _prism_genuine_sample_path = i->second.path_id;
             // bounded by distinct ev's (<= path count); cleared at the epoch boundary (may be briefly stale across a quick_adapt window).
             if (_sender_cc_algo == PRISM && _prism_loss_decomp && !pkt.ecn_echo())
                 _prism_loss_evs_good.insert(pkt.ev());   // a genuinely clean (non-ECN) path this epoch
         } else {
             delay = get_avg_delay();
             _prism_genuine_sample = false;  // smoothed fallback, not a per-path sample
+            _prism_genuine_sample_path = UINT32_MAX;
         }
     } else {
         _prism_genuine_sample = false;      // no send record (probe / late ACK): fallback, not a sample
+        _prism_genuine_sample_path = UINT32_MAX;
         // this can happen when the ACK arrives later than a cumulative ACK covering the NACKed
         // packet.
         if (UecSrc::_debug)
@@ -1515,7 +1529,15 @@ void UecSrc::updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_
 
 // PRISM: epoch-based floor-driven control. Reuses NSCC's increase/decrease formulas, driven
 // by the (C_cc, C_spray) decomposition instead of avg_delay/ECN. See prism_decompose.h.
-static constexpr uint32_t PRISM_MIN_SAMPLES = 3;  // don't decide on a near-empty epoch
+
+static const char* prismRegionName(int region) {
+    switch (region) {
+    case prism::INCREASE: return "Increase";
+    case prism::HOLD: return "Hold";
+    case prism::DECREASE: return "Decrease";
+    default: return "Unknown";
+    }
+}
 
 // C: resolve engagement thresholds. Relative form (engage_mult>0) derives both from T_cc so they
 // auto-scale with the network RTT and are topology-independent: engage = mult*T_cc, disengage = ratio*engage.
@@ -1524,27 +1546,31 @@ simtime_picosec UecSrc::prismEngageThresh() const {
     return _prism_engage_mult > 0.0 ? (simtime_picosec)(_prism_engage_mult * _target_Qdelay)
                                     : _prism_engage_spread;
 }
+
 simtime_picosec UecSrc::prismDisengageThresh() const {
-    // disengage = ratio * engage (structural: derive from prismEngageThresh so the two stay in sync).
     return _prism_engage_mult > 0.0
         ? (simtime_picosec)(_prism_disengage_ratio * prismEngageThresh())
         : _prism_disengage_spread;
 }
 
-// A1+C: EWMA-smooth the epoch extremes (floor_s/spread_s, seed on cold start) and update the slow
-// spread_long detector. beta=1.0 => floor_s/spread_s == raw exactly (byte-identical default).
+// Smooth the epoch extrema and update the slow spread signal used by Prism v2 engagement.
 void UecSrc::prismUpdateSignals(simtime_picosec c_cc, simtime_picosec c_spray) {
     double b = _prism_smooth_beta;
-    if (_prism_floor_s == 0 && _prism_spread_s == 0) { _prism_floor_s = c_cc; _prism_spread_s = c_spray; }
-    else { _prism_floor_s  = (simtime_picosec)(b * c_cc    + (1.0 - b) * _prism_floor_s);
-           _prism_spread_s = (simtime_picosec)(b * c_spray + (1.0 - b) * _prism_spread_s); }
+    if (_prism_floor_s == 0 && _prism_spread_s == 0) {
+        _prism_floor_s = c_cc;
+        _prism_spread_s = c_spray;
+    } else {
+        _prism_floor_s = (simtime_picosec)(b * c_cc + (1.0 - b) * _prism_floor_s);
+        _prism_spread_s = (simtime_picosec)(b * c_spray + (1.0 - b) * _prism_spread_s);
+    }
     double bl = _prism_engage_beta;
-    _prism_spread_long = (simtime_picosec)(bl * _prism_spread_s + (1.0 - bl) * _prism_spread_long);
+    _prism_spread_long = (simtime_picosec)(bl * _prism_spread_s
+                                           + (1.0 - bl) * _prism_spread_long);
 }
 
 // PRISM: read-only per-epoch log, gated by env var PRISM_EPOCH. One CSV row per epoch:
-//   time_ns,flow_id,base_rtt_ns,c_cc_ns,c_spray_ns,region,cwnd_bytes,epoch_samples,cut,engaged,floor_s_ns,spread_s_ns
-// region==-1 marks a disengaged (NSCC-mode) epoch. No simulation-behavior change.
+//   time_ns,flow_id,base_rtt_ns,c_cc_ns,c_spray_ns,region,cwnd_bytes,epoch_samples,
+//   cut,engaged,floor_s_ns,spread_s_ns
 void UecSrc::prismEpochLog(simtime_picosec c_cc, simtime_picosec c_spray, int region, bool cut) {
     static std::ofstream* prism_epoch_log = [](){
         const char* p = getenv("PRISM_EPOCH");
@@ -1557,50 +1583,330 @@ void UecSrc::prismEpochLog(simtime_picosec c_cc, simtime_picosec c_spray, int re
         << (uint64_t)timeAsNs(c_cc) << ',' << (uint64_t)timeAsNs(c_spray) << ','
         << region << ',' << (uint64_t)_cwnd << ',' << _prism_epoch_samples << ','
         << (cut ? 1 : 0) << ',' << (_prism_engaged ? 1 : 0) << ','
-        << (uint64_t)timeAsNs(_prism_floor_s) << ',' << (uint64_t)timeAsNs(_prism_spread_s) << '\n';
+        << (uint64_t)timeAsNs(_prism_floor_s) << ','
+        << (uint64_t)timeAsNs(_prism_spread_s) << '\n';
     prism_epoch_log->flush();
 }
 
-void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
-    // C: one-shot engagement init. Default engage_spread==0 -> always engaged (today's PRISM);
-    //    v2 (engage_spread>0) -> start in NSCC mode until asymmetry is detected.
-    if (!_prism_engaged_init) { _prism_engaged = (prismEngageThresh() == 0); _prism_engaged_init = true; }
+void UecSrc::prismSetOraclePathResolver(PrismOraclePathResolver resolver,
+                                        uint32_t path_entropy_size) {
+    if (!_prism_oracle_validation)
+        return;
+    _prism_oracle_path_resolver = std::move(resolver);
+    _prism_oracle_path_entropy_size = path_entropy_size;
+    _prism_oracle_paths.clear();
+    _prism_oracle_entropy_to_path.clear();
+}
 
-    // C: disengaged = NSCC mode. Read-only detector (epoch min/max + smoothed signals + spread_long);
-    //    engage when spread_long crosses the threshold. NSCC owns quick_adapt + the cwnd.
+bool UecSrc::prismResolveOraclePaths() {
+    if (!_prism_oracle_paths.empty())
+        return true;
+    if (!_prism_oracle_path_resolver || _prism_oracle_path_entropy_size == 0)
+        return false;
+
+    vector<vector<const BaseQueue*>> unique_paths;
+    vector<int32_t> entropy_to_path(_prism_oracle_path_entropy_size, -1);
+    std::map<std::string, uint32_t> path_index;
+    for (uint32_t entropy = 0; entropy < _prism_oracle_path_entropy_size; entropy++) {
+        vector<const BaseQueue*> queues;
+        if (!_prism_oracle_path_resolver(flowId(), entropy, queues) || queues.empty())
+            return false;
+
+        std::ostringstream key;
+        for (const BaseQueue* queue : queues)
+            key << queue << ';';
+        auto inserted = path_index.emplace(key.str(), unique_paths.size());
+        if (inserted.second)
+            unique_paths.push_back(std::move(queues));
+        entropy_to_path[entropy] = inserted.first->second;
+    }
+
+    _prism_oracle_paths = std::move(unique_paths);
+    _prism_oracle_entropy_to_path = std::move(entropy_to_path);
+    return !_prism_oracle_paths.empty();
+}
+
+bool UecSrc::prismOracleSnapshot(simtime_picosec& floor, simtime_picosec& ceiling) {
+    if (!prismResolveOraclePaths())
+        return false;
+
+    floor = std::numeric_limits<simtime_picosec>::max();
+    ceiling = 0;
+    for (const auto& path : _prism_oracle_paths) {
+        simtime_picosec qdelay = 0;
+        for (const BaseQueue* queue : path)
+            qdelay += queue->backlogDrainTime();
+        floor = std::min(floor, qdelay);
+        ceiling = std::max(ceiling, qdelay);
+    }
+    return floor != std::numeric_limits<simtime_picosec>::max();
+}
+
+void UecSrc::prismOracleObserveAck() {
+    if (!_prism_oracle_validation)
+        return;
+
+    simtime_picosec floor = 0, ceiling = 0;
+    if (!prismOracleSnapshot(floor, ceiling)) {
+        _prism_oracle_resolution_failures++;
+        return;
+    }
+
+    if (_prism_oracle_ack_snapshots == 0) {
+        _prism_oracle_epoch_min = floor;
+        _prism_oracle_epoch_max = ceiling;
+        _prism_oracle_floor_min = floor;
+        _prism_oracle_floor_max = floor;
+    } else {
+        _prism_oracle_epoch_min = std::min(_prism_oracle_epoch_min, floor);
+        _prism_oracle_epoch_max = std::max(_prism_oracle_epoch_max, ceiling);
+        _prism_oracle_floor_min = std::min(_prism_oracle_floor_min, floor);
+        _prism_oracle_floor_max = std::max(_prism_oracle_floor_max, floor);
+    }
+    _prism_oracle_floor_sum += floor;
+    _prism_oracle_spread_sum += ceiling - floor;
+    _prism_oracle_ack_snapshots++;
+}
+
+void UecSrc::prismOracleResetEpoch() {
+    _prism_oracle_epoch_min = 0;
+    _prism_oracle_epoch_max = 0;
+    _prism_oracle_floor_min = 0;
+    _prism_oracle_floor_max = 0;
+    _prism_oracle_floor_sum = 0;
+    _prism_oracle_spread_sum = 0;
+    _prism_oracle_ack_snapshots = 0;
+    _prism_oracle_resolution_failures = 0;
+}
+
+void UecSrc::prismOracleLog(simtime_picosec est_raw_cc, simtime_picosec est_raw_spray,
+                            simtime_picosec est_smoothed_cc, simtime_picosec est_smoothed_spray,
+                            int est_region, simtime_picosec t_spray) {
+    if (!_prism_oracle_validation)
+        return;
+
+    static std::ofstream* oracle_log = [](){
+        const char* env_path = getenv("PRISM_ORACLE_VALIDATION");
+        std::string path = UecSrc::_prism_oracle_log_path;
+        if (path.empty() && env_path && *env_path)
+            path = env_path;
+        if (path.empty())
+            return (std::ofstream*)nullptr;
+        std::ofstream* out = new std::ofstream(path);
+        (*out) << "run_id,seed,scenario,flow_id,epoch_id,epoch_start_ns,epoch_end_ns,"
+               << "kappa,n_min,t_cc_us,t_spray_us,num_ack_samples,num_oracle_ack_snapshots,"
+               << "num_distinct_sampled_entropies,num_eligible_entropies,entropy_coverage_ratio,"
+               << "num_distinct_sampled_paths,num_eligible_paths,path_coverage_ratio,"
+               << "oracle_resolution_failures,epoch_sample_deferred,row_status,"
+               << "est_raw_cc_us,est_raw_spray_us,est_smoothed_cc_us,est_smoothed_spray_us,"
+               << "oracle_raw_cc_us,oracle_raw_spray_us,oracle_smoothed_cc_us,"
+               << "oracle_smoothed_spray_us,boundary_oracle_raw_cc_us,"
+               << "boundary_oracle_raw_spray_us,boundary_oracle_smoothed_cc_us,"
+               << "boundary_oracle_smoothed_spray_us,oracle_mean_instant_cc_us,"
+               << "oracle_mean_instant_spray_us,oracle_floor_temporal_range_us,"
+               << "est_state,oracle_state,boundary_oracle_state,state_match,boundary_state_match,"
+               << "abs_error_cc_us,abs_error_spray_us,boundary_abs_error_cc_us,"
+               << "boundary_abs_error_spray_us\n";
+        return out;
+    }();
+    if (!oracle_log)
+        return;
+
+    simtime_picosec boundary_floor = 0, boundary_ceiling = 0;
+    bool boundary_ok = prismOracleSnapshot(boundary_floor, boundary_ceiling);
+    bool oracle_ok = _prism_oracle_ack_snapshots > 0;
+
+    simtime_picosec oracle_raw_cc = oracle_ok ? _prism_oracle_epoch_min : 0;
+    simtime_picosec oracle_raw_spray = oracle_ok
+        ? _prism_oracle_epoch_max - _prism_oracle_epoch_min : 0;
+    double b = _prism_smooth_beta;
+    if (oracle_ok && !_prism_oracle_initialized) {
+        _prism_oracle_ccc = (uint32_t)oracle_raw_cc;
+        _prism_oracle_cspray = (uint32_t)oracle_raw_spray;
+        _prism_oracle_initialized = true;
+    } else if (oracle_ok) {
+        _prism_oracle_ccc = (uint32_t)(b * oracle_raw_cc + (1.0 - b) * _prism_oracle_ccc);
+        _prism_oracle_cspray = (uint32_t)(b * oracle_raw_spray + (1.0 - b) * _prism_oracle_cspray);
+    }
+
+    simtime_picosec boundary_raw_cc = boundary_ok ? boundary_floor : 0;
+    simtime_picosec boundary_raw_spray = boundary_ok ? boundary_ceiling - boundary_floor : 0;
+    if (boundary_ok && !_prism_boundary_oracle_initialized) {
+        _prism_boundary_oracle_ccc = (uint32_t)boundary_raw_cc;
+        _prism_boundary_oracle_cspray = (uint32_t)boundary_raw_spray;
+        _prism_boundary_oracle_initialized = true;
+    } else if (boundary_ok) {
+        _prism_boundary_oracle_ccc = (uint32_t)(b * boundary_raw_cc
+            + (1.0 - b) * _prism_boundary_oracle_ccc);
+        _prism_boundary_oracle_cspray = (uint32_t)(b * boundary_raw_spray
+            + (1.0 - b) * _prism_boundary_oracle_cspray);
+    }
+
+    int oracle_region = oracle_ok && _prism_hysteresis > 0.0
+        ? prism::decide_region_hyst(_prism_oracle_ccc, _prism_oracle_cspray, _target_Qdelay, t_spray,
+                                    _prism_hysteresis, (prism::Region)_prism_oracle_region)
+        : (oracle_ok ? prism::decide_region(_prism_oracle_ccc, _prism_oracle_cspray,
+                                             _target_Qdelay, t_spray) : prism::INCREASE);
+    if (oracle_ok)
+        _prism_oracle_region = oracle_region;
+
+    int boundary_region = boundary_ok && _prism_hysteresis > 0.0
+        ? prism::decide_region_hyst(_prism_boundary_oracle_ccc, _prism_boundary_oracle_cspray,
+                                    _target_Qdelay, t_spray, _prism_hysteresis,
+                                    (prism::Region)_prism_boundary_oracle_region)
+        : (boundary_ok ? prism::decide_region(_prism_boundary_oracle_ccc,
+                                               _prism_boundary_oracle_cspray,
+                                               _target_Qdelay, t_spray) : prism::INCREASE);
+    if (boundary_ok)
+        _prism_boundary_oracle_region = boundary_region;
+
+    std::set<uint32_t> sampled_physical_paths;
+    uint32_t sampled_entropies = 0;
+    for (uint32_t entropy : _prism_epoch_sampled_paths) {
+        if (entropy >= _prism_oracle_entropy_to_path.size())
+            continue;
+        int32_t path = _prism_oracle_entropy_to_path[entropy];
+        if (path >= 0) {
+            sampled_entropies++;
+            sampled_physical_paths.insert((uint32_t)path);
+        }
+    }
+    uint32_t eligible_entropies = _prism_oracle_path_entropy_size;
+    uint32_t eligible_paths = _prism_oracle_paths.size();
+    double entropy_coverage = eligible_entropies
+        ? (double)sampled_entropies / eligible_entropies : std::numeric_limits<double>::quiet_NaN();
+    double path_coverage = eligible_paths
+        ? (double)sampled_physical_paths.size() / eligible_paths
+        : std::numeric_limits<double>::quiet_NaN();
+
+    simtime_picosec err_cc = est_smoothed_cc > (simtime_picosec)_prism_oracle_ccc
+        ? est_smoothed_cc - _prism_oracle_ccc : _prism_oracle_ccc - est_smoothed_cc;
+    simtime_picosec err_spray = est_smoothed_spray > (simtime_picosec)_prism_oracle_cspray
+        ? est_smoothed_spray - _prism_oracle_cspray : _prism_oracle_cspray - est_smoothed_spray;
+    simtime_picosec boundary_err_cc = est_smoothed_cc > (simtime_picosec)_prism_boundary_oracle_ccc
+        ? est_smoothed_cc - _prism_boundary_oracle_ccc
+        : _prism_boundary_oracle_ccc - est_smoothed_cc;
+    simtime_picosec boundary_err_spray = est_smoothed_spray > (simtime_picosec)_prism_boundary_oracle_cspray
+        ? est_smoothed_spray - _prism_boundary_oracle_cspray
+        : _prism_boundary_oracle_cspray - est_smoothed_spray;
+    double nan = std::numeric_limits<double>::quiet_NaN();
+    double mean_instant_cc_us = oracle_ok
+        ? timeAsUs((simtime_picosec)(_prism_oracle_floor_sum / _prism_oracle_ack_snapshots)) : nan;
+    double mean_instant_spray_us = oracle_ok
+        ? timeAsUs((simtime_picosec)(_prism_oracle_spread_sum / _prism_oracle_ack_snapshots)) : nan;
+    double temporal_floor_range_us = oracle_ok
+        ? timeAsUs(_prism_oracle_floor_max - _prism_oracle_floor_min) : nan;
+    const char* row_status = !oracle_ok || !boundary_ok
+        ? "path_resolution_failed"
+        : (_prism_oracle_ack_snapshots == _prism_epoch_samples
+            ? "ok" : "partial_path_resolution");
+
+    // Validation only: oracle values must never affect Prism control.
+    (*oracle_log) << (_prism_oracle_run_id.empty() ? "run" : _prism_oracle_run_id) << ','
+                  << _prism_oracle_seed << ','
+                  << (_prism_oracle_scenario.empty() ? "scenario" : _prism_oracle_scenario) << ','
+                  << flowId() << ',' << _prism_epoch_id << ','
+                  << (uint64_t)timeAsNs(_prism_epoch_start) << ','
+                  << (uint64_t)timeAsNs(eventlist().now()) << ','
+                  << std::setprecision(8) << _prism_kappa << ','
+                  << _prism_n_min << ','
+                  << timeAsUs(_target_Qdelay) << ','
+                  << timeAsUs(t_spray) << ','
+                  << _prism_epoch_samples << ','
+                  << _prism_oracle_ack_snapshots << ','
+                  << sampled_entropies << ','
+                  << eligible_entropies << ','
+                  << std::setprecision(6) << entropy_coverage << ','
+                  << sampled_physical_paths.size() << ','
+                  << eligible_paths << ','
+                  << path_coverage << ','
+                  << _prism_oracle_resolution_failures << ','
+                  << (_prism_epoch_sample_deferred ? 1 : 0) << ','
+                  << row_status << ','
+                  << timeAsUs(est_raw_cc) << ','
+                  << timeAsUs(est_raw_spray) << ','
+                  << timeAsUs(est_smoothed_cc) << ','
+                  << timeAsUs(est_smoothed_spray) << ','
+                  << (oracle_ok ? timeAsUs(oracle_raw_cc) : nan) << ','
+                  << (oracle_ok ? timeAsUs(oracle_raw_spray) : nan) << ','
+                  << (oracle_ok ? timeAsUs((simtime_picosec)_prism_oracle_ccc) : nan) << ','
+                  << (oracle_ok ? timeAsUs((simtime_picosec)_prism_oracle_cspray) : nan) << ','
+                  << (boundary_ok ? timeAsUs(boundary_raw_cc) : nan) << ','
+                  << (boundary_ok ? timeAsUs(boundary_raw_spray) : nan) << ','
+                  << (boundary_ok ? timeAsUs((simtime_picosec)_prism_boundary_oracle_ccc) : nan) << ','
+                  << (boundary_ok ? timeAsUs((simtime_picosec)_prism_boundary_oracle_cspray) : nan) << ','
+                  << mean_instant_cc_us << ','
+                  << mean_instant_spray_us << ','
+                  << temporal_floor_range_us << ','
+                  << prismRegionName(est_region) << ','
+                  << (oracle_ok ? prismRegionName(oracle_region) : "Unavailable") << ','
+                  << (boundary_ok ? prismRegionName(boundary_region) : "Unavailable") << ','
+                  << (oracle_ok && est_region == oracle_region ? 1 : 0) << ','
+                  << (boundary_ok && est_region == boundary_region ? 1 : 0) << ','
+                  << (oracle_ok ? timeAsUs(err_cc) : nan) << ','
+                  << (oracle_ok ? timeAsUs(err_spray) : nan) << ','
+                  << (boundary_ok ? timeAsUs(boundary_err_cc) : nan) << ','
+                  << (boundary_ok ? timeAsUs(boundary_err_spray) : nan) << '\n';
+    oracle_log->flush();
+    prismOracleResetEpoch();
+}
+
+void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
+    if (!_prism_engaged_init) {
+        _prism_engaged = (prismEngageThresh() == 0);
+        _prism_engaged_init = true;
+    }
+
+    simtime_picosec q = (delay > 0) ? delay : 0;
+
+    // While disengaged, Prism v2 only observes the signal; NSCC owns the control action.
     if (!_prism_engaged) {
-        simtime_picosec qd = (delay > 0) ? delay : 0;
         if (_prism_genuine_sample) {
             if (_prism_epoch_samples == 0) {
                 _prism_epoch_start = eventlist().now();
-                _prism_epoch_min = qd; _prism_epoch_max = qd;
+                _prism_epoch_min = q;
+                _prism_epoch_max = q;
             } else {
-                _prism_epoch_min = min(_prism_epoch_min, qd);
-                _prism_epoch_max = max(_prism_epoch_max, qd);
+                _prism_epoch_min = min(_prism_epoch_min, q);
+                _prism_epoch_max = max(_prism_epoch_max, q);
             }
             _prism_epoch_samples++;
+            if (_prism_oracle_validation && _prism_genuine_sample_path != UINT32_MAX) {
+                _prism_epoch_sampled_paths.insert(_prism_genuine_sample_path);
+                prismOracleObserveAck();
+            }
         }
-        if (eventlist().now() - _prism_epoch_start >= (simtime_picosec)(_prism_kappa * _base_rtt)
-                && _prism_epoch_samples >= PRISM_MIN_SAMPLES) {
-            simtime_picosec c_cc = _prism_epoch_min, c_spray = _prism_epoch_max - _prism_epoch_min;
+
+        bool epoch_time_ready = eventlist().now() - _prism_epoch_start
+            >= (simtime_picosec)(_prism_kappa * _base_rtt);
+        if (epoch_time_ready && _prism_epoch_samples < _prism_n_min)
+            _prism_epoch_sample_deferred = true;
+        if (epoch_time_ready && _prism_epoch_samples >= _prism_n_min) {
+            simtime_picosec c_cc = _prism_epoch_min;
+            simtime_picosec c_spray = _prism_epoch_max - _prism_epoch_min;
             prismUpdateSignals(c_cc, c_spray);
             simtime_picosec eng_th = prismEngageThresh();
             if (eng_th > 0 && _prism_spread_long >= eng_th) {
                 _prism_engaged = true;
-                _prism_region = prism::INCREASE;   // resume neutral; floor_s/spread_s already warm
+                _prism_region = prism::INCREASE;
             }
-            prismEpochLog(c_cc, c_spray, -1, false);   // region=-1: disengaged/NSCC epoch
+            simtime_picosec t_spray = _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
+            int observed_region = prism::decide_region(_prism_floor_s, _prism_spread_s,
+                                                       _target_Qdelay, t_spray);
+            prismOracleLog(c_cc, c_spray, _prism_floor_s, _prism_spread_s,
+                           observed_region, t_spray);
+            prismEpochLog(c_cc, c_spray, -1, false);
+            _prism_epoch_sampled_paths.clear();
             _prism_epoch_samples = 0;
+            _prism_epoch_sample_deferred = false;
+            _prism_epoch_id++;
         }
         updateCwndOnAck_NSCC(skip, delay, newly_acked_bytes);
         return;
     }
 
-    // ===== ENGAGED path (default + v2-engaged): today's PRISM, driven by smoothed signals =====
     if (quick_adapt(false, skip, delay))   // reuse NSCC loss/quick adaptation
         return;
-
-    simtime_picosec q = (delay > 0) ? delay : 0;
 
     // (a) accumulate epoch min/max -- genuine per-path samples only.
     if (_prism_genuine_sample) {
@@ -1613,6 +1919,10 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             _prism_epoch_max = max(_prism_epoch_max, q);
         }
         _prism_epoch_samples++;
+        if (_prism_oracle_validation && _prism_genuine_sample_path != UINT32_MAX) {
+            _prism_epoch_sampled_paths.insert(_prism_genuine_sample_path);
+            prismOracleObserveAck();
+        }
     }
 
     // (b) in-epoch increase -- only INCREASE region, fed the smoothed floor (_prism_ccc).
@@ -1623,18 +1933,21 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         proportional_increase(newly_acked_bytes, inc_delay);
     }
 
-    // (c) epoch boundary: smooth, decide region, floor-driven cut, commit.
+    // (c) epoch boundary: smooth, update engagement, decide region, and commit.
     simtime_picosec t_spray = _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
     bool cut = false;
-    if (eventlist().now() - _prism_epoch_start >= (simtime_picosec)(_prism_kappa * _base_rtt)
-            && _prism_epoch_samples >= PRISM_MIN_SAMPLES) {
+    bool prism_epoch_time_ready = eventlist().now() - _prism_epoch_start
+        >= (simtime_picosec)(_prism_kappa * _base_rtt);
+    if (prism_epoch_time_ready && _prism_epoch_samples < _prism_n_min)
+        _prism_epoch_sample_deferred = true;
+    if (prism_epoch_time_ready && _prism_epoch_samples >= _prism_n_min) {
         simtime_picosec c_cc = _prism_epoch_min;
         simtime_picosec c_spray = _prism_epoch_max - _prism_epoch_min;
-        prismUpdateSignals(c_cc, c_spray);              // A1 floor_s/spread_s + C spread_long
-        simtime_picosec f_cc = _prism_floor_s, f_spray = _prism_spread_s;
-        // C: sustained low spread -> disengage; hands back to NSCC on the next ACK.
-        simtime_picosec eng_th2 = prismEngageThresh();
-        if (eng_th2 > 0 && _prism_spread_long <= prismDisengageThresh())
+        prismUpdateSignals(c_cc, c_spray);
+        simtime_picosec f_cc = _prism_floor_s;
+        simtime_picosec f_spray = _prism_spread_s;
+        simtime_picosec eng_th = prismEngageThresh();
+        if (eng_th > 0 && _prism_spread_long <= prismDisengageThresh())
             _prism_engaged = false;
         int region = (_prism_hysteresis > 0.0)
             ? prism::decide_region_hyst(f_cc, f_spray, _target_Qdelay, t_spray,
@@ -1656,12 +1969,16 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             _increase = false;
             _fi_count = 0;
         }
+        prismOracleLog(c_cc, c_spray, f_cc, f_spray, region, t_spray);
         prismEpochLog(c_cc, c_spray, region, cut);
         if (_prism_loss_decomp) {
             _prism_loss_evs_good.clear();
             _prism_loss_evs_nacked.clear();
         }
+        _prism_epoch_sampled_paths.clear();
         _prism_epoch_samples = 0;
+        _prism_epoch_sample_deferred = false;
+        _prism_epoch_id++;
     }
 
     // (d) reuse NSCC fulfill -- only INCREASE region.

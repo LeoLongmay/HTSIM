@@ -532,3 +532,24 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
     //FIB has been filled in; return choice. 
     return getNextHop(pkt, ingress_port);
 };
+
+BaseQueue* FatTreeSwitch::oracleEcmpEgress(uint32_t destination, uint32_t flow_id,
+                                           uint32_t path_id) {
+    if (_strategy != ECMP)
+        return nullptr;
+
+    Route* route = nullptr;
+    vector<FibEntry*>* available_hops = _fib->getRoutes(destination);
+    if (available_hops && !available_hops->empty()) {
+        uint32_t choice = freeBSDHash(flow_id, path_id, _hash_salt) % available_hops->size();
+        route = available_hops->at(choice)->getEgressPort();
+    } else {
+        HostFibEntry* host = _fib->getHostRoute(destination, flow_id);
+        if (host)
+            route = host->getEgressPort();
+    }
+
+    if (!route || route->size() == 0)
+        return nullptr;
+    return dynamic_cast<BaseQueue*>(route->at(0));
+}
