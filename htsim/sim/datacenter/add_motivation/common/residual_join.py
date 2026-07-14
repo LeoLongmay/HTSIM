@@ -58,6 +58,15 @@ def attach_same_epoch_residuals(
                 f"no epoch for flow_id={identity[0]}, epoch_id={identity[1]}",
             )
         if ack["genuine_sample"]:
+            epoch = epochs[identity]
+            if not epoch["start_ps"] <= ack["time_ps"] <= epoch["end_ps"]:
+                _raise(
+                    ack,
+                    "ack.csv",
+                    "time_ps",
+                    f"value {ack['time_ps']} is outside epoch interval "
+                    f"[{epoch['start_ps']}, {epoch['end_ps']}]",
+                )
             genuine_by_epoch[identity].append(ack)
 
     extrema = {}

@@ -41,15 +41,23 @@ class TraceBundle:
     events: tuple[EventRef, ...]
 
 
-def _parse_int(value: str) -> int:
-    return int(value, 10)
-
-
-def _parse_uint(value: str) -> int:
-    parsed = _parse_int(value)
-    if parsed < 0:
-        raise ValueError("must be nonnegative")
+def _parse_bounded_int(value: str, minimum: int, maximum: int) -> int:
+    parsed = int(value, 10)
+    if not minimum <= parsed <= maximum:
+        raise ValueError(f"must be in [{minimum}, {maximum}]")
     return parsed
+
+
+def _parse_uint32(value: str) -> int:
+    return _parse_bounded_int(value, 0, 2**32 - 1)
+
+
+def _parse_uint64(value: str) -> int:
+    return _parse_bounded_int(value, 0, 2**64 - 1)
+
+
+def _parse_int64(value: str) -> int:
+    return _parse_bounded_int(value, -(2**63), 2**63 - 1)
 
 
 def _parse_float(value: str) -> float:
@@ -71,51 +79,56 @@ def _parse_text(value: str) -> str:
     return value
 
 
-_I = _parse_int
-_U = _parse_uint
+_I64 = _parse_int64
+_U32 = _parse_uint32
+_U64 = _parse_uint64
 _F = _parse_float
 _B = _parse_bool
 _S = _parse_text
 
 _SCHEMAS: dict[str, tuple[tuple[str, Callable[[str], object]], ...]] = {
     "ack": (
-        ("schema_version", _U), ("run_id", _S), ("seed", _U), ("scenario", _S),
-        ("event_seq", _U), ("time_ps", _U), ("flow_id", _U), ("epoch_id", _U),
-        ("acked_psn", _U), ("entropy", _U), ("physical_path_id", _U),
-        ("raw_rtt_ps", _U), ("base_rtt_ps", _U), ("qdelay_ps", _I), ("ecn", _B),
+        ("schema_version", _U32), ("run_id", _S), ("seed", _U32), ("scenario", _S),
+        ("event_seq", _U64), ("time_ps", _U64), ("flow_id", _U64),
+        ("epoch_id", _U64), ("acked_psn", _U64), ("entropy", _U32),
+        ("physical_path_id", _U64), ("raw_rtt_ps", _U64), ("base_rtt_ps", _U64),
+        ("qdelay_ps", _I64), ("ecn", _B),
         ("genuine_sample", _B), ("retransmitted", _B),
-        ("forward_path_backlog_ps", _U), ("selection_source", _S),
-        ("source_token_id", _U), ("newly_acked_bytes", _U),
-        ("new_data_bytes_sent_total", _U), ("cwnd_bytes", _U),
+        ("forward_path_backlog_ps", _U64), ("selection_source", _S),
+        ("source_token_id", _U64), ("newly_acked_bytes", _U64),
+        ("new_data_bytes_sent_total", _U64), ("cwnd_bytes", _U64),
     ),
     "token": (
-        ("schema_version", _U), ("run_id", _S), ("event_seq", _U), ("time_ps", _U),
-        ("flow_id", _U), ("operation", _S), ("reason", _S), ("token_id", _U),
-        ("entropy", _U), ("queue_depth_before", _U), ("queue_depth_after", _U),
-        ("related_ack_event_seq", _U),
+        ("schema_version", _U32), ("run_id", _S), ("event_seq", _U64),
+        ("time_ps", _U64), ("flow_id", _U64), ("operation", _S), ("reason", _S),
+        ("token_id", _U64), ("entropy", _U32), ("queue_depth_before", _U32),
+        ("queue_depth_after", _U32), ("related_ack_event_seq", _U64),
     ),
     "epoch": (
-        ("schema_version", _U), ("run_id", _S), ("event_seq", _U), ("flow_id", _U),
-        ("epoch_id", _U), ("start_ps", _U), ("end_ps", _U), ("sample_count", _U),
-        ("raw_floor_ps", _U), ("raw_spread_ps", _U), ("smooth_floor_ps", _U),
-        ("smooth_spread_ps", _U), ("observed_region", _S), ("actual_region", _S),
-        ("engaged", _B), ("entropy_coverage", _U), ("physical_path_coverage", _U),
-        ("new_data_bytes_sent_total", _U), ("acked_bytes_total", _U), ("cwnd_bytes", _U),
+        ("schema_version", _U32), ("run_id", _S), ("event_seq", _U64),
+        ("flow_id", _U64), ("epoch_id", _U64), ("start_ps", _U64), ("end_ps", _U64),
+        ("sample_count", _U32), ("raw_floor_ps", _U64), ("raw_spread_ps", _U64),
+        ("smooth_floor_ps", _U64), ("smooth_spread_ps", _U64),
+        ("observed_region", _S), ("actual_region", _S), ("engaged", _B),
+        ("entropy_coverage", _U32), ("physical_path_coverage", _U32),
+        ("new_data_bytes_sent_total", _U64), ("acked_bytes_total", _U64),
+        ("cwnd_bytes", _U64),
     ),
     "background": (
-        ("schema_version", _U), ("run_id", _S), ("event_seq", _U), ("time_ps", _U),
-        ("background_id", _U), ("operation", _S), ("src", _U), ("dst", _U),
-        ("path_index", _U), ("configured_rate_gbps", _F), ("delivered_bytes", _U),
+        ("schema_version", _U32), ("run_id", _S), ("event_seq", _U64),
+        ("time_ps", _U64), ("background_id", _U32), ("operation", _S),
+        ("src", _U32), ("dst", _U32), ("path_index", _U32),
+        ("configured_rate_gbps", _F), ("delivered_bytes", _U64),
         ("queue_fingerprint", _S),
     ),
     "pathmap": (
-        ("schema_version", _U), ("run_id", _S), ("flow_id", _U), ("entropy", _U),
-        ("physical_path_id", _U), ("resolution_status", _S),
+        ("schema_version", _U32), ("run_id", _S), ("flow_id", _U64),
+        ("entropy", _U32), ("physical_path_id", _U64), ("resolution_status", _S),
         ("queue_fingerprint", _S), ("bottleneck_rate_gbps", _F),
         ("contains_reduced_link", _B), ("ordered_queue_ids", _S),
     ),
     "linkmap": (
-        ("schema_version", _U), ("run_id", _S), ("queue_id", _U),
+        ("schema_version", _U32), ("run_id", _S), ("queue_id", _U64),
         ("queue_name", _S), ("rate_gbps", _F), ("reduced_speed", _B),
     ),
 }
@@ -220,6 +233,48 @@ def load_trace(prefix: Path | str) -> TraceBundle:
             sequence_sources[event_seq] = row.source_path
             events.append(EventRef(event_seq, kind, row))
     events.sort(key=lambda event: event.event_seq)
+
+    ack_by_event_seq = {row["event_seq"]: row for row in loaded["ack"]}
+    for token in loaded["token"]:
+        if token["operation"] != "enqueue_good_ack":
+            continue
+        related_event_seq = token["related_ack_event_seq"]
+        ack = ack_by_event_seq.get(related_event_seq)
+        if ack is None:
+            raise _error(
+                token.source_path,
+                "related_ack_event_seq",
+                f"ACK event {related_event_seq} does not exist",
+            )
+        if ack["event_seq"] >= token["event_seq"]:
+            raise _error(
+                token.source_path,
+                "related_ack_event_seq",
+                f"ACK event {related_event_seq} is not earlier than token event",
+            )
+        if ack["flow_id"] != token["flow_id"]:
+            raise _error(
+                token.source_path,
+                "related_ack_event_seq",
+                f"ACK flow {ack['flow_id']} differs from token flow {token['flow_id']}",
+            )
+
+    last_ack_event_by_epoch = {}
+    for ack in loaded["ack"]:
+        identity = (ack["flow_id"], ack["epoch_id"])
+        last_ack_event_by_epoch[identity] = max(
+            ack["event_seq"],
+            last_ack_event_by_epoch.get(identity, 0),
+        )
+    for epoch in loaded["epoch"]:
+        identity = (epoch["flow_id"], epoch["epoch_id"])
+        last_ack_event = last_ack_event_by_epoch.get(identity)
+        if last_ack_event is not None and epoch["event_seq"] <= last_ack_event:
+            raise _error(
+                epoch.source_path,
+                "event_seq",
+                f"epoch closes at {epoch['event_seq']} before ACK event {last_ack_event}",
+            )
 
     return TraceBundle(
         run_id="" if run_id is None else run_id,

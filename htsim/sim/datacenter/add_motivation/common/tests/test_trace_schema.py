@@ -202,6 +202,83 @@ class TraceSchemaTests(unittest.TestCase):
             with self.assertRaisesRegex(TraceValidationError, r"fixture\.ack\.csv.*event_seq"):
                 load_trace(prefix)
 
+    def test_rejects_enqueue_reference_to_absent_ack(self):
+        rows = valid_rows()
+        rows["token"][0]["related_ack_event_seq"] = "99"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.token\.csv.*related_ack_event_seq",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_enqueue_reference_to_later_ack(self):
+        rows = valid_rows()
+        rows["ack"][0]["event_seq"] = "2"
+        rows["token"][0]["related_ack_event_seq"] = "2"
+        rows["epoch"][0]["event_seq"] = "3"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.token\.csv.*related_ack_event_seq",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_enqueue_reference_to_ack_from_another_flow(self):
+        rows = valid_rows()
+        rows["token"][0]["flow_id"] = "8"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.token\.csv.*related_ack_event_seq",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_epoch_close_before_last_ack_in_same_epoch(self):
+        rows = valid_rows()
+        later_ack = dict(rows["ack"][0])
+        later_ack.update({"event_seq": "3", "time_ps": "115", "acked_psn": "11"})
+        rows["ack"].append(later_ack)
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(TraceValidationError, r"fixture\.epoch\.csv.*event_seq"):
+                load_trace(prefix)
+
+    def test_accepts_exact_cpp_integer_bounds(self):
+        cases = {
+            "uint32": ("entropy", str(2**32 - 1)),
+            "uint64": ("source_token_id", str(2**64 - 1)),
+            "int64_min": ("qdelay_ps", str(-(2**63))),
+            "int64_max": ("qdelay_ps", str(2**63 - 1)),
+        }
+        for name, (key, value) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                rows = valid_rows()
+                rows["ack"][0][key] = value
+                bundle = load_trace(write_trace(directory, rows))
+                self.assertEqual(bundle.ack[0][key], int(value))
+
+    def test_rejects_cpp_integer_overflow_with_filename_and_key(self):
+        cases = {
+            "uint32": ("entropy", str(2**32)),
+            "uint64": ("source_token_id", str(2**64)),
+            "int64_low": ("qdelay_ps", str(-(2**63) - 1)),
+            "int64_high": ("qdelay_ps", str(2**63)),
+        }
+        for name, (key, value) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                rows = valid_rows()
+                rows["ack"][0][key] = value
+                prefix = write_trace(directory, rows)
+                with self.assertRaisesRegex(
+                    TraceValidationError,
+                    rf"fixture\.ack\.csv.*{key}",
+                ):
+                    load_trace(prefix)
+
 
 if __name__ == "__main__":
     unittest.main()

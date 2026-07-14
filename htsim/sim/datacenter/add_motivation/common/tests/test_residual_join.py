@@ -98,6 +98,22 @@ class ResidualJoinTests(unittest.TestCase):
             bundle = load_trace(write_rows(directory, rows))
             self.assertEqual(attach_same_epoch_residuals(bundle), ())
 
+    def test_rejects_joined_ack_time_outside_closed_epoch(self):
+        for name, time_ps in (("before", "-1"), ("after", "121")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                rows = residual_rows()
+                if name == "before":
+                    rows["epoch"][0]["start_ps"] = "101"
+                    rows["ack"][0]["time_ps"] = "100"
+                else:
+                    rows["ack"][1]["time_ps"] = time_ps
+                bundle = load_trace(write_rows(directory, rows))
+                with self.assertRaisesRegex(
+                    TraceValidationError,
+                    r"residual\.ack\.csv.*time_ps",
+                ):
+                    attach_same_epoch_residuals(bundle)
+
 
 if __name__ == "__main__":
     unittest.main()
