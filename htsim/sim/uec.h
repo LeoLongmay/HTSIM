@@ -311,7 +311,10 @@ public:
                                       uint32_t path_entropy_size);
     uint64_t motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
                               simtime_picosec qdelay, bool genuine,
-                              const UecMpSelection& selection);
+                              const UecMpSelection& selection,
+                              uint64_t newly_acked_bytes,
+                              uint64_t new_data_bytes_sent_total,
+                              uint64_t cwnd_bytes);
     void motivationLogPendingEpoch();
     void queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size);
     bool validateSendTs(UecBasePacket::seq_t acked_psn, bool rtx_echo);
@@ -533,6 +536,7 @@ private:
     mem_b _achieved_bytes = 0;
     //used to trigger SmartTrack fulfill
     mem_b _received_bytes = 0;
+    uint64_t _motivation_new_data_bytes_sent_total = 0;
     uint32_t _fi_count = 0;
     bool _trigger_qa = false;
     simtime_picosec _qa_endtime = 0;

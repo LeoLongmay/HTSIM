@@ -838,7 +838,10 @@ void UecSrc::motivationResolveAndLogPaths(MotivationPathResolver resolver,
 
 uint64_t UecSrc::motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
                                   simtime_picosec qdelay, bool genuine,
-                                  const UecMpSelection& selection) {
+                                  const UecMpSelection& selection,
+                                  uint64_t newly_acked_bytes,
+                                  uint64_t new_data_bytes_sent_total,
+                                  uint64_t cwnd_bytes) {
     if (!_motivation_trace_writer.enabledFor(flowId())) {
         return UecMpTokenEvent::NO_EVENT;
     }
@@ -880,7 +883,10 @@ uint64_t UecSrc::motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_r
         pkt.rtx_echo(),
         forward_path_backlog,
         motivationSelectionSource(selection.source),
-        selection.token_id});
+        selection.token_id,
+        newly_acked_bytes,
+        new_data_bytes_sent_total,
+        cwnd_bytes});
     return event_seq;
 }
 
@@ -911,7 +917,10 @@ void UecSrc::motivationLogPendingEpoch() {
                      : "not_applicable",
         prism_active && _prism_engaged,
         epoch.entropy_coverage,
-        epoch.physical_path_coverage});
+        epoch.physical_path_coverage,
+        _motivation_new_data_bytes_sent_total,
+        static_cast<uint64_t>(_received_bytes),
+        static_cast<uint64_t>(_cwnd)});
     _motivation_pending_epoch.reset();
 }
 
@@ -1457,7 +1466,9 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
 
 
     const uint64_t ack_event_seq =
-        motivationLogAck(pkt, raw_rtt, delay, _prism_genuine_sample, ack_selection);
+        motivationLogAck(pkt, raw_rtt, delay, _prism_genuine_sample, ack_selection,
+                         newly_recvd_bytes, _motivation_new_data_bytes_sent_total,
+                         static_cast<uint64_t>(_cwnd));
     _mp->setFeedbackTraceContext(ack_event_seq);
     _mp->processEv(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
 
@@ -3232,6 +3243,9 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
              << endl;
     }
     p->sendOn();
+    if (_motivation_trace_writer.enabledFor(flowId())) {
+        _motivation_new_data_bytes_sent_total += full_pkt_size;
+    }
     _highest_sent++;
     _stats.new_pkts_sent++;
     startRTO(eventlist().now());

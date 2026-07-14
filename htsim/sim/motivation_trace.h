@@ -33,6 +33,9 @@ struct MotivationAckRecord {
     uint64_t forward_path_backlog_ps;
     std::string selection_source;
     uint64_t source_token_id;
+    uint64_t newly_acked_bytes;
+    uint64_t new_data_bytes_sent_total;
+    uint64_t cwnd_bytes;
 };
 
 struct MotivationEpochRecord {
@@ -51,6 +54,22 @@ struct MotivationEpochRecord {
     bool engaged;
     uint32_t entropy_coverage;
     uint32_t physical_path_coverage;
+    uint64_t new_data_bytes_sent_total;
+    uint64_t acked_bytes_total;
+    uint64_t cwnd_bytes;
+};
+
+struct MotivationBackgroundRecord {
+    uint64_t event_seq;
+    uint64_t time_ps;
+    uint32_t background_id;
+    std::string operation;
+    uint32_t src;
+    uint32_t dst;
+    uint32_t path_index;
+    double configured_rate_gbps;
+    uint64_t delivered_bytes;
+    std::string queue_fingerprint;
 };
 
 struct MotivationPathRecord {
@@ -90,6 +109,7 @@ public:
     void logToken(uint64_t event_seq, uint64_t flow_id, uint64_t time_ps,
                   const UecMpTokenEvent& event);
     void logEpoch(const MotivationEpochRecord& record);
+    void logBackground(const MotivationBackgroundRecord& record);
     void logPath(const MotivationPathRecord& record);
     void logLink(const MotivationLinkRecord& record);
 
@@ -102,6 +122,7 @@ private:
     std::ofstream _ack;
     std::ofstream _token;
     std::ofstream _epoch;
+    std::ofstream _background;
     std::ofstream _path;
     std::ofstream _link;
 };

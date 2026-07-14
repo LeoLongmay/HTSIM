@@ -7,7 +7,7 @@
 
 namespace {
 
-constexpr uint32_t kSchemaVersion = 1;
+constexpr uint32_t kSchemaVersion = 2;
 
 void validateCsvIdentity(const std::string& name, const std::string& value) {
     if (value.find_first_of(",\r\n") != std::string::npos) {
@@ -64,6 +64,7 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
         openCsv(_ack, _config.prefix + ".ack.csv");
         openCsv(_token, _config.prefix + ".token.csv");
         openCsv(_epoch, _config.prefix + ".epoch.csv");
+        openCsv(_background, _config.prefix + ".background.csv");
         openCsv(_path, _config.prefix + ".pathmap.csv");
         openCsv(_link, _config.prefix + ".linkmap.csv");
     } catch (...) {
@@ -73,12 +74,16 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
 
     _ack << "schema_version,run_id,seed,scenario,event_seq,time_ps,flow_id,epoch_id,acked_psn,"
             "entropy,physical_path_id,raw_rtt_ps,base_rtt_ps,qdelay_ps,ecn,genuine_sample,"
-            "retransmitted,forward_path_backlog_ps,selection_source,source_token_id\n";
+            "retransmitted,forward_path_backlog_ps,selection_source,source_token_id,"
+            "newly_acked_bytes,new_data_bytes_sent_total,cwnd_bytes\n";
     _token << "schema_version,run_id,event_seq,time_ps,flow_id,operation,reason,token_id,entropy,"
               "queue_depth_before,queue_depth_after,related_ack_event_seq\n";
     _epoch << "schema_version,run_id,event_seq,flow_id,epoch_id,start_ps,end_ps,sample_count,"
               "raw_floor_ps,raw_spread_ps,smooth_floor_ps,smooth_spread_ps,observed_region,"
-              "actual_region,engaged,entropy_coverage,physical_path_coverage\n";
+              "actual_region,engaged,entropy_coverage,physical_path_coverage,"
+              "new_data_bytes_sent_total,acked_bytes_total,cwnd_bytes\n";
+    _background << "schema_version,run_id,event_seq,time_ps,background_id,operation,src,dst,"
+                   "path_index,configured_rate_gbps,delivered_bytes,queue_fingerprint\n";
     _path << "schema_version,run_id,flow_id,entropy,physical_path_id,resolution_status,"
              "queue_fingerprint,bottleneck_rate_gbps,contains_reduced_link,ordered_queue_ids\n";
     _link << "schema_version,run_id,queue_id,queue_name,rate_gbps,reduced_speed\n";
@@ -105,7 +110,8 @@ void MotivationTraceWriter::logAck(const MotivationAckRecord& record) {
          << record.base_rtt_ps << ',' << record.qdelay_ps << ',' << record.ecn << ','
          << record.genuine_sample << ',' << record.retransmitted << ','
          << record.forward_path_backlog_ps << ',' << record.selection_source << ','
-         << record.source_token_id << '\n';
+         << record.source_token_id << ',' << record.newly_acked_bytes << ','
+         << record.new_data_bytes_sent_total << ',' << record.cwnd_bytes << '\n';
 }
 
 void MotivationTraceWriter::logToken(uint64_t event_seq, uint64_t flow_id, uint64_t time_ps,
@@ -130,7 +136,19 @@ void MotivationTraceWriter::logEpoch(const MotivationEpochRecord& record) {
            << record.raw_spread_ps << ',' << record.smooth_floor_ps << ','
            << record.smooth_spread_ps << ',' << record.observed_region << ','
            << record.actual_region << ',' << record.engaged << ',' << record.entropy_coverage << ','
-           << record.physical_path_coverage << '\n';
+           << record.physical_path_coverage << ',' << record.new_data_bytes_sent_total << ','
+           << record.acked_bytes_total << ',' << record.cwnd_bytes << '\n';
+}
+
+void MotivationTraceWriter::logBackground(const MotivationBackgroundRecord& record) {
+    if (!_enabled) {
+        return;
+    }
+    _background << kSchemaVersion << ',' << _config.run_id << ',' << record.event_seq << ','
+                << record.time_ps << ',' << record.background_id << ',' << record.operation << ','
+                << record.src << ',' << record.dst << ',' << record.path_index << ','
+                << record.configured_rate_gbps << ',' << record.delivered_bytes << ','
+                << record.queue_fingerprint << '\n';
 }
 
 void MotivationTraceWriter::logPath(const MotivationPathRecord& record) {
@@ -153,7 +171,8 @@ void MotivationTraceWriter::logLink(const MotivationLinkRecord& record) {
 
 void MotivationTraceWriter::close() {
     _enabled = false;
-    const std::array<std::ofstream*, 5> streams = {&_ack, &_token, &_epoch, &_path, &_link};
+    const std::array<std::ofstream*, 6> streams = {
+        &_ack, &_token, &_epoch, &_background, &_path, &_link};
     for (std::ofstream* stream : streams) {
         if (stream->is_open()) {
             stream->close();
