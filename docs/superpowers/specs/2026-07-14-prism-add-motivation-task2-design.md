@@ -160,9 +160,11 @@ shadow state, or invoke trace callbacks.
 
 ### 5.2 Common ordering and schema
 
-Every trace row contains a fixed `schema_version`, run identity, and a monotonically increasing
-`event_seq`. Separate CSV files remain causally joinable through `event_seq`, simulation time, and
-flow ID. Unknown schema versions are rejected by the analysis scripts.
+ACK, token, and epoch event rows contain a fixed `schema_version`, run identity, and one shared,
+monotonically increasing `event_seq`. These event CSVs remain causally joinable through
+`event_seq`, simulation time, and flow ID. Pathmap and linkmap rows are static metadata: they follow
+the exact schemas in Section 5.6 and do not consume `event_seq`. Unknown schema versions are
+rejected by the analysis scripts.
 
 ### 5.3 ACK trace
 

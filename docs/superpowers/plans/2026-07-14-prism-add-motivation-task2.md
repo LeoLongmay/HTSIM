@@ -4,7 +4,7 @@
 
 **Goal:** Add behavior-neutral Legacy REPS/Prism tracing and offline M1/M2 analyses under `htsim/sim/datacenter/add_motivation` to validate residual-quality discrimination and redistribution no-progress without implementing recycling or CC handoff.
 
-**Architecture:** The simulator emits versioned primitive ACK, Legacy REPS token, epoch, path, and link CSV events with a shared event sequence. Python validates those files, computes same-epoch residuals, and projects the real Legacy REPS FIFO into a virtual eight-slot shadow validation cache. The shadow never feeds entropy selection or congestion control.
+**Architecture:** The simulator emits versioned primitive ACK, Legacy REPS token, and epoch CSV events with one shared event sequence, plus versioned static path and link metadata CSVs that do not consume that sequence. Python validates those files, computes same-epoch residuals, and projects the real Legacy REPS FIFO into a virtual eight-slot shadow validation cache. The shadow never feeds entropy selection or congestion control.
 
 **Tech Stack:** C++17, HTSIM UEC/REPS, Python 3 standard library, NumPy, Matplotlib, Bash, CMake.
 
@@ -226,8 +226,9 @@ return _enabled && (_config.flow_filter < 0 ||
                     static_cast<uint64_t>(_config.flow_filter) == flow_id);
 ```
 
-Use one `uint64_t _event_seq` for all five files. The token CSV includes
-`related_ack_event_seq`; all CSV headers are the exact schemas in the spec.
+Use one `uint64_t _event_seq` shared by ACK, token, and epoch event rows. Pathmap and linkmap are
+static metadata, follow the exact Section 5.6 schemas, and do not consume `event_seq`. The token CSV
+includes `related_ack_event_seq`; all CSV headers are the exact schemas in the spec.
 Do not flush every row; flush/close at process teardown and explicit test close.
 
 Production uses one process-wide writer owned by `UecSrc`; individual sources only query and log
@@ -463,8 +464,9 @@ Expected: module not found.
 - [ ] **Step 3: Implement typed rows and strict validation**
 
 Use frozen dataclasses for ACK, token, epoch, path, and link rows. Require `schema_version == 1`.
-Validate per-file monotonic `event_seq`, unique token IDs per flow, enqueue before dequeue, and
-`source_token_id` referencing the matching flow's dequeued token.
+Validate monotonic `event_seq` for the ACK, token, and epoch event files; path and link files are
+static metadata and have no `event_seq`. Validate unique token IDs per flow, enqueue before dequeue,
+and `source_token_id` referencing the matching flow's dequeued token.
 
 For residual assignment, group genuine ACKs by `(flow_id, epoch_id)`, compute the minimum `qdelay_ps`
 from that exact group, and attach `max(q-floor, 0)`. Preserve ECN ACKs in the group because Prism's
