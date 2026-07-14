@@ -19,6 +19,7 @@
 #include "pciemodel.h"
 #include "oversubscribed_cc.h"
 #include "uec_mp.h"
+#include "motivation_epoch.h"
 #include "atlahs_event.h"
 #include "atlahs_htsim_api.h"
 
@@ -237,7 +238,7 @@ public:
 
     virtual const string& nodename() { return _nodename; }
     virtual void setName(const string& name) override { _name=name; _mp->set_debug_tag(name); }
-    inline void setFlowId(flowid_t flow_id) { _flow.set_flowid(flow_id); }
+    void setFlowId(flowid_t flow_id);
     void setFlowsize(uint64_t flow_size_in_bytes);
     mem_b flowsize() { return _flow_size; }
     inline PacketFlow* flow() { return &_flow; }
@@ -253,16 +254,20 @@ public:
    private:
     static MotivationTraceWriter _motivation_trace_writer;
     unique_ptr<UecMultipath> _mp;
+    MotivationEpochObserver _motivation_epoch_observer;
+    optional<MotivationEpochResult> _motivation_pending_epoch;
     UecNIC& _nic;
     uint32_t _no_of_ports;
     vector <UecSrcPort*> _ports;
     struct sendRecord {
         // need a constructor to be able to put this in a map
-        sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime)
-            : path_id(ppath), pkt_size(psize), send_time(stime){};
+        sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime,
+                   UecMpSelection pselection)
+            : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection){};
         uint32_t path_id;
         mem_b pkt_size;
         simtime_picosec send_time;
+        UecMpSelection selection;
     };
     UecLogger* _logger;
     TrafficLogger* _pktlogger;
@@ -285,7 +290,13 @@ public:
     mem_b sendRtxPacket(const Route& route);
     void sendRTS();
     void sendProbe();
-    void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size);
+    void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
+                          UecMpSelection selection);
+    void configureMotivationTokenObserver();
+    uint64_t motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
+                              simtime_picosec qdelay, bool genuine,
+                              const UecMpSelection& selection);
+    void motivationLogPendingEpoch();
     void queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size);
     bool validateSendTs(UecBasePacket::seq_t acked_psn, bool rtx_echo);
     void recalculateRTO();

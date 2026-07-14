@@ -40,6 +40,25 @@ void tokenize(const std::string& str, char delim, std::vector<std::string>& out)
         out.push_back(s);
     }
 }
+
+const char* motivationSelectionSource(UecMpSelection::Source source) {
+    switch (source) {
+    case UecMpSelection::RECYCLED: return "recycled";
+    case UecMpSelection::FIRST_WINDOW: return "first_window";
+    case UecMpSelection::RANDOM_EMPTY: return "random_empty";
+    case UecMpSelection::UNKNOWN: return "unknown";
+    }
+    return "unknown";
+}
+
+const char* motivationRegionName(prism::Region region) {
+    switch (region) {
+    case prism::INCREASE: return "increase";
+    case prism::HOLD: return "hold";
+    case prism::DECREASE: return "decrease";
+    }
+    return "unknown";
+}
 }  // namespace
 
 // Static stuff
@@ -157,6 +176,11 @@ void UecSrc::configureMotivationTrace(const std::string& prefix, const std::stri
 
 MotivationTraceWriter& UecSrc::motivationTrace() {
     return _motivation_trace_writer;
+}
+
+void UecSrc::setFlowId(flowid_t flow_id) {
+    _flow.set_flowid(flow_id);
+    configureMotivationTokenObserver();
 }
 
 void UecSrc::initNsccParams(simtime_picosec network_rtt,
@@ -559,6 +583,8 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                bool rts)
         : EventSource(eventList, "uecSrc"), 
           _mp(move(mp)),
+          _motivation_epoch_observer(_prism_kappa, _prism_n_min, _prism_smooth_beta,
+                                     _prism_hysteresis),
           _nic(nic), 
           _msg_tracker(),
           _last_event_time(),
@@ -683,6 +709,88 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
 
     _nscc_overall_stats = {};
     _nscc_fulfill_stats = {};
+    configureMotivationTokenObserver();
+}
+
+void UecSrc::configureMotivationTokenObserver() {
+    if (!_motivation_trace_writer.enabledFor(flowId())) {
+        _mp->setTokenObserver({});
+        return;
+    }
+
+    _mp->setTokenObserver([this](const UecMpTokenEvent& event) {
+        if (!_motivation_trace_writer.enabledFor(flowId())) {
+            return;
+        }
+        _motivation_trace_writer.logToken(_motivation_trace_writer.nextEventSeq(), flowId(),
+                                          eventlist().now(), event);
+    });
+}
+
+uint64_t UecSrc::motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
+                                  simtime_picosec qdelay, bool genuine,
+                                  const UecMpSelection& selection) {
+    if (!_motivation_trace_writer.enabledFor(flowId())) {
+        return UecMpTokenEvent::NO_EVENT;
+    }
+
+    const uint64_t epoch_id = _motivation_epoch_observer.currentEpochId();
+    const simtime_picosec target_spray =
+        _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
+    _motivation_pending_epoch = _motivation_epoch_observer.observe(
+        eventlist().now(), qdelay, genuine, pkt.ev(),
+        MotivationEpochObserver::NO_PHYSICAL_PATH, _base_rtt, _target_Qdelay, target_spray);
+
+    const uint64_t event_seq = _motivation_trace_writer.nextEventSeq();
+    _motivation_trace_writer.logAck({
+        event_seq,
+        eventlist().now(),
+        flowId(),
+        epoch_id,
+        pkt.acked_psn(),
+        pkt.ev(),
+        MotivationEpochObserver::NO_PHYSICAL_PATH,
+        raw_rtt,
+        _base_rtt,
+        static_cast<int64_t>(qdelay),
+        pkt.ecn_echo(),
+        genuine,
+        pkt.rtx_echo(),
+        std::numeric_limits<uint64_t>::max(),
+        motivationSelectionSource(selection.source),
+        selection.token_id});
+    return event_seq;
+}
+
+void UecSrc::motivationLogPendingEpoch() {
+    if (!_motivation_pending_epoch) {
+        return;
+    }
+    if (!_motivation_trace_writer.enabledFor(flowId())) {
+        _motivation_pending_epoch.reset();
+        return;
+    }
+
+    const MotivationEpochResult& epoch = *_motivation_pending_epoch;
+    const bool prism_active = _sender_based_cc && _sender_cc_algo == PRISM;
+    _motivation_trace_writer.logEpoch({
+        _motivation_trace_writer.nextEventSeq(),
+        flowId(),
+        epoch.epoch_id,
+        epoch.start_ps,
+        epoch.end_ps,
+        epoch.sample_count,
+        epoch.raw_floor_ps,
+        epoch.raw_spread_ps,
+        epoch.smooth_floor_ps,
+        epoch.smooth_spread_ps,
+        motivationRegionName(epoch.observed_region),
+        prism_active ? motivationRegionName(static_cast<prism::Region>(_prism_region))
+                     : "not_applicable",
+        prism_active && _prism_engaged,
+        epoch.entropy_coverage,
+        epoch.physical_path_coverage});
+    _motivation_pending_epoch.reset();
 }
 
 void UecSrc::delFromSendTimes(simtime_picosec time, UecDataPacket::seq_t seq_no) {
@@ -1096,6 +1204,10 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     auto i = _tx_bitmap.find(acked_psn);
     auto rtx_time = _rtx_times.find(acked_psn);
     uint32_t ooo = pkt.ooo();
+    UecMpSelection ack_selection;
+    if (i != _tx_bitmap.end()) {
+        ack_selection = i->second.selection;
+    }
 
     mem_b pkt_size;
     simtime_picosec delay;
@@ -1218,6 +1330,9 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     //assert(_in_flight >= 0);
 
 
+    const uint64_t ack_event_seq =
+        motivationLogAck(pkt, raw_rtt, delay, _prism_genuine_sample, ack_selection);
+    _mp->setFeedbackTraceContext(ack_event_seq);
     _mp->processEv(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
 
     if(_flow.flow_id() == _debug_flowid ){
@@ -1240,6 +1355,7 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         else */
         (this->*updateCwndOnAck)(pkt.ecn_echo(), delay, newly_recvd_bytes);
     }
+    motivationLogPendingEpoch();
 
     if (_debug_src) {
         cout << "At " << timeAsUs(eventlist().now()) << " " << _flow.str() << " " << _nodename << " processAck: " << cum_ack << " flow " << _flow.str() << " cwnd " << _cwnd << " flightsize " << _in_flight << " delay " << timeAsUs(delay) << " newlyrecvd " << newly_recvd_bytes << " skip " << pkt.ecn_echo() << " raw rtt " << raw_rtt << endl;
@@ -2482,6 +2598,7 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
         recalculateRTO();
     }
 
+    _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
     if (pkt.last_hop())
         _mp->processEv(ev, pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
     else
@@ -2967,6 +3084,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     p->set_src(_srcaddr);
 
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    const UecMpSelection selection = _mp->lastSelection();
     p->set_pathid(ev);
     p->set_hop_count(0);
     p->flow().logTraffic(*p, *this, TrafficLogger::PKT_CREATESEND);
@@ -2974,7 +3092,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     if (_backlog == 0 || (_receiver_based_cc && _credit <= 0) || ( _sender_based_cc &&  (_in_flight + full_pkt_size) >= _cwnd )) 
         p->set_ar(true);
     
-    createSendRecord(ev, _highest_sent, full_pkt_size);
+    createSendRecord(ev, _highest_sent, full_pkt_size, selection);
     if (_debug_src)
         cout << timeAsUs(eventlist().now()) << " " << _flow.str() << " sending pkt " << _highest_sent
              << " size " << full_pkt_size << " pull target " << _pull_target << " ack request " << p->ar()
@@ -3014,11 +3132,12 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     p->set_src(_srcaddr);
 
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    const UecMpSelection selection = _mp->lastSelection();
     p->set_pathid(ev);
     p->set_hop_count(0);
     p->flow().logTraffic(*p, *this, TrafficLogger::PKT_CREATESEND);
 
-    createSendRecord(ev, seq_no, full_pkt_size);
+    createSendRecord(ev, seq_no, full_pkt_size, selection);
 
     if (_debug_src)
         cout << timeAsUs(eventlist().now()) << " " << _flow.str() << " " << _nodename << " sending rtx pkt " << seq_no
@@ -3048,6 +3167,7 @@ void UecSrc::sendProbe() {
     p->set_src(_srcaddr);
     p->set_dst(_dstaddr);
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    (void)_mp->lastSelection();
     p->set_pathid(ev);
     p->set_hop_count(0);
     // p->sendOn();
@@ -3079,9 +3199,10 @@ void UecSrc::sendRTS() {
     p->set_src(_srcaddr);
 
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    const UecMpSelection selection = _mp->lastSelection();
     p->set_pathid(ev);
     p->set_hop_count(0);
-    createSendRecord(ev, _highest_sent, _hdr_size);
+    createSendRecord(ev, _highest_sent, _hdr_size, selection);
 
     // p->sendOn();
     _nic.sendControlPacket(p, this, NULL);
@@ -3092,14 +3213,15 @@ void UecSrc::sendRTS() {
     startRTO(eventlist().now());
 }
 
-void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno, mem_b full_pkt_size) {
+void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno,
+                              mem_b full_pkt_size, UecMpSelection selection) {
     if (_debug_src)
         cout << _flow.str() << " " << _nodename << " createSendRecord seqno: " << seqno << " size " << full_pkt_size
              << endl;
 
     assert(_tx_bitmap.find(seqno) == _tx_bitmap.end());
 
-    _tx_bitmap.emplace(seqno, sendRecord(path_id, full_pkt_size, eventlist().now()));
+    _tx_bitmap.emplace(seqno, sendRecord(path_id, full_pkt_size, eventlist().now(), selection));
     _send_times.emplace(eventlist().now(), seqno);
 
     if (_rtx_times.find(seqno) == _rtx_times.end()) {
@@ -3218,6 +3340,7 @@ void UecSrc::rtxTimerExpired() {
     assert(send_record != _tx_bitmap.end());
     mem_b pkt_size = send_record->second.pkt_size;
 
+    _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
     _mp->processEv(send_record->second.path_id, UecMultipath::PATH_TIMEOUT);
 
     // update flightsize?
