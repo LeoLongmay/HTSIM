@@ -692,6 +692,8 @@ int main(int argc, char **argv) {
         UecSrc::configureMotivationTrace(motivation_prefix, motivation_run_id,
                                          motivation_scenario, static_cast<uint32_t>(seed),
                                          motivation_flow_id);
+        UecSrc::validateMotivationTraceRuntimeConfig(
+            load_balancing_algo == REPS || load_balancing_algo == REPS_LEGACY, planes);
     } catch (const std::exception& error) {
         cerr << error.what() << endl;
         return 1;

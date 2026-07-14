@@ -9,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 #include "circular_buffer.h"
 #include "data_collector.h"
 #include "queue.h"
@@ -198,6 +199,19 @@ void UecSrc::configureMotivationTrace(const std::string& prefix, const std::stri
 
 MotivationTraceWriter& UecSrc::motivationTrace() {
     return _motivation_trace_writer;
+}
+
+void UecSrc::validateMotivationTraceRuntimeConfig(bool legacy_reps, uint32_t planes) {
+    if (!_motivation_trace_writer.enabled()) {
+        return;
+    }
+    if (legacy_reps && planes == 1 && _sender_based_cc && !_receiver_based_cc) {
+        return;
+    }
+    throw std::invalid_argument(
+        "Motivation tracing path metadata currently supports only Legacy REPS "
+        "runs: require -load_balancing_algo reps or reps_legacy, -planes 1, "
+        "sender-side CC active, and receiver-side CC inactive.");
 }
 
 void UecSrc::setFlowId(flowid_t flow_id) {

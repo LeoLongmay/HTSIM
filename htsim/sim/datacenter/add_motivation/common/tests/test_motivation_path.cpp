@@ -7,6 +7,7 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -149,8 +150,34 @@ void emitsStablePathAndDeduplicatedLinkMetadata() {
     removeTraceFiles();
 }
 
+void validatesMotivationTraceStartupConstraints() {
+    UecSrc::configureMotivationTrace(kPrefix, "run", "validation_fixture", 19, -1);
+
+    UecSrc::_sender_based_cc = true;
+    UecSrc::_receiver_based_cc = false;
+    UecSrc::validateMotivationTraceRuntimeConfig(true, 1);
+
+    bool rejected = false;
+    try {
+        UecSrc::validateMotivationTraceRuntimeConfig(false, 1);
+    } catch (const std::invalid_argument& error) {
+        rejected = true;
+        assert(std::string(error.what()) ==
+               "Motivation tracing path metadata currently supports only Legacy REPS "
+               "runs: require -load_balancing_algo reps or reps_legacy, -planes 1, "
+               "sender-side CC active, and receiver-side CC inactive.");
+    }
+    assert(rejected);
+
+    UecSrc::configureMotivationTrace("", "", "", 0, -1);
+    UecSrc::_sender_based_cc = false;
+    UecSrc::_receiver_based_cc = true;
+    UecSrc::validateMotivationTraceRuntimeConfig(false, 4);
+}
+
 }  // namespace
 
 int main() {
     emitsStablePathAndDeduplicatedLinkMetadata();
+    validatesMotivationTraceStartupConstraints();
 }

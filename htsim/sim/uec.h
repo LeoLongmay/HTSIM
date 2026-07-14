@@ -112,6 +112,7 @@ public:
                                          const std::string& scenario, uint32_t seed,
                                          int64_t flow_filter);
     static MotivationTraceWriter& motivationTrace();
+    static void validateMotivationTraceRuntimeConfig(bool legacy_reps, uint32_t planes);
     struct Stats {
         /* all must be non-negative, but we'll make them signed so we
            can do maths with them without concern about underflow */
