@@ -16,8 +16,8 @@ namespace {
 constexpr const char* kPrefix = "/tmp/motivation_path_test";
 
 void removeTraceFiles() {
-    for (const char* suffix : {".ack.csv", ".token.csv", ".epoch.csv", ".pathmap.csv",
-                               ".linkmap.csv"}) {
+    for (const char* suffix : {".ack.csv", ".token.csv", ".epoch.csv", ".background.csv",
+                               ".pathmap.csv", ".linkmap.csv"}) {
         std::remove((std::string(kPrefix) + suffix).c_str());
     }
 }
