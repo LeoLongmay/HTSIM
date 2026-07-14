@@ -153,6 +153,68 @@ class TraceSchemaTests(unittest.TestCase):
             with self.assertRaisesRegex(TraceValidationError, r"fixture\.ack\.csv.*event_seq"):
                 load_trace(prefix)
 
+    def test_rejects_ack_time_decrease_in_global_event_order(self):
+        rows = valid_rows()
+        rows["token"][0].update({
+            "event_seq": "0", "time_ps": "110", "operation": "select_first_window",
+            "reason": "first_window", "related_ack_event_seq": str(2**64 - 1),
+        })
+        rows["ack"][0]["event_seq"] = "1"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(TraceValidationError, r"fixture\.ack\.csv.*time_ps"):
+                load_trace(prefix)
+
+    def test_rejects_token_time_decrease_in_global_event_order(self):
+        rows = valid_rows()
+        rows["token"][0]["time_ps"] = "99"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(TraceValidationError, r"fixture\.token\.csv.*time_ps"):
+                load_trace(prefix)
+
+    def test_rejects_background_time_decrease_in_global_event_order(self):
+        rows = valid_rows()
+        rows["background"] = [{
+            "schema_version": "2", "run_id": "fixture", "event_seq": "2",
+            "time_ps": "109", "background_id": "5", "operation": "delivery",
+            "src": "0", "dst": "16", "path_index": "2",
+            "configured_rate_gbps": "25", "delivered_bytes": "4150",
+            "queue_fingerprint": "4:5:6",
+        }]
+        rows["epoch"][0]["event_seq"] = "3"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.background\.csv.*time_ps",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_epoch_end_time_decrease_in_global_event_order(self):
+        rows = valid_rows()
+        rows["epoch"][0]["end_ps"] = "109"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(TraceValidationError, r"fixture\.epoch\.csv.*end_ps"):
+                load_trace(prefix)
+
+    def test_allows_equal_effective_times_across_event_kinds(self):
+        rows = valid_rows()
+        rows["ack"][0]["time_ps"] = "100"
+        rows["token"][0]["time_ps"] = "100"
+        rows["background"] = [{
+            "schema_version": "2", "run_id": "fixture", "event_seq": "2",
+            "time_ps": "100", "background_id": "5", "operation": "delivery",
+            "src": "0", "dst": "16", "path_index": "2",
+            "configured_rate_gbps": "25", "delivered_bytes": "4150",
+            "queue_fingerprint": "4:5:6",
+        }]
+        rows["epoch"][0].update({"event_seq": "3", "end_ps": "100"})
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = load_trace(write_trace(directory, rows))
+        self.assertEqual([event.event_seq for event in bundle.events], [0, 1, 2, 3])
+
     def test_rejects_mismatched_run_id_with_filename_and_key(self):
         rows = valid_rows()
         rows["linkmap"][0]["run_id"] = "other"
@@ -215,7 +277,7 @@ class TraceSchemaTests(unittest.TestCase):
 
     def test_rejects_enqueue_reference_to_later_ack(self):
         rows = valid_rows()
-        rows["ack"][0]["event_seq"] = "2"
+        rows["ack"][0].update({"event_seq": "2", "time_ps": "110"})
         rows["token"][0]["related_ack_event_seq"] = "2"
         rows["epoch"][0]["event_seq"] = "3"
         with tempfile.TemporaryDirectory() as directory:
@@ -279,7 +341,7 @@ class TraceSchemaTests(unittest.TestCase):
     def test_rejects_epoch_close_before_last_ack_in_same_epoch(self):
         rows = valid_rows()
         later_ack = dict(rows["ack"][0])
-        later_ack.update({"event_seq": "3", "time_ps": "115", "acked_psn": "11"})
+        later_ack.update({"event_seq": "3", "time_ps": "120", "acked_psn": "11"})
         rows["ack"].append(later_ack)
         with tempfile.TemporaryDirectory() as directory:
             prefix = write_trace(directory, rows)

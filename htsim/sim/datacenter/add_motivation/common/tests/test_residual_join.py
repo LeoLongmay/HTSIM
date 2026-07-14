@@ -87,7 +87,7 @@ class ResidualJoinTests(unittest.TestCase):
             with self.assertRaisesRegex(TraceValidationError, r"residual\.epoch\.csv.*epoch_id"):
                 attach_same_epoch_residuals(bundle)
 
-    def test_validates_empty_closed_epoch_as_zero_extrema(self):
+    def test_rejects_closed_epoch_without_genuine_samples(self):
         rows = residual_rows()
         rows["ack"] = []
         rows["epoch"][0].update({
@@ -96,23 +96,23 @@ class ResidualJoinTests(unittest.TestCase):
         })
         with tempfile.TemporaryDirectory() as directory:
             bundle = load_trace(write_rows(directory, rows))
-            self.assertEqual(attach_same_epoch_residuals(bundle), ())
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"residual\.epoch\.csv.*sample_count",
+            ):
+                attach_same_epoch_residuals(bundle)
 
-    def test_rejects_joined_ack_time_outside_closed_epoch(self):
-        for name, time_ps in (("before", "-1"), ("after", "121")):
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
-                rows = residual_rows()
-                if name == "before":
-                    rows["epoch"][0]["start_ps"] = "101"
-                    rows["ack"][0]["time_ps"] = "100"
-                else:
-                    rows["ack"][1]["time_ps"] = time_ps
-                bundle = load_trace(write_rows(directory, rows))
-                with self.assertRaisesRegex(
-                    TraceValidationError,
-                    r"residual\.ack\.csv.*time_ps",
-                ):
-                    attach_same_epoch_residuals(bundle)
+    def test_rejects_joined_ack_time_before_epoch_start(self):
+        rows = residual_rows()
+        rows["epoch"][0]["start_ps"] = "101"
+        rows["ack"][0]["time_ps"] = "100"
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = load_trace(write_rows(directory, rows))
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"residual\.ack\.csv.*time_ps",
+            ):
+                attach_same_epoch_residuals(bundle)
 
 
 if __name__ == "__main__":

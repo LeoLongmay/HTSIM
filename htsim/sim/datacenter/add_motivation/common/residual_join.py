@@ -72,6 +72,13 @@ def attach_same_epoch_residuals(
     extrema = {}
     for identity, epoch in epochs.items():
         genuine = genuine_by_epoch.get(identity, ())
+        if not genuine:
+            _raise(
+                epoch,
+                "epoch.csv",
+                "sample_count",
+                "closed epoch has no genuine ACK samples",
+            )
         if epoch["sample_count"] != len(genuine):
             _raise(
                 epoch,
@@ -80,13 +87,9 @@ def attach_same_epoch_residuals(
                 f"recorded {epoch['sample_count']}, recomputed {len(genuine)}",
             )
 
-        if genuine:
-            delays = [ack["qdelay_ps"] for ack in genuine]
-            floor_ps = min(delays)
-            spread_ps = max(delays) - floor_ps
-        else:
-            floor_ps = 0
-            spread_ps = 0
+        delays = [ack["qdelay_ps"] for ack in genuine]
+        floor_ps = min(delays)
+        spread_ps = max(delays) - floor_ps
 
         if epoch["raw_floor_ps"] != floor_ps:
             _raise(

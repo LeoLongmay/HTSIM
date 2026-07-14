@@ -234,6 +234,21 @@ def load_trace(prefix: Path | str) -> TraceBundle:
             events.append(EventRef(event_seq, kind, row))
     events.sort(key=lambda event: event.event_seq)
 
+    previous_time = None
+    previous_event_seq = None
+    for event in events:
+        time_key = "end_ps" if event.kind == "epoch" else "time_ps"
+        effective_time = event.row[time_key]
+        if previous_time is not None and effective_time < previous_time:
+            raise _error(
+                event.row.source_path,
+                time_key,
+                f"effective time {effective_time} at event_seq {event.event_seq} "
+                f"precedes time {previous_time} at event_seq {previous_event_seq}",
+            )
+        previous_time = effective_time
+        previous_event_seq = event.event_seq
+
     ack_by_event_seq = {row["event_seq"]: row for row in loaded["ack"]}
     enqueued_ack_event_seqs = set()
     for token in loaded["token"]:
