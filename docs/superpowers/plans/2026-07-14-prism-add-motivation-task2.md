@@ -1,893 +1,960 @@
-# Prism Add-Motivation Task 2 Implementation Plan
+# Prism Residual-Spread Motivation Task 2 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add behavior-neutral Legacy REPS/Prism tracing and offline M1/M2 analyses under `htsim/sim/datacenter/add_motivation` to validate residual-quality discrimination and redistribution no-progress without implementing recycling or CC handoff.
+**Goal:** Build the M1 entropy-quality and M2 redistribution-progress motivation experiments under `htsim/sim/datacenter/add_motivation` without implementing residual recycling or congestion-control handoff.
 
-**Architecture:** The simulator emits versioned primitive ACK, Legacy REPS token, and epoch CSV events with one shared event sequence, plus versioned static path and link metadata CSVs that do not consume that sequence. Python validates those files, computes same-epoch residuals, and projects the real Legacy REPS FIFO into a virtual eight-slot shadow validation cache. The shadow never feeds entropy selection or congestion control.
+**Architecture:** Existing behavior-neutral ACK, Legacy REPS token, epoch, path, and link traces remain the simulator boundary. Versioned observation fields and a deterministic fixed-path background source provide the remaining primitive facts; Python validates same-epoch residuals, computes M1 persistence, and replays M2 virtual eight-slot rounds without feeding any result back into the simulator.
 
-**Tech Stack:** C++17, HTSIM UEC/REPS, Python 3 standard library, NumPy, Matplotlib, Bash, CMake.
-
-## Global Constraints
-
-- Create `htsim/sim/datacenter/add_motivation` beside `prism_eval`; never overwrite Evaluation data.
-- Keep `-load_balancing_algo reps` mapped to `UecMpRepsLegacy`; do not modify `CircularBufferREPS` or the `freezing` arm.
-- Do not implement entropy invalidation, replacement policy, recycling control, CC handoff, or any new cwnd action.
-- Trace is disabled by default and must not allocate files, scan paths, or call trace callbacks when disabled.
-- Trace callbacks must not call `rand()`/`random()`, modify token ordering, or alter controller state.
-- M1 uses same-epoch raw floor and genuine ACKs only; never use the previous epoch or a smoothed floor for per-ACK residual.
-- M2's `B=8` slots are offline virtual state, never described as Legacy REPS physical slots.
-- Calibration uses seeds `101,102,103`; formal runs use seeds `13,14,15,16,17` only after `formal.csv` is locked.
-- Formal results retain negative outcomes and right-censored rounds; no seed or flow filtering.
-- Use `apply_patch` for manual edits and keep unrelated dirty-worktree files untouched.
+**Tech Stack:** C++17, HTSIM UEC/Legacy REPS, Python 3 standard library, NumPy, Matplotlib, Bash, CMake.
 
 ---
+
+## Scope Guardrails
+
+- Do not implement entropy invalidation, cache replacement control, recycling, CC handoff, a new cwnd action, or failure-freezing behavior.
+- Keep `-load_balancing_algo reps` mapped to `UecMpRepsLegacy`.
+- The virtual eight-slot structure exists only in `shadow_replay.py`; never describe it as the real Legacy REPS FIFO.
+- M1 and M2 use `T_cc=T_spray=14 us`, `kappa=1`, and `n_min=3` in primary runs.
+- Keep ECN enabled. Capacity reduction is named `degraded` or `throttled`, never hard failure.
+- Calibration seeds are `101,102,103`; formal seeds are `13,14,15,16,17` after `formal.csv` is locked.
+- All smoke, calibration, formal, CSV, figure, and compiled test output stays under `htsim/sim/datacenter/add_motivation`; `/tmp` is limited to existing self-cleaning trace fixtures inside unit tests.
+- Preserve unrelated dirty-worktree files.
+
+## Completed Foundation
+
+The following commits are prerequisites and must not be reimplemented:
+
+```text
+194159d trace: expose Legacy REPS token lifecycle
+21100cc trace: add versioned motivation CSV writer
+a3b1ba9 docs: clarify motivation metadata sequencing
+5e753fe trace: observe ACK epochs without changing control
+de3ad18 fix: correlate probe and retransmission ACK selections
+acc8dab trace: record motivation path and link metadata
+10d76c8 trace: validate motivation path tracing config
+```
+
+Existing tests:
+
+```text
+htsim/sim/datacenter/add_motivation/common/tests/test_legacy_reps_trace.cpp
+htsim/sim/datacenter/add_motivation/common/tests/test_trace_writer.cpp
+htsim/sim/datacenter/add_motivation/common/tests/test_motivation_epoch.cpp
+htsim/sim/datacenter/add_motivation/common/tests/test_motivation_path.cpp
+```
 
 ## File Map
 
-**Production C++**
+**Observation and scenario C++**
 
-- Modify `htsim/sim/uec_mp.h`: selection/token trace types and no-op-compatible multipath observer interface.
-- Modify `htsim/sim/uec_mp.cpp`: Legacy REPS token IDs, enqueue/dequeue observations, and last-selection metadata.
-- Create `htsim/sim/motivation_trace.h`: versioned row types and writer interface.
-- Create `htsim/sim/motivation_trace.cpp`: lazy CSV writers, shared event sequence, headers, filtering, and failures.
-- Create `htsim/sim/motivation_epoch.h`: pure independent epoch observer used by all sender CC modes.
-- Modify `htsim/sim/uec.h`: send-record metadata, motivation configuration, observer state, and path resolver state.
-- Modify `htsim/sim/uec.cpp`: ACK/token correlation, observer invocation, ACK/epoch/path/link emission.
-- Modify `htsim/sim/queue.h`: read-only queue name/rate accessors only.
-- Modify `htsim/sim/datacenter/main_uec.cpp`: four motivation CLI arguments and resolver installation.
-- Modify `htsim/sim/CMakeLists.txt`: compile `motivation_trace.cpp` into `htsim`.
+- Modify `htsim/sim/motivation_trace.h`: schema-v2 ACK/epoch counters and background records.
+- Modify `htsim/sim/motivation_trace.cpp`: exact v2 headers and background CSV writer.
+- Modify `htsim/sim/uec.h`: trace-only cumulative new-data counter.
+- Modify `htsim/sim/uec.cpp`: update counter and emit ACK/epoch snapshots.
+- Create `htsim/sim/motivation_background.h`: deterministic fixed-path background source and config types.
+- Create `htsim/sim/motivation_background.cpp`: strict CSV parser, packet source, sink, and finish accounting.
+- Modify `htsim/sim/CMakeLists.txt`: compile `motivation_background.cpp`.
+- Modify `htsim/sim/datacenter/fat_tree_topology.h`: validated degraded-link ratio setter.
+- Modify `htsim/sim/datacenter/fat_tree_topology.cpp`: use neutral degraded-link diagnostics.
+- Modify `htsim/sim/datacenter/main_uec.cpp`: degraded-capacity CLI and background-flow installation.
 
-**Tests and analysis**
+**Common experiment code**
 
-- Create `htsim/sim/datacenter/add_motivation/common/tests/test_legacy_reps_trace.cpp`.
-- Create `htsim/sim/datacenter/add_motivation/common/tests/test_motivation_epoch.cpp`.
-- Create `htsim/sim/datacenter/add_motivation/common/trace_schema.py`.
-- Create `htsim/sim/datacenter/add_motivation/common/shadow_replay.py`.
-- Create `htsim/sim/datacenter/add_motivation/common/tests/test_trace_schema.py`.
-- Create `htsim/sim/datacenter/add_motivation/common/tests/test_shadow_replay.py`.
-- Create the M1/M2 directory trees, configs, runners, analyzers, plotters, READMEs, and `.gitignore` files from the approved design.
+- Create `htsim/sim/datacenter/add_motivation/common/__init__.py`.
+- Create `htsim/sim/datacenter/add_motivation/common/trace_schema.py`: strict versioned CSV loading and causal validation.
+- Create `htsim/sim/datacenter/add_motivation/common/residual_join.py`: exact same-epoch residual attachment.
+- Create `htsim/sim/datacenter/add_motivation/common/statistics.py`: flow-cluster bootstrap helpers.
+- Create `htsim/sim/datacenter/add_motivation/common/shadow_replay.py`: Legacy FIFO reconstruction and virtual rounds.
+- Create `htsim/sim/datacenter/add_motivation/common/run_case.py`: one-run execution and manifest creation.
+
+**M1**
+
+- Create `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/{README.md,calibrate.sh,repro.sh,analyze.py,make_figs.py}`.
+- Create `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/configs/{calibration.csv,formal.csv}`.
+- Create `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/tests/test_analyze.py`.
+
+**M2**
+
+- Create `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/{README.md,calibrate.sh,repro.sh,analyze.py,make_figs.py}`.
+- Create `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/configs/{calibration.csv,formal.csv}`.
+- Create `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/gen_workload.py`.
+- Create `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/tests/test_analyze.py`.
 
 ---
 
-### Task 1: Legacy REPS Token Identity and Selection Metadata
+### Task 5: Observation Schema v2 and Byte/Cwnd Snapshots
 
 **Files:**
-- Modify: `htsim/sim/uec_mp.h:16-92`
-- Modify: `htsim/sim/uec_mp.cpp:213-276`
-- Create: `htsim/sim/datacenter/add_motivation/common/tests/test_legacy_reps_trace.cpp`
+- Modify: `htsim/sim/motivation_trace.h:19-107`
+- Modify: `htsim/sim/motivation_trace.cpp:8-162`
+- Modify: `htsim/sim/uec.h:261-315,400-570`
+- Modify: `htsim/sim/uec.cpp:839-915,1290-1484,3160-3240`
+- Modify: `htsim/sim/datacenter/add_motivation/common/tests/test_trace_writer.cpp`
+- Modify: `htsim/sim/datacenter/add_motivation/common/tests/test_motivation_epoch.cpp`
 
-**Interfaces:**
-- Produces: `UecMpSelection`, `UecMpTokenEvent`, `UecMultipath::lastSelection()`, `setTokenObserver()`, and `setFeedbackTraceContext()`.
-- Preserves: `UecMultipath::nextEntropy(...) -> uint32_t` and all existing entropy choices.
+- [ ] **Step 1: Extend the writer test with exact schema-v2 headers**
 
-- [ ] **Step 1: Write a failing Legacy REPS trace test**
-
-Create a test that drives first-window, good feedback, recycled selection, and empty-list random selection:
+Update the expected ACK and epoch headers and add a background row assertion:
 
 ```cpp
-#include "uec_mp.h"
-#include <cassert>
-#include <vector>
-
-int main() {
-    UecMpRepsLegacy reps(8, false);
-    std::vector<UecMpTokenEvent> events;
-    reps.setTokenObserver([&](const UecMpTokenEvent& e) { events.push_back(e); });
-
-    (void)reps.nextEntropy(0, 8);
-    assert(reps.lastSelection().source == UecMpSelection::FIRST_WINDOW);
-
-    reps.setFeedbackTraceContext(41);
-    reps.processEv(3, UecMultipath::PATH_GOOD);
-    assert(events.back().operation == UecMpTokenEvent::ENQUEUE_GOOD_ACK);
-    assert(events.back().related_ack_event_seq == 41);
-
-    uint32_t entropy = reps.nextEntropy(8, 8);
-    assert(entropy == 3);
-    assert(reps.lastSelection().source == UecMpSelection::RECYCLED);
-    assert(reps.lastSelection().token_id == events.front().token_id);
-
-    (void)reps.nextEntropy(9, 8);
-    assert(reps.lastSelection().source == UecMpSelection::RANDOM_EMPTY);
-}
+assert(lineAt(prefix + ".ack.csv", 1) ==
+    "schema_version,run_id,seed,scenario,event_seq,time_ps,flow_id,epoch_id,acked_psn,"
+    "entropy,physical_path_id,raw_rtt_ps,base_rtt_ps,qdelay_ps,ecn,genuine_sample,"
+    "retransmitted,forward_path_backlog_ps,selection_source,source_token_id,"
+    "newly_acked_bytes,new_data_bytes_sent_total,cwnd_bytes");
+assert(lineAt(prefix + ".epoch.csv", 1) ==
+    "schema_version,run_id,event_seq,flow_id,epoch_id,start_ps,end_ps,sample_count,"
+    "raw_floor_ps,raw_spread_ps,smooth_floor_ps,smooth_spread_ps,observed_region,"
+    "actual_region,engaged,entropy_coverage,physical_path_coverage,"
+    "new_data_bytes_sent_total,acked_bytes_total,cwnd_bytes");
+assert(lineAt(prefix + ".background.csv", 1) ==
+    "schema_version,run_id,event_seq,time_ps,background_id,operation,src,dst,path_index,"
+    "configured_rate_gbps,delivered_bytes,queue_fingerprint");
 ```
 
-- [ ] **Step 2: Compile to verify the new interface is absent**
+- [ ] **Step 2: Compile to verify the new record fields are absent**
 
 Run from `htsim/sim/datacenter`:
 
 ```bash
-g++ -std=c++17 -I.. add_motivation/common/tests/test_legacy_reps_trace.cpp \
-  ../build/libhtsim.a -o /tmp/test_legacy_reps_trace
+mkdir -p add_motivation/.test-bin
+g++ -std=c++17 -I.. add_motivation/common/tests/test_trace_writer.cpp \
+  ../build/libhtsim.a -o add_motivation/.test-bin/test_trace_writer_v2
 ```
 
-Expected: compilation fails because `UecMpTokenEvent` and the observer methods do not exist.
+Expected: compilation fails because `MotivationBackgroundRecord` and the v2 fields do not exist.
 
-- [ ] **Step 3: Add trace-only types without changing `nextEntropy` signatures**
+- [ ] **Step 3: Add exact v2 record fields and writer methods**
 
-Add to `uec_mp.h`:
+Add to `MotivationAckRecord`:
 
 ```cpp
-struct UecMpSelection {
-    enum Source : uint8_t { UNKNOWN, RECYCLED, FIRST_WINDOW, RANDOM_EMPTY };
-    static constexpr uint64_t NO_TOKEN = UINT64_MAX;
-    uint32_t entropy = 0;
-    Source source = UNKNOWN;
-    uint64_t token_id = NO_TOKEN;
+uint64_t newly_acked_bytes;
+uint64_t new_data_bytes_sent_total;
+uint64_t cwnd_bytes;
+```
+
+Add to `MotivationEpochRecord`:
+
+```cpp
+uint64_t new_data_bytes_sent_total;
+uint64_t acked_bytes_total;
+uint64_t cwnd_bytes;
+```
+
+Add the background record and method:
+
+```cpp
+struct MotivationBackgroundRecord {
+    uint64_t event_seq;
+    uint64_t time_ps;
+    uint32_t background_id;
+    std::string operation;
+    uint32_t src;
+    uint32_t dst;
+    uint32_t path_index;
+    double configured_rate_gbps;
+    uint64_t delivered_bytes;
+    std::string queue_fingerprint;
 };
 
-struct UecMpTokenEvent {
-    enum Operation : uint8_t {
-        ENQUEUE_GOOD_ACK,
-        DEQUEUE_RECYCLE,
-        SELECT_FIRST_WINDOW,
-        SELECT_RANDOM_EMPTY
-    };
-    static constexpr uint64_t NO_EVENT = UINT64_MAX;
-    Operation operation;
-    uint64_t token_id;
-    uint32_t entropy;
-    uint32_t queue_depth_before;
-    uint32_t queue_depth_after;
-    uint64_t related_ack_event_seq = NO_EVENT;
-};
+void logBackground(const MotivationBackgroundRecord& record);
+std::ofstream _background;
 ```
 
-Add default no-op methods to `UecMultipath` so non-REPS algorithms require no changes:
+Set `kSchemaVersion=2`, open `<prefix>.background.csv`, write the exact headers from Step 1, emit
+the new values, and include all six streams in `close()`.
+
+- [ ] **Step 4: Add trace-only byte snapshots without changing control**
+
+Add a zero-initialized `uint64_t _motivation_new_data_bytes_sent_total` to `UecSrc`. In
+`sendNewPacket`, after a new data packet is successfully constructed and before returning its size,
+increment the counter only when motivation tracing is enabled for that flow:
 
 ```cpp
-using TokenObserver = std::function<void(const UecMpTokenEvent&)>;
-virtual UecMpSelection lastSelection() const { return {}; }
-virtual void setTokenObserver(TokenObserver) {}
-virtual void setFeedbackTraceContext(uint64_t) {}
+if (_motivation_trace_writer.enabledFor(flowId())) {
+    _motivation_new_data_bytes_sent_total += full_pkt_size;
+}
 ```
 
-Change `UecMpRepsLegacy::_next_pathid` from `list<uint32_t>` to:
+Pass `newly_recvd_bytes`, `_motivation_new_data_bytes_sent_total`, and `_cwnd` into
+`motivationLogAck`. At epoch logging, snapshot `_motivation_new_data_bytes_sent_total`,
+`_received_bytes`, and `_cwnd`. These fields are observations only and must not be read by CC or
+multipath code.
 
-```cpp
-struct Token { uint32_t entropy; uint64_t id; };
-list<Token> _next_tokens;
-uint64_t _next_token_id = 0;
-uint64_t _feedback_event_seq = UecMpTokenEvent::NO_EVENT;
-UecMpSelection _last_selection;
-TokenObserver _token_observer;
-```
-
-Emit observer rows only after the existing entropy/list state transition. Do not add any RNG call.
-
-- [ ] **Step 4: Run the trace test and a deterministic entropy regression**
-
-Compile and run the new test, then run an on/off observer fixture that constructs two instances
-with the same `srandom()` seed and compares 100 returned entropies.
-
-Expected: both tests pass and the 100-element entropy vectors are identical.
-
-- [ ] **Step 5: Commit Task 1**
+- [ ] **Step 5: Rebuild and run all four existing C++ motivation tests**
 
 ```bash
-git add htsim/sim/uec_mp.h htsim/sim/uec_mp.cpp \
-  htsim/sim/datacenter/add_motivation/common/tests/test_legacy_reps_trace.cpp
-git commit -m "trace: expose Legacy REPS token lifecycle"
+cmake --build ../build --target htsim -j2
+mkdir -p add_motivation/.test-bin
+for t in test_legacy_reps_trace test_trace_writer test_motivation_epoch test_motivation_path; do
+  g++ -std=c++17 -I.. "add_motivation/common/tests/${t}.cpp" \
+    ../build/libhtsim.a -o "add_motivation/.test-bin/${t}"
+  "add_motivation/.test-bin/${t}"
+done
 ```
 
----
+Expected: all tests exit 0; writer rows use schema version 2.
 
-### Task 2: Versioned Motivation Trace Writer and CLI
-
-**Files:**
-- Create: `htsim/sim/motivation_trace.h`
-- Create: `htsim/sim/motivation_trace.cpp`
-- Modify: `htsim/sim/CMakeLists.txt:53-130`
-- Modify: `htsim/sim/datacenter/main_uec.cpp:189-249,666-669`
-- Create: `htsim/sim/datacenter/add_motivation/common/tests/test_trace_writer.cpp`
-
-**Interfaces:**
-- Produces: `MotivationTraceWriter::configure`, `enabledFor`, `nextEventSeq`, `logAck`, `logToken`, `logEpoch`, `logPath`, and `logLink`.
-- Consumes: `UecMpTokenEvent` from Task 1.
-
-- [ ] **Step 1: Write a failing writer test**
-
-The test configures `/tmp/motivation_writer_test`, writes one token row, closes the writer, and
-asserts the exact header and `schema_version=1` row.
-
-```cpp
-MotivationTraceWriter writer;
-writer.configure("/tmp/motivation_writer_test", "run", "scenario", 13, -1);
-uint64_t seq = writer.nextEventSeq();
-writer.logToken(seq, 7, 1000, event);
-writer.close();
-assert(firstField("/tmp/motivation_writer_test.token.csv", 2) == "1");
-```
-
-- [ ] **Step 2: Verify the writer test fails to compile**
-
-Expected: `MotivationTraceWriter` is undefined.
-
-- [ ] **Step 3: Implement lazy, fail-fast CSV output**
-
-Define configuration:
-
-```cpp
-struct MotivationTraceConfig {
-    std::string prefix;
-    std::string run_id;
-    std::string scenario;
-    uint32_t seed = 0;
-    int64_t flow_filter = -1;
-};
-```
-
-The writer opens `<prefix>.{ack,token,epoch,pathmap,linkmap}.csv` only from `configure()` when
-`prefix` is non-empty. Failed opens throw `std::runtime_error`. `enabledFor(flow)` is:
-
-```cpp
-return _enabled && (_config.flow_filter < 0 ||
-                    static_cast<uint64_t>(_config.flow_filter) == flow_id);
-```
-
-Use one `uint64_t _event_seq` shared by ACK, token, and epoch event rows. Pathmap and linkmap are
-static metadata, follow the exact Section 5.6 schemas, and do not consume `event_seq`. The token CSV
-includes `related_ack_event_seq`; all CSV headers are the exact schemas in the spec.
-Do not flush every row; flush/close at process teardown and explicit test close.
-
-Production uses one process-wide writer owned by `UecSrc`; individual sources only query and log
-through that writer. This keeps `event_seq` globally monotonic across flows. The writer remains
-directly constructible so the unit test can isolate file lifecycle behavior.
-
-- [ ] **Step 4: Add CLI parsing and configuration**
-
-Add local arguments in `main_uec.cpp`:
-
-```cpp
-std::string motivation_prefix;
-std::string motivation_run_id;
-std::string motivation_scenario;
-int64_t motivation_flow_id = -1;
-```
-
-Parse:
-
-```text
--motivation_trace_prefix
--motivation_trace_flow_id
--motivation_run_id
--motivation_scenario
-```
-
-After `seed` is finalized, call one static `UecSrc::configureMotivationTrace(...)`. Validate that
-run ID and scenario contain no comma or newline.
-
-- [ ] **Step 5: Build and run the writer test**
-
-Run:
-
-```bash
-cmake --build htsim/sim/build --target htsim_uec -j2
-```
-
-Expected: `htsim_uec` builds and the writer fixture produces all headers without creating files
-when configured with an empty prefix.
-
-- [ ] **Step 6: Commit Task 2**
+- [ ] **Step 6: Commit Task 5**
 
 ```bash
 git add htsim/sim/motivation_trace.h htsim/sim/motivation_trace.cpp \
-  htsim/sim/CMakeLists.txt htsim/sim/datacenter/main_uec.cpp \
-  htsim/sim/datacenter/add_motivation/common/tests/test_trace_writer.cpp
-git commit -m "trace: add versioned motivation CSV writer"
-```
-
----
-
-### Task 3: Independent Epoch Observer and ACK/Token Correlation
-
-**Files:**
-- Create: `htsim/sim/motivation_epoch.h`
-- Modify: `htsim/sim/uec.h:153-165,248-260,511-549`
-- Modify: `htsim/sim/uec.cpp:542-670,1082-1230,1854-1982,2950-3098`
-- Create: `htsim/sim/datacenter/add_motivation/common/tests/test_motivation_epoch.cpp`
-
-**Interfaces:**
-- Produces: `MotivationEpochObserver::observe(...) -> optional<MotivationEpochResult>`.
-- Extends: `sendRecord` with `selection_source` and `source_token_id`.
-- Consumes: writer and Legacy selection metadata from Tasks 1-2.
-
-- [ ] **Step 1: Write failing pure epoch tests**
-
-Use a base RTT of 10 us, `kappa=1`, and `n_min=3`:
-
-```cpp
-MotivationEpochObserver obs(1.0, 3, 1.0, 0.0);
-assert(!obs.observe(0, 2000, true, 1, 0, 10000));
-assert(!obs.observe(5000, 9000, true, 2, 1, 10000));
-auto result = obs.observe(10000, 5000, true, 1, 0, 10000);
-assert(result);
-assert(result->raw_floor_ps == 2000);
-assert(result->raw_spread_ps == 7000);
-assert(result->sample_count == 3);
-```
-
-Also assert that `genuine=false` does not increment samples and that elapsed time with fewer than
-`n_min` samples defers closure.
-
-- [ ] **Step 2: Verify tests fail before adding the observer**
-
-Expected: missing `motivation_epoch.h`.
-
-- [ ] **Step 3: Implement the pure observer**
-
-`MotivationEpochResult` contains epoch IDs/times, sample count, raw/smoothed floor/spread, observed
-region, and entropy/path coverage counts. The observer:
-
-```cpp
-if (!genuine) return std::nullopt;
-if (_samples == 0) { _start = now; _min = _max = q; }
-else { _min = std::min(_min, q); _max = std::max(_max, q); }
-++_samples;
-if (now - _start < kappa * base_rtt || _samples < n_min) return std::nullopt;
-```
-
-Apply EWMA and `prism::decide_region` only after closure, return the result, then reset raw epoch
-state and increment epoch ID.
-
-- [ ] **Step 4: Preserve per-send selection metadata**
-
-Immediately after each `_mp->nextEntropy(...)`, read `_mp->lastSelection()`. Pass it to an expanded
-`createSendRecord(...)` and store it in `sendRecord`. Unknown metadata remains the default for
-non-Legacy algorithms.
-
-- [ ] **Step 5: Log ACK before calling `processEv` and pass explicit context**
-
-For each ACK, after final `qdelay` and genuine status are known:
-
-```cpp
-uint64_t ack_event_seq = motivationLogAck(..., send_record.selection);
-_mp->setFeedbackTraceContext(ack_event_seq);
-_mp->processEv(pkt.ev(), feedback);
-```
-
-Install the Legacy token observer once in `UecSrc` construction. Its callback obtains a fresh
-writer event sequence and logs the token event with the current `flowId()`.
-
-- [ ] **Step 6: Run unit tests and build**
-
-Expected: epoch tests pass; `htsim_uec` builds; existing Prism decomposition tests still pass.
-
-- [ ] **Step 7: Commit Task 3**
-
-```bash
-git add htsim/sim/motivation_epoch.h htsim/sim/uec.h htsim/sim/uec.cpp \
+  htsim/sim/uec.h htsim/sim/uec.cpp \
+  htsim/sim/datacenter/add_motivation/common/tests/test_trace_writer.cpp \
   htsim/sim/datacenter/add_motivation/common/tests/test_motivation_epoch.cpp
-git commit -m "trace: observe ACK epochs without changing control"
+git commit -m "trace: add motivation byte and cwnd snapshots"
 ```
 
 ---
 
-### Task 4: Physical-Path and Link Metadata
+### Task 6: Strict Trace Loading and Same-Epoch Residual Join
 
 **Files:**
-- Modify: `htsim/sim/queue.h:25-93`
-- Modify: `htsim/sim/uec.h:162-165,528-549`
-- Modify: `htsim/sim/uec.cpp:1591-1675`
-- Modify: `htsim/sim/datacenter/main_uec.cpp:1040-1050`
-
-**Interfaces:**
-- Produces: read-only `BaseQueue::bitrate()` and `queueName()`, motivation path resolver setup,
-  path IDs, used-path backlog, pathmap rows, and deduplicated linkmap rows.
-- Reuses: `FatTreeTopology::resolve_ecmp_path` already used by expJ.
-
-- [ ] **Step 1: Add a failing accessor/path metadata fixture**
-
-Extend the path-resolution fixture to assert two entropies with identical ordered queue names get
-the same physical path ID and one link row per unique queue name.
-
-- [ ] **Step 2: Add read-only queue accessors**
-
-Add only:
-
-```cpp
-linkspeed_bps bitrate() const { return _bitrate; }
-const std::string& queueName() const { return _nodename; }
-```
-
-No queue method or member used for service is changed.
-
-- [ ] **Step 3: Install the resolver when either Oracle or motivation tracing needs it**
-
-Keep Oracle behavior unchanged. Add a separate `motivationSetPathResolver(...)` call guarded by
-`MotivationTraceWriter::enabled()`. The lambda remains:
-
-```cpp
-return topology->resolve_ecmp_path(src, dest, flow_id, entropy, queues);
-```
-
-- [ ] **Step 4: Emit stable path/link metadata**
-
-Use ordered queue names, not pointers, for a stable fingerprint. Serialize ordered queue IDs with
-`|`. Set `contains_reduced_link` when `queue.bitrate() < UecSrc::_network_linkspeed`. Set the path
-bottleneck to the minimum queue bitrate. Deduplicate link rows globally by queue name.
-
-At ACK time, sum `backlogDrainTime()` across only the used resolved path. Resolution failures emit
-`resolution_status` and leave path-specific fields invalid.
-
-- [ ] **Step 5: Build and verify expJ still parses current schema**
-
-Run:
-
-```bash
-cmake --build htsim/sim/build --target htsim_uec -j2
-python3 htsim/sim/datacenter/prism_eval/expJ_oracle_validation/make_figs.py --selftest
-```
-
-Expected: build and expJ self-test pass.
-
-- [ ] **Step 6: Commit Task 4**
-
-```bash
-git add htsim/sim/queue.h htsim/sim/uec.h htsim/sim/uec.cpp \
-  htsim/sim/datacenter/main_uec.cpp
-git commit -m "trace: record motivation path and link metadata"
-```
-
----
-
-### Task 5: Trace Schema Validation and Same-Epoch Residuals
-
-**Files:**
+- Create: `htsim/sim/datacenter/add_motivation/common/__init__.py`
 - Create: `htsim/sim/datacenter/add_motivation/common/trace_schema.py`
+- Create: `htsim/sim/datacenter/add_motivation/common/residual_join.py`
 - Create: `htsim/sim/datacenter/add_motivation/common/tests/test_trace_schema.py`
+- Create: `htsim/sim/datacenter/add_motivation/common/tests/test_residual_join.py`
 
-**Interfaces:**
-- Produces: `load_trace(prefix) -> TraceBundle`, `validate_bundle(bundle)`, and
-  `attach_same_epoch_residuals(bundle, t_spray_ps) -> list[AckSample]`.
-- Consumes: the five schema-version-1 CSV files from Tasks 2-4.
+- [ ] **Step 1: Write failing schema and residual tests**
 
-- [ ] **Step 1: Write failing parser tests with temporary CSVs**
-
-Tests cover valid loading, unknown schema rejection, non-monotonic event sequence rejection,
-missing token linkage, genuine-only floor computation, and no previous-epoch leakage.
+Use `tempfile.TemporaryDirectory()` and `csv.DictWriter` to create one valid run. The tests must
+assert:
 
 ```python
-samples = attach_same_epoch_residuals(bundle, 7_000_000)
-assert [s.residual_ps for s in samples] == [0, 9_000_000]
+bundle = load_trace(prefix)
+assert bundle.run_id == "fixture"
+assert [event.event_seq for event in bundle.events] == [0, 1, 2]
+
+joined = attach_same_epoch_residuals(bundle)
+assert [row.residual_ps for row in joined] == [0, 12_000_000]
+assert joined[1].high_residual is True
 ```
+
+Additional tests create: schema version `1`, duplicate `event_seq`, mismatched `run_id`, an ACK
+whose `epoch_id` is absent, and an epoch whose recorded raw extrema disagree with genuine ACKs.
+Each must raise `TraceValidationError` with the offending filename and key.
 
 - [ ] **Step 2: Run tests to verify imports fail**
 
 ```bash
-python3 -m unittest add_motivation.common.tests.test_trace_schema -v
+python3 -m unittest discover -s htsim/sim/datacenter/add_motivation/common/tests \
+  -p 'test_*join.py' -v
+python3 -m unittest discover -s htsim/sim/datacenter/add_motivation/common/tests \
+  -p 'test_trace_schema.py' -v
 ```
 
-Expected: module not found.
+Expected: `ModuleNotFoundError` for the new modules.
 
-- [ ] **Step 3: Implement typed rows and strict validation**
+- [ ] **Step 3: Implement exact schema loading**
 
-Use frozen dataclasses for ACK, token, epoch, path, and link rows. Require `schema_version == 1`.
-Validate monotonic `event_seq` for the ACK, token, and epoch event files; path and link files are
-static metadata and have no `event_seq`. Validate unique token IDs per flow, enqueue before dequeue,
-and `source_token_id` referencing the matching flow's dequeued token.
+Define:
 
-For residual assignment, group genuine ACKs by `(flow_id, epoch_id)`, compute the minimum `qdelay_ps`
-from that exact group, and attach `max(q-floor, 0)`. Preserve ECN ACKs in the group because Prism's
-floor/spread observes genuine delay samples regardless of mark; filter ECN only in M1 metrics.
+```python
+SCHEMA_VERSION = 2
 
-- [ ] **Step 4: Run parser tests**
+class TraceValidationError(ValueError):
+    pass
 
-Expected: all schema tests pass.
+@dataclasses.dataclass(frozen=True)
+class EventRef:
+    event_seq: int
+    kind: str
+    row: dict
 
-- [ ] **Step 5: Commit Task 5**
+@dataclasses.dataclass(frozen=True)
+class TraceBundle:
+    run_id: str
+    ack: tuple[dict, ...]
+    token: tuple[dict, ...]
+    epoch: tuple[dict, ...]
+    pathmap: tuple[dict, ...]
+    linkmap: tuple[dict, ...]
+    background: tuple[dict, ...]
+    events: tuple[EventRef, ...]
+
+def load_trace(prefix: pathlib.Path | str) -> TraceBundle:
+    ...
+```
+
+Load with `csv.DictReader`, require exact headers, parse integer/float/bool fields explicitly, and
+reject extra columns. Merge ACK/token/epoch/background rows by `event_seq`; require uniqueness and
+strict monotonic order. Static metadata does not enter the event stream. Require one run ID across
+all nonempty files.
+
+- [ ] **Step 4: Implement same-epoch residual attachment**
+
+Define:
+
+```python
+@dataclasses.dataclass(frozen=True)
+class ResidualAck:
+    row: dict
+    floor_ps: int
+    spread_ps: int
+    residual_ps: int
+    high_residual: bool
+
+def attach_same_epoch_residuals(bundle, threshold_ps=14_000_000):
+    ...
+```
+
+Index epochs by `(flow_id, epoch_id)`. Include only `genuine_sample=1`. For every closed epoch,
+recompute `min(qdelay_ps)` and `max-min` from joined genuine ACKs and require exact equality with
+`raw_floor_ps` and `raw_spread_ps`. Compute `max(qdelay-floor, 0)` and never read smooth fields.
+
+- [ ] **Step 5: Run common Python tests**
 
 ```bash
-git add htsim/sim/datacenter/add_motivation/common/trace_schema.py \
-  htsim/sim/datacenter/add_motivation/common/tests/test_trace_schema.py
-git commit -m "analysis: validate motivation trace schemas"
+python3 -m unittest discover -s htsim/sim/datacenter/add_motivation/common/tests \
+  -p 'test_*.py' -v
+```
+
+Expected: all schema and join tests pass.
+
+- [ ] **Step 6: Commit Task 6**
+
+```bash
+git add htsim/sim/datacenter/add_motivation/common
+git commit -m "analysis: validate motivation traces and residual joins"
 ```
 
 ---
 
-### Task 6: Virtual Eight-Slot Shadow Replay
+### Task 7: M1 Degraded-Capacity Scenario and Reproducible Runner
+
+**Files:**
+- Modify: `htsim/sim/datacenter/fat_tree_topology.h:60-75`
+- Modify: `htsim/sim/datacenter/fat_tree_topology.cpp:900-1045,1160-1200`
+- Modify: `htsim/sim/datacenter/main_uec.cpp:80-150,540-565,850-865`
+- Create: `htsim/sim/datacenter/add_motivation/common/run_case.py`
+- Create: `htsim/sim/datacenter/add_motivation/common/tests/one_flow.cm`
+- Create: `htsim/sim/datacenter/add_motivation/common/tests/test_degraded_cli.sh`
+- Create: `htsim/sim/datacenter/add_motivation/common/tests/test_run_case.py`
+- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/configs/calibration.csv`
+- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/configs/formal.csv`
+- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/calibrate.sh`
+- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/repro.sh`
+
+- [ ] **Step 1: Write the failing degraded-capacity CLI smoke test**
+
+The fixture is:
+
+```text
+Nodes 128
+Connections 1
+16->0 start 1 size 1000000
+```
+
+The shell test runs `htsim_uec` with:
+
+```bash
+-degraded_links 2 -degraded_capacity_gbps 50
+```
+
+and requires stdout to contain `degraded_links 2`, `degraded_capacity_gbps 50`, and a topology
+diagnostic containing `Degraded:`. It rejects `Unknown parameter`.
+
+- [ ] **Step 2: Run the smoke test to verify the CLI is absent**
+
+```bash
+bash htsim/sim/datacenter/add_motivation/common/tests/test_degraded_cli.sh
+```
+
+Expected: nonzero exit with `Unknown parameter -degraded_links`.
+
+- [ ] **Step 3: Add validated degraded-link aliases**
+
+Add to `FatTreeTopologyCfg`:
+
+```cpp
+void set_degraded_link_ratio(double ratio) {
+    if (!(ratio > 0.0 && ratio <= 1.0))
+        throw std::invalid_argument("degraded link ratio must be in (0,1]");
+    _failed_link_ratio = ratio;
+}
+```
+
+Parse `-degraded_links <count>` and `-degraded_capacity_gbps <rate>` in `main_uec.cpp`. Preserve
+`-failed` as a compatibility alias. Before topology construction, require the degraded rate to be
+in `(0, normal_rate]`, call `set_failed_links(count)`, and set ratio to
+`degraded_rate/normal_rate`. Change topology diagnostics from `Failure:` to `Degraded:` without
+changing queue rate, queue size, or ECN scaling behavior.
+
+- [ ] **Step 4: Implement one-run execution and manifest writing**
+
+`run_case.py` accepts explicit arguments rather than a free-form command string:
+
+```python
+def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
+             out_dir, trace_prefix, degraded_links=0,
+             degraded_capacity_gbps=100.0, background_config=None):
+    ...
+```
+
+Build a `subprocess.run([...], check=True)` argv for `htsim_uec` with Legacy REPS, paths 8, MTU
+4150 bytes, `-q 211` (875,650 bytes, the nearest packet-granular representation of 875 KB),
+`-disable_trim`, ECN defaults, 14 us thresholds, `kappa=1`, `n_min=3`, and motivation tracing.
+Write `<run_id>.manifest.json` atomically after completion with commit, argv, seed, topology,
+traffic SHA-256, exact queue bytes, config values, schema version, phase, and output filenames.
+Never invoke a shell.
+
+- [ ] **Step 5: Add the exact M1 calibration matrix and runners**
+
+`calibration.csv` columns are:
+
+```text
+scenario_id,degraded_links,degraded_capacity_gbps,offered_load,seed
+```
+
+Rows contain all products of capacities `{75,50,25}`, link counts `{2,4,8}`, loads
+`{0.3,0.5,0.7}`, and seeds `{101,102,103}`, plus the zero-degraded symmetric control at every load
+and seed. `formal.csv` contains only the header until calibration selection writes one symmetric
+and one gray scenario for seeds `13..17`.
+
+Generate 8 MB Poisson many-to-many traffic with the existing `poisson_load.py`, 64 senders, 16
+receivers, 8 ms arrival window, and 1600 Gbps reference capacity. `calibrate.sh` writes only under
+`data/calibration`; `repro.sh smoke|full` writes under `data/smoke` or `data/formal`.
+
+- [ ] **Step 6: Run unit and CLI tests**
+
+```bash
+cmake --build htsim/sim/build --target htsim_uec -j2
+bash htsim/sim/datacenter/add_motivation/common/tests/test_degraded_cli.sh
+python3 -m unittest discover -s htsim/sim/datacenter/add_motivation/common/tests \
+  -p 'test_run_case.py' -v
+bash -n htsim/sim/datacenter/add_motivation/expM1_entropy_quality/calibrate.sh
+bash -n htsim/sim/datacenter/add_motivation/expM1_entropy_quality/repro.sh
+```
+
+Expected: all commands exit 0 and no output appears outside `add_motivation`.
+
+- [ ] **Step 7: Commit Task 7**
+
+```bash
+git add htsim/sim/datacenter/fat_tree_topology.h \
+  htsim/sim/datacenter/fat_tree_topology.cpp htsim/sim/datacenter/main_uec.cpp \
+  htsim/sim/datacenter/add_motivation/common/run_case.py \
+  htsim/sim/datacenter/add_motivation/common/tests \
+  htsim/sim/datacenter/add_motivation/expM1_entropy_quality
+git commit -m "experiment: add M1 degraded-capacity runner"
+```
+
+---
+
+### Task 8: M1 Persistence Analysis, Selection, and Figure
+
+**Files:**
+- Create: `htsim/sim/datacenter/add_motivation/common/statistics.py`
+- Create: `htsim/sim/datacenter/add_motivation/common/tests/test_statistics.py`
+- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/analyze.py`
+- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/make_figs.py`
+- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/tests/test_analyze.py`
+- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/README.md`
+
+- [ ] **Step 1: Write failing M1 metric tests**
+
+Construct `ResidualAck` fixtures for two flows and repeated entropies. Assert:
+
+```python
+summary = summarize_run(bundle, threshold_ps=14_000_000)
+assert summary.unmarked_high_ratio == 2 / 5
+assert summary.next_high_given_current_high == 1.0
+assert summary.next_high_given_current_low == 0.25
+assert summary.risk_ratio == 4.0
+assert summary.unmatched_next_use == 1
+```
+
+Add a token fixture where an `enqueue_good_ack` points to a high-residual unmarked ACK, the token is
+later dequeued, and its selected packet returns high residual. Assert both shadow-rejection exposure
+and rejected-token future-high rate. Duplicate entropy values with different token IDs must not
+collide.
+
+- [ ] **Step 2: Run tests to verify the analyzer is absent**
+
+```bash
+python3 -m unittest discover \
+  -s htsim/sim/datacenter/add_motivation/expM1_entropy_quality/tests -v
+```
+
+Expected: import failure for `analyze`.
+
+- [ ] **Step 3: Implement flow-cluster bootstrap**
+
+In `statistics.py`, implement:
+
+```python
+def cluster_bootstrap(rows, cluster_key, statistic, *, samples=10_000, seed=20260714):
+    clusters = sorted({cluster_key(row) for row in rows})
+    rng = random.Random(seed)
+    estimates = []
+    for _ in range(samples):
+        selected = [rng.choice(clusters) for _ in clusters]
+        sample = [row for cluster in selected for row in rows
+                  if cluster_key(row) == cluster]
+        estimates.append(statistic(sample))
+    estimates.sort()
+    return estimates[int(.025 * samples)], estimates[int(.975 * samples)]
+```
+
+Reject empty clusters and non-finite statistics with explicit `ValueError` messages.
+
+- [ ] **Step 4: Implement M1 metrics and next-use matching**
+
+Sort ACKs by `(flow_id,event_seq)`. For each genuine unmarked ACK, match the next genuine ACK with
+the same `(flow_id,entropy)`; the matched ACK retains its own attached epoch residual. Report match
+interval in ps and epochs. Do not impose a hidden maximum interval.
+
+Join `enqueue_good_ack.related_ack_event_seq` to ACK classification. Join later
+`dequeue_recycle.token_id` and ACK `source_token_id` by exact token identity. Compute entropy and
+deduplicated physical-path direction checks, coverage, completion rate, goodput, and P99 FCT.
+
+For formal results, require gray phi above the load-matched control in every seed, a 10,000-sample
+flow-cluster bootstrap 95% lower confidence bound for risk ratio above one, nontrivial absolute
+future-high probability, and matching entropy/path direction. Emit `accepted=0` with explicit
+failed predicates when any requirement is false.
+
+- [ ] **Step 5: Implement calibration-only formal selection**
+
+Require every seed in a candidate cell to satisfy completion `>=0.99`, nonzero unmarked
+denominator, at least 75% of flows with entropy coverage `>=6` and path coverage `>=2`, gray phi
+above load-matched control, and risk-ratio direction `>1`. Rank by the minimum-over-seeds phi
+increase, then lower degraded-link count, then higher capacity. Write the selected control and gray
+rows for exactly seeds `13..17` to `configs/formal.csv` using atomic replacement.
+
+Formal analysis never writes or changes `formal.csv`.
+
+- [ ] **Step 6: Implement the three-panel M1 figure**
+
+Reuse `prism_eval/common/plot_style.py`. Read only generated aggregate CSV files. Render:
+
+1. symmetric/gray ECDF of unmarked residual with a 14 us vertical line;
+2. next-use future-high probability for current-low/current-high with flow-cluster 95% CIs;
+3. shadow-rejection exposure and rejected-token future-high rate.
+
+Save exactly:
+
+```text
+figs/m1_entropy_quality.png
+figs/m1_entropy_quality.pdf
+```
+
+- [ ] **Step 7: Run M1 unit tests and plot self-test**
+
+```bash
+python3 -m unittest discover \
+  -s htsim/sim/datacenter/add_motivation/expM1_entropy_quality/tests -v
+python3 htsim/sim/datacenter/add_motivation/expM1_entropy_quality/make_figs.py --selftest
+```
+
+Expected: tests pass; self-test creates project-local synthetic PNG/PDF and removes its synthetic
+CSV fixture.
+
+- [ ] **Step 8: Commit Task 8**
+
+```bash
+git add htsim/sim/datacenter/add_motivation/common/statistics.py \
+  htsim/sim/datacenter/add_motivation/common/tests/test_statistics.py \
+  htsim/sim/datacenter/add_motivation/expM1_entropy_quality
+git commit -m "analysis: add M1 entropy-quality evidence"
+```
+
+---
+
+### Task 9: Deterministic Fixed-Path M2 Background Traffic
+
+**Files:**
+- Create: `htsim/sim/motivation_background.h`
+- Create: `htsim/sim/motivation_background.cpp`
+- Modify: `htsim/sim/CMakeLists.txt:53-131`
+- Modify: `htsim/sim/datacenter/main_uec.cpp:70-150,250-280,930-960,1038-1260`
+- Modify: `htsim/sim/datacenter/add_motivation/common/tests/test_trace_writer.cpp`
+- Create: `htsim/sim/datacenter/add_motivation/common/tests/test_motivation_background.cpp`
+
+- [ ] **Step 1: Write a failing deterministic-source test**
+
+The test writes this strict config:
+
+```text
+background_id,src,dst,path_index,rate_gbps,start_ps,stop_ps
+0,16,0,3,25,200000000,1200000000
+```
+
+It asserts parser values, rejects duplicate IDs and `stop_ps<=start_ps`, then connects a source to a
+direct test route and checks packet count over a fixed interval. Seed `random()`, run an
+absent-background fixture, and assert the next random value is unchanged.
+
+- [ ] **Step 2: Compile to verify the source is absent**
+
+```bash
+cd htsim/sim/datacenter
+mkdir -p add_motivation/.test-bin
+g++ -std=c++17 -I.. add_motivation/common/tests/test_motivation_background.cpp \
+  ../build/libhtsim.a -o add_motivation/.test-bin/test_motivation_background
+```
+
+Expected: `motivation_background.h` is missing.
+
+- [ ] **Step 3: Implement strict config parsing and a no-RNG source**
+
+Define:
+
+```cpp
+struct MotivationBackgroundSpec {
+    uint32_t background_id;
+    uint32_t src;
+    uint32_t dst;
+    uint32_t path_index;
+    linkspeed_bps rate;
+    simtime_picosec start_ps;
+    simtime_picosec stop_ps;
+};
+
+std::vector<MotivationBackgroundSpec>
+loadMotivationBackgroundConfig(const std::string& path);
+```
+
+The parser requires the exact header, decimal integer fields, finite positive rate, unique IDs,
+`src!=dst`, and `start<stop`. It rejects whitespace-surrounded values rather than guessing.
+
+Implement `MotivationBackgroundSrc` using `CbrPacket` with a fixed 1500-byte packet and period
+`ceil(1500*8e12/rate)`. It schedules from `start_ps` through but not including `stop_ps`, calls no
+RNG API, and exposes sent bytes. Implement `MotivationBackgroundSink` with delivered-byte count.
+
+- [ ] **Step 4: Install background routes without touching foreground multipath**
+
+Parse:
+
+```text
+-motivation_background_config <csv>
+```
+
+After all foreground UEC flows and FIBs are installed, call
+`topo[0]->get_bidir_paths(src,dst,false)`, validate `path_index`, clone that one route, append the
+background sink, and connect the deterministic source. Enumerate `BaseQueue` elements in the route
+to construct a pipe-delimited `queue_fingerprint`.
+
+Log one `start` record at `start_ps` and one `finish` record at `stop_ps` with configured rate and
+delivered bytes. Both consume the shared motivation `event_seq`. A missing background config must
+allocate no sources and call no RNG.
+
+- [ ] **Step 5: Rebuild and run background plus writer tests**
+
+```bash
+cmake --build htsim/sim/build --target htsim_uec -j2
+cd htsim/sim/datacenter
+mkdir -p add_motivation/.test-bin
+for t in test_trace_writer test_motivation_background; do
+  g++ -std=c++17 -I.. "add_motivation/common/tests/${t}.cpp" \
+    ../build/libhtsim.a -o "add_motivation/.test-bin/${t}"
+  "add_motivation/.test-bin/${t}"
+done
+```
+
+Expected: both tests exit 0; the source emits the exact deterministic byte count.
+
+- [ ] **Step 6: Commit Task 9**
+
+```bash
+git add htsim/sim/motivation_background.h htsim/sim/motivation_background.cpp \
+  htsim/sim/CMakeLists.txt htsim/sim/datacenter/main_uec.cpp \
+  htsim/sim/datacenter/add_motivation/common/tests/test_trace_writer.cpp \
+  htsim/sim/datacenter/add_motivation/common/tests/test_motivation_background.cpp
+git commit -m "experiment: add deterministic motivation background traffic"
+```
+
+---
+
+### Task 10: Legacy FIFO Reconstruction and Eight-Slot Shadow Rounds
 
 **Files:**
 - Create: `htsim/sim/datacenter/add_motivation/common/shadow_replay.py`
 - Create: `htsim/sim/datacenter/add_motivation/common/tests/test_shadow_replay.py`
 
-**Interfaces:**
-- Produces: `replay_shadow(bundle, t_cc_ps, t_spray_ps, slots=8) -> ReplayResult`.
-- Consumes: validated `TraceBundle` and same-epoch ACK residuals from Task 5.
-
 - [ ] **Step 1: Write failing hand-authored replay tests**
 
-Create event fixtures for:
+Create event fixtures covering:
 
-1. eight seeded tokens all returning low residual and completing one round;
-2. high residual invalidation that does not complete its slot;
-3. later low-residual enqueue completing one pending slot;
-4. ECN and fallback ACKs not completing pending slots;
-5. duplicate entropy values with distinct token IDs;
-6. flow end before completion producing `right_censored=1`; and
-7. `delta_s` classifications for epsilon `0,1,2,4 us`.
+- FIFO enqueue/dequeue order and duplicate entropy values with distinct token IDs;
+- HOLD entry with fewer than eight queued tokens;
+- seeded low-residual ACK completion;
+- high residual and ECN invalidation leaving a slot pending;
+- invalidation alone not completing a slot;
+- low-residual replacement ACK plus linked enqueue completing one pending slot;
+- flow finish and HOLD exit right-censoring;
+- round completion followed by next-epoch `S_end`;
+- normalized `delta_S=(S_ref-S_end)/S_ref` direction.
 
-Assert explicitly:
+The core positive fixture asserts:
 
 ```python
-assert invalidation_event.slot_complete is False
-assert replacement_event.slot_complete is True
-assert round_result.delta_s_ps == s_end_ps - s_ref_ps
+rounds = replay_shadow(bundle, slots=8, threshold_ps=14_000_000)
+assert rounds[0].complete is True
+assert rounds[0].s_ref_ps == 20_000_000
+assert rounds[0].s_end_ps == 12_000_000
+assert rounds[0].delta_s == 0.4
 ```
 
-- [ ] **Step 2: Run tests to verify replay is absent**
-
-Expected: import failure.
-
-- [ ] **Step 3: Implement real FIFO reconstruction**
-
-Maintain per-flow `deque[token_id]`. Apply `enqueue_good_ack` and `dequeue_recycle` in shared
-`event_seq` order and reject mismatches. At HOLD entry, copy the first eight queued token IDs into
-virtual slots and mark remaining slots pending.
-
-- [ ] **Step 4: Implement strict virtual completion semantics**
-
-For seeded slots, match ACKs by `source_token_id`. A genuine, unmarked ACK with residual below
-`T_spray` completes the slot. Marked/high/fallback ACKs leave it pending. A later genuine,
-unmarked, low-residual ACK not already used to complete another seeded slot fills exactly one
-pending slot in deterministic slot-index order. Invalidation alone never completes a slot.
-
-When all slots complete, wait for the next epoch row before setting `S_end`. If no such epoch exists,
-right-censor the round.
-
-- [ ] **Step 5: Run replay tests**
-
-Expected: all replay fixtures pass, including duplicate entropy/token isolation.
-
-- [ ] **Step 6: Commit Task 6**
+- [ ] **Step 2: Run the test to verify the module is absent**
 
 ```bash
-git add htsim/sim/datacenter/add_motivation/common/shadow_replay.py \
-  htsim/sim/datacenter/add_motivation/common/tests/test_shadow_replay.py
-git commit -m "analysis: replay virtual Prism validation rounds"
+python3 -m unittest discover -s htsim/sim/datacenter/add_motivation/common/tests \
+  -p 'test_shadow_replay.py' -v
 ```
 
----
+Expected: import failure for `shadow_replay`.
 
-### Task 7: Experiment Scaffolding and Reproduction Library
+- [ ] **Step 3: Implement exact FIFO reconstruction**
 
-**Files:**
-- Create: `htsim/sim/datacenter/add_motivation/.gitignore`
-- Create: `htsim/sim/datacenter/add_motivation/README.md`
-- Create: `htsim/sim/datacenter/add_motivation/common/run_motivation.sh`
-- Create: both experiment directories and their `.gitignore`, `README.md`, `configs/calibration.csv`,
-  `calibrate.sh`, and `repro.sh` files.
-
-**Interfaces:**
-- Produces: one-run wrapper that delegates to `prism_eval/common/run_lib.sh` and emits a trace prefix.
-- Consumes: CLI and trace files from Tasks 2-4.
-
-- [ ] **Step 1: Create ignored-data rules and directory READMEs**
-
-Ignore:
-
-```text
-data/raw/
-data/calibration/
-data/shadow/
-data/*.cm
-data/*.stdout
-data/*.flow.txt
-data/*.idmap
-data/mplconfig/
-__pycache__/
-```
-
-Do not ignore `configs/*.csv`, `data/summary.csv`, or `figs/`.
-
-- [ ] **Step 2: Implement the one-run wrapper**
-
-`run_motivation.sh` accepts:
-
-```text
-CC LB FAILED TOPO SEED CM TAG OUTDIR SCENARIO
-```
-
-It sets:
-
-```bash
-TRACE_PREFIX="$OUTDIR/raw/$TAG"
-EXTRA_ARGS="${EXTRA_ARGS:-} -motivation_trace_prefix $TRACE_PREFIX \
-  -motivation_run_id $TAG -motivation_scenario $SCENARIO"
-bash "$PRISM_COMMON/run_lib.sh" "$CC" "$LB" "$FAILED" "$TOPO" \
-  "$SEED" "$CM" flow "$TAG" "$OUTDIR"
-```
-
-Require `LB=reps`; abort on `freezing` so the experiment cannot silently change substrate.
-
-- [ ] **Step 3: Add exact calibration matrices**
-
-M1 `calibration.csv` has all products of `failed={0,2,4,8}`, `load={30,50,70}`, and
-`seed={101,102,103}`. M2 has `failed={2,4,8,12}`, `load={20,40,60,80}`, and the same seeds.
-
-- [ ] **Step 4: Add smoke/full runner modes**
-
-`repro.sh smoke` runs one declared config with seed 13. `repro.sh full` refuses to run unless
-`configs/formal.csv` has at least one data row and all seeds are exactly `13..17`.
-
-- [ ] **Step 5: Syntax-check all shell scripts**
-
-```bash
-bash -n add_motivation/common/run_motivation.sh
-bash -n add_motivation/expM1_entropy_quality/calibrate.sh
-bash -n add_motivation/expM1_entropy_quality/repro.sh
-bash -n add_motivation/expM2_redistribution_progress/calibrate.sh
-bash -n add_motivation/expM2_redistribution_progress/repro.sh
-```
-
-Expected: no output and exit code 0.
-
-- [ ] **Step 6: Commit Task 7**
-
-```bash
-git add htsim/sim/datacenter/add_motivation
-git commit -m "experiment: scaffold Prism add-motivation runs"
-```
-
----
-
-### Task 8: M1 Metrics and Statistical Tests
-
-**Files:**
-- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/analyze.py`
-- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/tests/test_analyze.py`
-
-**Interfaces:**
-- Produces: per-run and aggregate M1 summary rows, deterministic flow-cluster bootstrap, and formal
-  selection from calibration-only summaries.
-- Consumes: `trace_schema.load_trace` and attached residuals.
-
-- [ ] **Step 1: Write failing synthetic M1 tests**
-
-Construct two flows where high-current samples have future-high probability `0.75` and low-current
-samples have `0.25`; assert `RR=3`. Include entropy collisions and unmatched last samples.
-
-- [ ] **Step 2: Implement next-use matching and metrics**
-
-Sort by `(flow_id, entropy, time_ps, event_seq)` and pair each sample with the next sample in that
-group. Compute unmarked high-residual rate, rejected-token exposure through
-`related_ack_event_seq`, next-use probabilities, unmatched rate, and entropy/path variants.
-
-- [ ] **Step 3: Implement deterministic cluster bootstrap**
-
-Resample flow IDs with replacement using `numpy.random.default_rng(20260714)`, 2000 replicates.
-Compute percentile 95% intervals for high/low future risks and RR. A zero denominator produces an
-invalid-reason field, not infinity.
-
-- [ ] **Step 4: Implement calibration-only formal selection**
-
-Reject cells with completion `<0.99`, path coverage below the configured minimum, or missing
-high/low next-use groups. Select the gray cell with the largest minimum-over-calibration-seeds
-unmarked-high rate among cells whose RR direction is above 1 in all calibration seeds. Pair it with
-the `failed=0` control at the same load. Write only those fixed scenario parameters to
-`configs/formal.csv`.
-
-- [ ] **Step 5: Run M1 tests**
-
-Expected: synthetic RR, collision, zero-denominator, and calibration selection tests pass.
-
-- [ ] **Step 6: Commit Task 8**
-
-```bash
-git add htsim/sim/datacenter/add_motivation/expM1_entropy_quality/analyze.py \
-  htsim/sim/datacenter/add_motivation/expM1_entropy_quality/tests/test_analyze.py
-git commit -m "analysis: add M1 entropy-quality metrics"
-```
-
----
-
-### Task 9: M1 Figures and Calibration Lock
-
-**Files:**
-- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/make_figs.py`
-- Modify: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/README.md`
-- Generate: `configs/formal.csv`, `data/summary.csv`, and `figs/m1_entropy_quality.{png,pdf}`
-
-**Interfaces:**
-- Produces: approved three-panel M1 figure and a locked formal matrix.
-
-- [ ] **Step 1: Add a plotting self-test**
-
-Use an in-memory synthetic summary and assert the renderer creates three axes with titles containing
-`Residual`, `Next-use risk`, and `Token exposure`.
-
-- [ ] **Step 2: Implement the renderer**
-
-Use `prism_eval/common/plot_style.py`. Panel A is an unmarked residual ECDF; Panel B is low/high
-next-use future-high probability with flow-cluster CIs; Panel C is actual-token rejection exposure
-and future-high risk. Put per-seed/path correlation outputs in appendix files, not the main panel.
-
-- [ ] **Step 3: Run M1 calibration**
-
-```bash
-cd htsim/sim/datacenter
-bash add_motivation/expM1_entropy_quality/calibrate.sh
-python3 add_motivation/expM1_entropy_quality/analyze.py --calibration --select-formal
-```
-
-Expected: all 36 calibration runs are present or explicitly failed; `formal.csv` contains one
-symmetric and one gray row selected without reading formal seeds.
-
-- [ ] **Step 4: Review and commit the locked M1 matrix**
-
-Record selected capacity/load, completion, coverage, high-residual rate, and RR direction in the
-README. Commit calibration summaries only if small; keep raw calibration traces ignored.
-
-- [ ] **Step 5: Run the always-on original Prism robustness arm**
-
-For the locked symmetric and gray scenarios, run the same five formal seeds with `CC=prism` and:
-
-```text
--prism_smooth_beta 1 -prism_hysteresis 0
--prism_engage_spread 0 -prism_engage_mult 0
--target_q_delay 14 -prism_t_spray 7 -prism_kappa 2 -prism_n_min 3
-```
-
-Store these rows under `arm=original_prism_appendix`. They must not replace the `REPS+NSCC` main
-result or participate in calibration selection.
-
-- [ ] **Step 6: Commit Task 9**
-
-```bash
-git add htsim/sim/datacenter/add_motivation/expM1_entropy_quality
-git commit -m "experiment: calibrate M1 entropy-quality scenarios"
-```
-
----
-
-### Task 10: M2 Capacity Witness and Round Metrics
-
-**Files:**
-- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/analyze.py`
-- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/tests/test_analyze.py`
-
-**Interfaces:**
-- Produces: deduplicated cut capacity, run/seed round summaries, epsilon sensitivity, and
-  calibration-only recoverable/persistent selection.
-- Consumes: `shadow_replay.replay_shadow`, pathmap/linkmap, sink/flow metrics.
-
-- [ ] **Step 1: Write failing capacity and classification tests**
-
-Use two paths sharing one healthy cut link and one reduced link. Assert shared healthy capacity is
-counted once. Test:
+Define:
 
 ```python
-assert classify_capacity(600, 800, 950) == "recoverable"
-assert classify_capacity(850, 800, 950) == "persistent"
-assert classify_capacity(1000, 800, 950) == "overload"
+@dataclasses.dataclass
+class LegacyToken:
+    token_id: int
+    entropy: int
+
+class LegacyFifo:
+    def apply(self, token_event): ...
+    def snapshot(self, limit=8): ...
 ```
 
-- [ ] **Step 2: Implement stable cut-link deduplication**
+`enqueue_good_ack` appends. `dequeue_recycle` must match and remove the current front token;
+otherwise raise `ReplayError`. First-window and random-empty selections do not mutate the FIFO.
 
-Identify the destination-pod ingress cut from ordered queue names and deduplicate by `queue_id`.
-Compute healthy capacity from links with `reduced_speed=0` and effective capacity from all cut
-links. If a path cannot identify the cut, mark capacity invalid rather than summing path bottlenecks.
+- [ ] **Step 4: Implement virtual slot and round state**
 
-- [ ] **Step 3: Aggregate replay metrics**
+Define states `SEEDED`, `PENDING`, and `COMPLETE`, keyed by slot index. Seed from the first eight FIFO
+tokens at the first post-injection epoch whose `observed_region` is `hold`; missing tokens are
+pending. Associate seeded sends/ACKs through `source_token_id`, not entropy.
 
-Output episode count/fraction, completion/right-censor rates, completion latency, Hold duration,
-`S_ref`, `S_end`, `delta_s`, literal no-progress, epsilon rates, FIFO depth, replacements, coverage,
-cwnd, offered load, measured sink rate, and both capacities. Bootstrap by flow as in M1.
+On ACK, store admission by its ACK `event_seq`. On a linked enqueue:
 
-- [ ] **Step 4: Implement calibration-only pair selection**
+- if its ACK is genuine, unmarked, and residual `<14 us`, use it to complete the first pending slot;
+- otherwise leave all pending slots unchanged.
 
-Recoverable candidates require `L_offered < C_healthy`, predominantly low floor, completed rounds
-in every calibration seed, and negative median `delta_s` in every calibration seed. Persistent
-candidates require `C_healthy < L_offered < C_effective`, predominantly low floor, completed rounds,
-and majority literal no-progress in every calibration seed. Choose the pair with the largest minimum
-round count. If no pair exists, write `selection_status=blocked` and do not invent a formal matrix.
+A seeded token completes only after its selected packet returns a genuine admitted ACK. A rejected
+seed becomes pending. Complete the round only when all eight slots are complete. Record `S_end` at
+the next epoch boundary. Censor on HOLD exit or end-of-trace before that boundary.
 
-- [ ] **Step 5: Run M2 tests**
+- [ ] **Step 5: Run replay and common tests**
 
-Expected: shared-link capacity, overload exclusion, right-censor exclusion, epsilon sensitivity,
-and deterministic pair selection tests pass.
+```bash
+python3 -m unittest discover -s htsim/sim/datacenter/add_motivation/common/tests \
+  -p 'test_*.py' -v
+```
+
+Expected: all tests pass, including duplicate-entropy token isolation and censoring.
 
 - [ ] **Step 6: Commit Task 10**
 
 ```bash
-git add htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/analyze.py \
-  htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/tests/test_analyze.py
-git commit -m "analysis: add M2 redistribution progress metrics"
+git add htsim/sim/datacenter/add_motivation/common/shadow_replay.py \
+  htsim/sim/datacenter/add_motivation/common/tests/test_shadow_replay.py
+git commit -m "analysis: replay motivation shadow validation rounds"
 ```
 
 ---
 
-### Task 11: M2 Figures and Calibration Lock
+### Task 11: M2 Workload, Capacity Witness, Selection, and Figure
 
 **Files:**
+- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/gen_workload.py`
+- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/configs/calibration.csv`
+- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/configs/formal.csv`
+- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/analyze.py`
 - Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/make_figs.py`
-- Modify: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/README.md`
-- Generate: `configs/formal.csv`, `data/summary.csv`, and
-  `figs/m2_redistribution_progress.{png,pdf}`
+- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/tests/test_analyze.py`
 
-**Interfaces:**
-- Produces: recoverable/persistent event-aligned figure and locked formal scenarios.
+- [ ] **Step 1: Write failing workload and capacity tests**
 
-- [ ] **Step 1: Add a plotting self-test**
+Assert `gen_workload.py` creates deterministic foreground `.cm` and background CSV files for
+`foreground_flows=16`, `hot_path_groups=4`, `background_utilization=0.5`, and a fixed seed. Starts
+must be 1 ps for foreground and `20E` for background; stops must be `120E`. The test passes an
+explicit `base_rtt_ps` and verifies those two epoch conversions exactly.
 
-Synthetic data must render two scenario columns, `F/S/S_ref` top panels, cwnd/state lower panels,
-and round start/complete markers without overlapping labels.
+Build path/link/background fixtures with duplicate queue appearances and assert:
 
-- [ ] **Step 2: Implement event-aligned aggregation and rendering**
+```python
+witness = capacity_witness(bundle, round_start_ps, round_end_ps)
+assert witness.c_healthy_gbps == 400
+assert witness.c_hot_residual_gbps == 100
+assert witness.c_effective_residual_gbps == 500
+assert witness.classify(l_foreground_gbps=350) == "recoverable"
+assert witness.classify(l_foreground_gbps=450) == "persistent"
+```
 
-Use round-start time as zero. Plot per-seed light traces plus flow-cluster median/CI. Shade Hold,
-draw `T_cc`/`T_spray`, and add insets for `delta_s`, completion, and no-progress. Capacity and
-censoring remain in a companion CSV/table, not crowded into the time-series panels.
+The test must fail if a background fingerprint lacks exactly one target-pod cut queue matching
+`^CS[0-9]+->US[0-9]+\([0-9]+\)$`.
 
-- [ ] **Step 3: Run M2 calibration and deterministic selection**
+- [ ] **Step 2: Run tests to verify M2 modules are absent**
 
 ```bash
-cd htsim/sim/datacenter
-bash add_motivation/expM2_redistribution_progress/calibrate.sh
-python3 add_motivation/expM2_redistribution_progress/analyze.py \
-  --calibration --select-formal
+python3 -m unittest discover \
+  -s htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/tests -v
 ```
 
-Expected: either a locked recoverable/persistent pair with all selection evidence, or an explicit
-blocked/negative calibration result. Do not proceed to formal runs if blocked.
+Expected: import failure for `analyze` and `gen_workload`.
 
-- [ ] **Step 4: Run the Prism v2 appendix smoke on selected scenarios**
+- [ ] **Step 3: Implement deterministic M2 workload generation**
 
-Use the same scenarios with:
+Before calibration, run one traced no-background cross-pod flow and take the minimum positive
+`base_rtt_ps` over its genuine ACKs; require at least 95% of genuine ACKs to equal that minimum.
+Store it in `configs/base_rtt_ps.txt` and retain the preflight manifest. `gen_workload.py` requires
+this value and refuses a missing or nonpositive value.
+
+Generate cross-pod 256 MB foreground flows with explicit flow IDs, start at 1 ps, and duration
+longer than `120E`. Generate background specs with distinct route indices and aggregate each hot
+group's configured rate to `utilization*100 Gbps`. Use local `random.Random(seed)` only for endpoint
+pairing; sorted output must be byte-identical at the same seed.
+
+The coarse grid is:
 
 ```text
--prism_smooth_beta 0.3 -prism_hysteresis 0.25
--prism_engage_mult 2 -prism_disengage_ratio 0.7
+foreground_flows        8,16,32
+hot_path_groups         2,4,6
+background_utilization  0.25,0.50,0.75
+seed                    101
 ```
 
-This appendix is observational and cannot replace the always-on main result.
+Confirmation uses seeds `101,102,103` for the best three recoverable and best three persistent
+coarse cells. `formal.csv` remains header-only until confirmation selection.
 
-- [ ] **Step 5: Commit Task 11**
+- [ ] **Step 4: Implement capacity and offered-load evidence**
+
+Deduplicate target-pod cut links by queue name from `pathmap`, `linkmap`, and background
+fingerprints. Compute background load per hot cut link from configured start records and verify it
+against finish delivery within 5%.
+
+For each round, compute foreground new-data offered rate from differences in
+`new_data_bytes_sent_total` between bracketing epoch records, divided by elapsed simulation time.
+Do not substitute sink throughput. Compute `C_healthy`, `C_hot_residual`, and
+`C_effective_residual` exactly as the spec defines.
+
+- [ ] **Step 5: Implement M2 summaries and deterministic pair selection**
+
+Summarize episode occupancy, completion, censoring, round duration, `F/S/S_ref/S_end/delta_S`,
+HOLD duration, cwnd, FIFO depth, virtual replacement counts, admission counts, background delivery,
+capacity, offered load, queueing delay, and coverage. Report literal no-progress plus diagnostic
+tolerances of 1, 2, and 4 us without changing primary classification.
+
+Recoverable confirmation requires every calibration seed to satisfy the recoverable capacity
+relation and median `delta_S>0`. Persistent confirmation requires every seed to satisfy the
+persistent capacity relation and majority literal no-progress, with at least 80% of round epochs
+below `T_cc`.
+
+Rank by minimum outcome margin, then minimum capacity-boundary margin, then lower background rate.
+Write exactly one recoverable and one persistent configuration for seeds `13..17` atomically.
+
+For formal acceptance, recoverable requires median `delta_S>0` in at least four seeds and a
+10,000-sample flow-cluster bootstrap 95% lower bound above zero. Persistent requires majority
+literal no-progress in at least four seeds, the capacity relation in every valid round, at least
+80% low-floor epochs, no tolerance-direction reversal, and completed rounds distributed across at
+least half of traced foreground flows. Emit every failed predicate in `summary.csv`.
+
+- [ ] **Step 6: Implement the two-column M2 figure**
+
+Read aggregate CSV only. For recoverable and persistent columns, render event-aligned raw `F`, `S`,
+and `S_ref`, the 14 us threshold, round completion markers, actual cwnd, and actual Prism state with
+HOLD shading. Add compact five-seed `delta_S`, completion, and censoring insets. Save:
+
+```text
+figs/m2_redistribution_progress.png
+figs/m2_redistribution_progress.pdf
+```
+
+Labels must say `shadow validation round`; they must not say shadow recycling caused the observed
+spread.
+
+- [ ] **Step 7: Run M2 unit and plot tests**
+
+```bash
+python3 -m unittest discover \
+  -s htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/tests -v
+python3 htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/make_figs.py --selftest
+```
+
+Expected: all tests pass and project-local self-test figures are generated.
+
+- [ ] **Step 8: Commit Task 11**
 
 ```bash
 git add htsim/sim/datacenter/add_motivation/expM2_redistribution_progress
-git commit -m "experiment: calibrate M2 redistribution scenarios"
+git commit -m "analysis: add M2 redistribution progress evidence"
 ```
 
 ---
 
-### Task 12: Behavior-Invariance Smoke and Full Formal Runs
+### Task 12: M2 Runners, Documentation, and End-to-End Verification
 
 **Files:**
-- Modify: both experiment READMEs with verified commands/results.
-- Generate: final summaries and figures for M1 and M2.
+- Create: `htsim/sim/datacenter/add_motivation/README.md`
+- Create: `htsim/sim/datacenter/add_motivation/.gitignore`
+- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/calibrate.sh`
+- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/repro.sh`
+- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/README.md`
+- Create: `htsim/sim/datacenter/add_motivation/expM1_entropy_quality/.gitignore`
+- Create: `htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/.gitignore`
 
-**Interfaces:**
-- Verifies all prior tasks and produces final committed Motivation artifacts.
+- [ ] **Step 1: Add exact M2 run modes**
 
-- [ ] **Step 1: Run the complete local test suite**
+`calibrate.sh` supports `coarse` and `confirm`. `repro.sh` supports `smoke` and `full`.
 
-```bash
-cmake --build htsim/sim/build --target htsim_uec -j2
-python3 -m unittest discover \
-  htsim/sim/datacenter/add_motivation/common/tests -p 'test_*.py' -v
-python3 -m unittest discover \
-  htsim/sim/datacenter/add_motivation/expM1_entropy_quality/tests -p 'test_*.py' -v
-python3 -m unittest discover \
-  htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/tests -p 'test_*.py' -v
+Every M2 run invokes:
+
+```text
+sender CC             prism
+load balancing        reps
+paths                  8
+T_cc/T_spray           14 us
+kappa/n_min            1/3
+smooth/hysteresis      1/0
+engage thresholds      0/0
+background config      generated project-local CSV
+trace prefix           project-local run prefix
 ```
 
-Expected: build succeeds and every test passes.
+`confirm` refuses to run until coarse summaries exist. `full` refuses to run unless `formal.csv`
+contains one recoverable and one persistent row for all five formal seeds.
 
-- [ ] **Step 2: Run behavior-invariance simulations**
+- [ ] **Step 2: Add ignore rules that preserve final artifacts**
 
-Run one small symmetric seed twice with identical arguments, once without trace and once with
-`-motivation_trace_prefix`. Hash flow output and `PRISM_EPOCH` output:
+Ignore raw `.dat`, `.stdout`, decoded temporary logs, generated traffic matrices, per-event raw
+traces, smoke self-test files, and `add_motivation/.test-bin/`. Do not ignore:
 
-```bash
-sha256sum data/off.flow.txt data/on.flow.txt
-sha256sum data/off.epoch.csv data/on.epoch.csv
+```text
+configs/*.csv
+data/formal/summary.csv
+data/formal/rounds.csv
+figs/*.png
+figs/*.pdf
+README.md
 ```
 
-Expected: each pair has identical SHA256. Also require no trace files in the off run.
+- [ ] **Step 3: Document commands, fields, and claim boundaries**
 
-- [ ] **Step 3: Run M1/M2 smoke modes and validate schema/replay**
+The top README links M1 and M2 and states that Task 1 is excluded. Each experiment README contains
+exact build, smoke, calibration, selection, formal, analysis, and plotting commands; project-local
+output paths; CSV field definitions; negative-result handling; and the distinction between observed
+facts, shadow results, capacity inference, and future mechanism claims.
+
+- [ ] **Step 4: Run syntax, unit, build, and behavior-neutrality gates**
+
+```bash
+bash -n htsim/sim/datacenter/add_motivation/expM1_entropy_quality/calibrate.sh
+bash -n htsim/sim/datacenter/add_motivation/expM1_entropy_quality/repro.sh
+bash -n htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/calibrate.sh
+bash -n htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/repro.sh
+python3 -m unittest discover -s htsim/sim/datacenter/add_motivation -p 'test_*.py' -v
+cmake --build htsim/sim/build --target htsim_uec parse_output -j2
+```
+
+Run one no-background seed with tracing disabled and enabled. Hash decoded foreground flow/sink
+output, entropy sequence, actual Prism epoch output, and cwnd output. Expected: hashes match exactly.
+
+- [ ] **Step 5: Run project-local smoke experiments**
 
 ```bash
 cd htsim/sim/datacenter
@@ -895,51 +962,68 @@ bash add_motivation/expM1_entropy_quality/repro.sh smoke
 bash add_motivation/expM2_redistribution_progress/repro.sh smoke
 ```
 
-Expected: all five trace files exist per run; schema validation and shadow replay exit 0.
+Expected: each produces valid schema-v2 traces, a manifest, aggregate CSV, and PNG/PDF under its
+own `data/smoke` and `figs` paths.
 
-- [ ] **Step 4: Run M1 formal matrix and render**
+- [ ] **Step 6: Run calibration and lock formal configurations**
 
 ```bash
+cd htsim/sim/datacenter
+bash add_motivation/expM1_entropy_quality/calibrate.sh
+python3 add_motivation/expM1_entropy_quality/analyze.py --calibration --select-formal
+bash add_motivation/expM2_redistribution_progress/calibrate.sh coarse
+python3 add_motivation/expM2_redistribution_progress/analyze.py --coarse --select-confirmation
+bash add_motivation/expM2_redistribution_progress/calibrate.sh confirm
+python3 add_motivation/expM2_redistribution_progress/analyze.py --confirmation --select-formal
+```
+
+Expected: M1 has one symmetric/gray pair and M2 one recoverable/persistent pair, or the scripts
+write a project-local negative calibration report and refuse formal execution without weakening
+criteria.
+
+- [ ] **Step 7: Run all formal seeds and render final artifacts**
+
+If both calibrations lock valid configurations:
+
+```bash
+cd htsim/sim/datacenter
 bash add_motivation/expM1_entropy_quality/repro.sh full
 python3 add_motivation/expM1_entropy_quality/analyze.py --formal
 python3 add_motivation/expM1_entropy_quality/make_figs.py --render
-```
-
-Run both `reps_nscc_main` and the predeclared `original_prism_appendix` rows. Record whether all M1
-decision conditions hold. Preserve an honest negative result if RR or path-level consistency
-fails.
-
-- [ ] **Step 5: Run M2 formal matrix and render if calibration selected a pair**
-
-```bash
 bash add_motivation/expM2_redistribution_progress/repro.sh full
 python3 add_motivation/expM2_redistribution_progress/analyze.py --formal
 python3 add_motivation/expM2_redistribution_progress/make_figs.py --render
 ```
 
-If calibration was blocked, skip these commands and document the blocking evidence instead.
+Verify these exact files exist and are nonempty:
 
-- [ ] **Step 6: Run final integrity checks**
-
-```bash
-git diff --check
-bash -n htsim/sim/datacenter/add_motivation/common/run_motivation.sh
-python3 htsim/sim/datacenter/add_motivation/expM1_entropy_quality/make_figs.py --selftest
-python3 htsim/sim/datacenter/add_motivation/expM2_redistribution_progress/make_figs.py --selftest
+```text
+add_motivation/expM1_entropy_quality/data/formal/summary.csv
+add_motivation/expM1_entropy_quality/figs/m1_entropy_quality.pdf
+add_motivation/expM1_entropy_quality/figs/m1_entropy_quality.png
+add_motivation/expM2_redistribution_progress/data/formal/rounds.csv
+add_motivation/expM2_redistribution_progress/data/formal/summary.csv
+add_motivation/expM2_redistribution_progress/figs/m2_redistribution_progress.pdf
+add_motivation/expM2_redistribution_progress/figs/m2_redistribution_progress.png
 ```
 
-Expected: no whitespace errors, shell syntax errors, or plotting self-test failures.
-
-- [ ] **Step 7: Commit verified artifacts and documentation**
+- [ ] **Step 8: Commit Task 12**
 
 ```bash
-git add htsim/sim/datacenter/add_motivation \
-  htsim/sim/motivation_trace.h htsim/sim/motivation_trace.cpp \
-  htsim/sim/motivation_epoch.h htsim/sim/uec.h htsim/sim/uec.cpp \
-  htsim/sim/uec_mp.h htsim/sim/uec_mp.cpp htsim/sim/queue.h \
-  htsim/sim/datacenter/main_uec.cpp htsim/sim/CMakeLists.txt
-git commit -m "prism: add residual-spread motivation traces and experiments"
+git add htsim/sim/datacenter/add_motivation/README.md \
+  htsim/sim/datacenter/add_motivation/.gitignore \
+  htsim/sim/datacenter/add_motivation/expM1_entropy_quality \
+  htsim/sim/datacenter/add_motivation/expM2_redistribution_progress
+git commit -m "experiment: complete Prism motivation task 2"
 ```
 
-The final report must state build/test evidence, on/off hashes, selected calibration cells, formal
-seed coverage, M1/M2 decision outcomes, right-censoring, and all unsupported claims.
+## Completion Report Requirements
+
+The final report is short and artifact-focused. It states:
+
+- build and test commands with pass/fail status;
+- selected calibration cells or the exact negative calibration reason;
+- formal acceptance status for M1 and both M2 scenarios;
+- paths to final CSV, PDF, and PNG files;
+- confirmation that no recycling or handoff control behavior was implemented;
+- confirmation that no output was written outside the project except self-cleaning test fixtures.
