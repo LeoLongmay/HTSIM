@@ -1,9 +1,12 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 //#include "config.h"
 #include <cassert>
+#include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <memory>
 #include <sstream>
+#include <string>
 #include <string.h>
 
 #include <math.h>
@@ -133,6 +136,10 @@ int main(int argc, char **argv) {
     char* topo_file = NULL;
     int8_t qa_gate = -1;
     bool conn_reuse = false;
+    std::string motivation_prefix;
+    std::string motivation_run_id;
+    std::string motivation_scenario;
+    int64_t motivation_flow_id = -1;
 
     while (i<argc) {
         if (!strcmp(argv[i],"-o")) {
@@ -245,6 +252,18 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-prism_oracle_scenario")) {
             UecSrc::_prism_oracle_scenario = argv[i+1];
             cout << "prism_oracle_scenario " << UecSrc::_prism_oracle_scenario << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-motivation_trace_prefix")) {
+            motivation_prefix = argv[i+1];
+            i++;
+        } else if (!strcmp(argv[i],"-motivation_trace_flow_id")) {
+            motivation_flow_id = std::stoll(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"-motivation_run_id")) {
+            motivation_run_id = argv[i+1];
+            i++;
+        } else if (!strcmp(argv[i],"-motivation_scenario")) {
+            motivation_scenario = argv[i+1];
             i++;
         } else if (!strcmp(argv[i],"-mnscc_h")) {
             UecSrc::_mnscc_h = atoi(argv[i+1]);
@@ -662,6 +681,20 @@ int main(int argc, char **argv) {
     assert(trimsize >= 64 && trimsize <= (uint32_t)packet_size);
 
     cout << "Packet size (MTU) is " << packet_size << endl;
+
+    if (motivation_run_id.find_first_of(",\r\n") != std::string::npos ||
+        motivation_scenario.find_first_of(",\r\n") != std::string::npos) {
+        cerr << "Motivation run ID and scenario must not contain commas or newlines" << endl;
+        return 1;
+    }
+    try {
+        UecSrc::configureMotivationTrace(motivation_prefix, motivation_run_id,
+                                         motivation_scenario, static_cast<uint32_t>(seed),
+                                         motivation_flow_id);
+    } catch (const std::exception& error) {
+        cerr << error.what() << endl;
+        return 1;
+    }
 
     srand(seed);
     srandom(seed);

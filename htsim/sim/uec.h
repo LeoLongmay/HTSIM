@@ -32,6 +32,7 @@ class UecPullPacer;
 class UecSink;
 class UecSrc;
 class UecLogger;
+class MotivationTraceWriter;
 
 
 // UecNIC aggregates UecSrcs that are on the same NIC.  It round
@@ -105,6 +106,10 @@ private:
 
 class UecSrc : public EventSource, public TriggerTarget, public UecTransportConnection {
 public:
+    static void configureMotivationTrace(const std::string& prefix, const std::string& run_id,
+                                         const std::string& scenario, uint32_t seed,
+                                         int64_t flow_filter);
+    static MotivationTraceWriter& motivationTrace();
     struct Stats {
         /* all must be non-negative, but we'll make them signed so we
            can do maths with them without concern about underflow */
@@ -246,6 +251,7 @@ public:
     bool debug() const { return _debug_src; }
 
    private:
+    static MotivationTraceWriter _motivation_trace_writer;
     unique_ptr<UecMultipath> _mp;
     UecNIC& _nic;
     uint32_t _no_of_ports;

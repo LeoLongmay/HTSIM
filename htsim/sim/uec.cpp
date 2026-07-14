@@ -17,6 +17,7 @@
 #include "prism_decompose.h"  // PRISM decomposition logic (used by updateCwndOnAck_PRISM)
 #include "strack_cc.h"               // STrack decision tree (used by updateCwndOnAck_STRACK)
 #include "mnscc_median.h"            // MNSCC median framework (used by updateCwndOnAck_MNSCC)
+#include "motivation_trace.h"
 #include "swift_cc.h"                // Swift CC pure logic (used by updateCwndOnAck_SWIFT)
 
 using namespace std;
@@ -47,6 +48,7 @@ flowid_t UecSrc::_debug_flowid = UINT32_MAX;
 // to all paths.
 int UecSrc::_global_node_count = 0;
 bool UecSrc::_shown = false;
+MotivationTraceWriter UecSrc::_motivation_trace_writer;
 mem_b UecSrc::_configured_maxwnd = 0;
 
 /* _min_rto can be tuned using setMinRTO. Don't change it here.  */
@@ -146,6 +148,16 @@ int UecSrc::probe_retry_time = 5;
 float UecSrc::loss_retx_factor = 1.5;
 int UecSrc::min_retx_config = 5;
 /* End SLEEK parameters */
+
+void UecSrc::configureMotivationTrace(const std::string& prefix, const std::string& run_id,
+                                      const std::string& scenario, uint32_t seed,
+                                      int64_t flow_filter) {
+    _motivation_trace_writer.configure(prefix, run_id, scenario, seed, flow_filter);
+}
+
+MotivationTraceWriter& UecSrc::motivationTrace() {
+    return _motivation_trace_writer;
+}
 
 void UecSrc::initNsccParams(simtime_picosec network_rtt,
                             linkspeed_bps linkspeed,

@@ -83,6 +83,7 @@ set(SOURCE_FILES
     data_collector.cpp
     meter.cpp
     mtcp.cpp
+    motivation_trace.cpp
     ndp.cpp
     ndp_transfer.cpp
     ndppacket.cpp
