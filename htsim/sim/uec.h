@@ -527,14 +527,14 @@ private:
     EventList::Handle _rto_timer_handle;
 
 
-    //used to drive ACK clock
+    // Cumulative receiver-reported bytes; also used to drive the ACK clock.
     uint64_t _recvd_bytes;
 
     // Smarttrack sender based CC variables.
     simtime_picosec _base_rtt;
     mem_b _base_bdp;
     mem_b _achieved_bytes = 0;
-    //used to trigger SmartTrack fulfill
+    // Windowed bytes used to trigger SmartTrack fulfill; reset after adjustments.
     mem_b _received_bytes = 0;
     uint64_t _motivation_new_data_bytes_sent_total = 0;
     uint32_t _fi_count = 0;

@@ -919,7 +919,7 @@ void UecSrc::motivationLogPendingEpoch() {
         epoch.entropy_coverage,
         epoch.physical_path_coverage,
         _motivation_new_data_bytes_sent_total,
-        static_cast<uint64_t>(_received_bytes),
+        _recvd_bytes,
         static_cast<uint64_t>(_cwnd)});
     _motivation_pending_epoch.reset();
 }
