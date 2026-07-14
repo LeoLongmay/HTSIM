@@ -3,11 +3,46 @@
 #define MOTIVATION_EPOCH_H
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <set>
 
 #include "prism_decompose.h"
+#include "uec_mp.h"
+
+class MotivationAckSelectionState {
+public:
+    static constexpr std::size_t MAX_PROBE_RECORDS = 64;
+
+    void rememberProbe(uint64_t seqno, const UecMpSelection& selection) {
+        _probe_selections[seqno] = selection;
+        while (_probe_selections.size() > MAX_PROBE_RECORDS) {
+            _probe_selections.erase(_probe_selections.begin());
+        }
+    }
+
+    UecMpSelection consumeAckSelection(
+        bool is_probe, uint64_t acked_psn,
+        const UecMpSelection* validated_normal_selection) {
+        if (!is_probe) {
+            return validated_normal_selection ? *validated_normal_selection : UecMpSelection{};
+        }
+
+        auto probe = _probe_selections.find(acked_psn);
+        if (probe == _probe_selections.end()) {
+            return {};
+        }
+
+        const UecMpSelection selection = probe->second;
+        _probe_selections.erase(probe);
+        return selection;
+    }
+
+private:
+    std::map<uint64_t, UecMpSelection> _probe_selections;
+};
 
 struct MotivationEpochResult {
     uint64_t epoch_id;

@@ -1,4 +1,5 @@
 #include "motivation_epoch.h"
+#include "uec_mp.h"
 
 #include <cassert>
 #include <cstdint>
@@ -62,10 +63,66 @@ void smoothsAndDecidesOnlyWhenAnEpochCloses() {
     assert(second->observed_region == prism::DECREASE);
 }
 
+UecMpSelection selection(uint32_t entropy, uint64_t token_id) {
+    return UecMpSelection{entropy, UecMpSelection::RECYCLED, token_id};
+}
+
+void correlatesAckSelectionWithItsExactLifecycleRecord() {
+    MotivationAckSelectionState state;
+    const UecMpSelection first_probe = selection(3, 101);
+    const UecMpSelection second_probe = selection(5, 102);
+    const UecMpSelection current_send = selection(7, 201);
+
+    state.rememberProbe(41, first_probe);
+    state.rememberProbe(42, second_probe);
+
+    const UecMpSelection probe_collision =
+        state.consumeAckSelection(true, 41, &current_send);
+    assert(probe_collision.entropy == first_probe.entropy);
+    assert(probe_collision.token_id == first_probe.token_id);
+
+    const UecMpSelection duplicate_probe =
+        state.consumeAckSelection(true, 41, &current_send);
+    assert(duplicate_probe.source == UecMpSelection::UNKNOWN);
+    assert(duplicate_probe.token_id == UecMpSelection::NO_TOKEN);
+
+    const UecMpSelection later_probe =
+        state.consumeAckSelection(true, 42, &current_send);
+    assert(later_probe.token_id == second_probe.token_id);
+
+    const UecMpSelection stale_normal =
+        state.consumeAckSelection(false, 41, nullptr);
+    assert(stale_normal.source == UecMpSelection::UNKNOWN);
+    assert(stale_normal.token_id == UecMpSelection::NO_TOKEN);
+
+    const UecMpSelection exact_normal =
+        state.consumeAckSelection(false, 41, &current_send);
+    assert(exact_normal.entropy == current_send.entropy);
+    assert(exact_normal.token_id == current_send.token_id);
+}
+
+void boundsUnacknowledgedProbeSelections() {
+    MotivationAckSelectionState state;
+    for (uint64_t seqno = 0; seqno <= MotivationAckSelectionState::MAX_PROBE_RECORDS;
+         ++seqno) {
+        state.rememberProbe(seqno, selection(static_cast<uint32_t>(seqno), seqno));
+    }
+
+    const UecMpSelection evicted = state.consumeAckSelection(true, 0, nullptr);
+    assert(evicted.source == UecMpSelection::UNKNOWN);
+    assert(evicted.token_id == UecMpSelection::NO_TOKEN);
+
+    const UecMpSelection newest = state.consumeAckSelection(
+        true, MotivationAckSelectionState::MAX_PROBE_RECORDS, nullptr);
+    assert(newest.token_id == MotivationAckSelectionState::MAX_PROBE_RECORDS);
+}
+
 }  // namespace
 
 int main() {
     closesWithRawSameEpochExtremaAndCoverage();
     ignoresNonGenuineSamplesAndDefersSparseEpochs();
     smoothsAndDecidesOnlyWhenAnEpochCloses();
+    correlatesAckSelectionWithItsExactLifecycleRecord();
+    boundsUnacknowledgedProbeSelections();
 }

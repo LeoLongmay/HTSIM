@@ -1204,17 +1204,21 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     auto i = _tx_bitmap.find(acked_psn);
     auto rtx_time = _rtx_times.find(acked_psn);
     uint32_t ooo = pkt.ooo();
-    UecMpSelection ack_selection;
-    if (i != _tx_bitmap.end()) {
-        ack_selection = i->second.selection;
-    }
+    const bool valid_normal_send_attempt =
+        !pkt.is_probe_ack() && i != _tx_bitmap.end() &&
+        validateSendTs(acked_psn, pkt.rtx_echo());
+    const UecMpSelection* validated_normal_selection =
+        valid_normal_send_attempt ? &i->second.selection : nullptr;
+    const UecMpSelection ack_selection =
+        _motivation_ack_selection_state.consumeAckSelection(
+            pkt.is_probe_ack(), acked_psn, validated_normal_selection);
 
     mem_b pkt_size;
     simtime_picosec delay;
     simtime_picosec raw_rtt = 0;
     simtime_picosec send_time = 0;
 
-    if (i != _tx_bitmap.end() && validateSendTs(acked_psn, pkt.rtx_echo()) && (!pkt.is_probe_ack()) ) {
+    if (valid_normal_send_attempt) {
     //a timestamp is valid if 
     //1. the received ack is new packet and no retransmission at local record;
     //or 2. the received ack is a retransmitted packet and local record shows this packet only gets retransmitted once. 
@@ -3167,7 +3171,8 @@ void UecSrc::sendProbe() {
     p->set_src(_srcaddr);
     p->set_dst(_dstaddr);
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
-    (void)_mp->lastSelection();
+    const UecMpSelection selection = _mp->lastSelection();
+    _motivation_ack_selection_state.rememberProbe(_probe_seqno, selection);
     p->set_pathid(ev);
     p->set_hop_count(0);
     // p->sendOn();

@@ -255,6 +255,7 @@ public:
     static MotivationTraceWriter _motivation_trace_writer;
     unique_ptr<UecMultipath> _mp;
     MotivationEpochObserver _motivation_epoch_observer;
+    MotivationAckSelectionState _motivation_ack_selection_state;
     optional<MotivationEpochResult> _motivation_pending_epoch;
     UecNIC& _nic;
     uint32_t _no_of_ports;
