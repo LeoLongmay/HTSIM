@@ -5,6 +5,7 @@
 #include <memory>
 #include <functional>
 #include <list>
+#include <map>
 #include <set>
 #include <optional>
 #include <string>
@@ -169,6 +170,10 @@ public:
         uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void prismSetOraclePathResolver(PrismOraclePathResolver resolver,
                                     uint32_t path_entropy_size);
+    using MotivationPathResolver = std::function<bool(
+        uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
+    void motivationSetPathResolver(MotivationPathResolver resolver,
+                                   uint32_t path_entropy_size);
 
     // Functions from UecTransportConnection
     virtual void continueConnection() override;
@@ -294,6 +299,15 @@ public:
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
                           UecMpSelection selection);
     void configureMotivationTokenObserver();
+    struct MotivationResolvedPath {
+        uint64_t physical_path_id = MotivationEpochObserver::NO_PHYSICAL_PATH;
+        std::vector<const BaseQueue*> queues;
+    };
+    static std::map<std::string, uint64_t> _motivation_physical_path_ids;
+    static std::map<std::string, uint64_t> _motivation_queue_ids;
+    std::vector<MotivationResolvedPath> _motivation_paths;
+    void motivationResolveAndLogPaths(MotivationPathResolver resolver,
+                                      uint32_t path_entropy_size);
     uint64_t motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
                               simtime_picosec qdelay, bool genuine,
                               const UecMpSelection& selection);

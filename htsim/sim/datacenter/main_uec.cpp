@@ -20,6 +20,7 @@
 #include "uec_base.h"
 #include "uec.h"
 #include "uec_mp.h"
+#include "motivation_trace.h"
 #include "uec_pdcses.h"
 #include "compositequeue.h"
 #include "topology.h"
@@ -1228,6 +1229,16 @@ int main(int argc, char **argv) {
                 default:
                     abort();
                 }
+            }
+            if (UecSrc::motivationTrace().enabled()) {
+                FatTreeTopology* motivation_topology = topo[0].get();
+                uec_src->motivationSetPathResolver(
+                    [motivation_topology, src, dest](uint32_t flow_id, uint32_t entropy,
+                                                     vector<const BaseQueue*>& queues) {
+                        return motivation_topology->resolve_ecmp_path(
+                            src, dest, flow_id, entropy, queues);
+                    },
+                    path_entropy_size);
             }
 
             // set up the triggers

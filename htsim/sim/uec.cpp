@@ -59,6 +59,24 @@ const char* motivationRegionName(prism::Region region) {
     }
     return "unknown";
 }
+
+string motivationCsvField(const string& value) {
+    if (value.find_first_of(",\"\r\n") == string::npos) {
+        return value;
+    }
+
+    string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (char character : value) {
+        if (character == '"') {
+            escaped.push_back('"');
+        }
+        escaped.push_back(character);
+    }
+    escaped.push_back('"');
+    return escaped;
+}
 }  // namespace
 
 // Static stuff
@@ -68,6 +86,8 @@ flowid_t UecSrc::_debug_flowid = UINT32_MAX;
 int UecSrc::_global_node_count = 0;
 bool UecSrc::_shown = false;
 MotivationTraceWriter UecSrc::_motivation_trace_writer;
+map<string, uint64_t> UecSrc::_motivation_physical_path_ids;
+map<string, uint64_t> UecSrc::_motivation_queue_ids;
 mem_b UecSrc::_configured_maxwnd = 0;
 
 /* _min_rto can be tuned using setMinRTO. Don't change it here.  */
@@ -171,6 +191,8 @@ int UecSrc::min_retx_config = 5;
 void UecSrc::configureMotivationTrace(const std::string& prefix, const std::string& run_id,
                                       const std::string& scenario, uint32_t seed,
                                       int64_t flow_filter) {
+    _motivation_physical_path_ids.clear();
+    _motivation_queue_ids.clear();
     _motivation_trace_writer.configure(prefix, run_id, scenario, seed, flow_filter);
 }
 
@@ -727,6 +749,79 @@ void UecSrc::configureMotivationTokenObserver() {
     });
 }
 
+void UecSrc::motivationSetPathResolver(MotivationPathResolver resolver,
+                                       uint32_t path_entropy_size) {
+    if (!_motivation_trace_writer.enabledFor(flowId())) {
+        return;
+    }
+    motivationResolveAndLogPaths(std::move(resolver), path_entropy_size);
+}
+
+void UecSrc::motivationResolveAndLogPaths(MotivationPathResolver resolver,
+                                          uint32_t path_entropy_size) {
+    _motivation_paths.clear();
+    _motivation_paths.resize(path_entropy_size);
+
+    for (uint32_t entropy = 0; entropy < path_entropy_size; ++entropy) {
+        vector<const BaseQueue*> queues;
+        bool resolved = resolver && resolver(flowId(), entropy, queues) && !queues.empty();
+        for (const BaseQueue* queue : queues) {
+            if (queue == nullptr) {
+                resolved = false;
+                break;
+            }
+        }
+
+        if (!resolved) {
+            _motivation_trace_writer.logPath({
+                flowId(), entropy, MotivationEpochObserver::NO_PHYSICAL_PATH,
+                "resolution_failed", "", -1.0, false, ""});
+            continue;
+        }
+
+        ostringstream path_key;
+        ostringstream fingerprint;
+        ostringstream ordered_queue_ids;
+        linkspeed_bps bottleneck = numeric_limits<linkspeed_bps>::max();
+        bool contains_reduced_link = false;
+        for (size_t index = 0; index < queues.size(); ++index) {
+            const BaseQueue& queue = *queues[index];
+            const string& queue_name = queue.queueName();
+            path_key << queue_name.size() << ':' << queue_name;
+            if (index != 0) {
+                fingerprint << '|';
+                ordered_queue_ids << '|';
+            }
+            fingerprint << queue_name;
+
+            auto queue_id = _motivation_queue_ids.emplace(
+                queue_name, static_cast<uint64_t>(_motivation_queue_ids.size()));
+            ordered_queue_ids << queue_id.first->second;
+            if (queue_id.second) {
+                _motivation_trace_writer.logLink({
+                    queue_id.first->second, motivationCsvField(queue_name),
+                    speedAsGbps(queue.bitrate()),
+                    queue.bitrate() < _network_linkspeed});
+            }
+
+            bottleneck = min(bottleneck, queue.bitrate());
+            contains_reduced_link =
+                contains_reduced_link || queue.bitrate() < _network_linkspeed;
+        }
+
+        auto physical_path = _motivation_physical_path_ids.emplace(
+            path_key.str(), static_cast<uint64_t>(_motivation_physical_path_ids.size()));
+        MotivationResolvedPath& cached = _motivation_paths[entropy];
+        cached.physical_path_id = physical_path.first->second;
+        cached.queues = std::move(queues);
+
+        _motivation_trace_writer.logPath({
+            flowId(), entropy, cached.physical_path_id, "resolved",
+            motivationCsvField(fingerprint.str()), speedAsGbps(bottleneck),
+            contains_reduced_link, ordered_queue_ids.str()});
+    }
+}
+
 uint64_t UecSrc::motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
                                   simtime_picosec qdelay, bool genuine,
                                   const UecMpSelection& selection) {
@@ -735,11 +830,24 @@ uint64_t UecSrc::motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_r
     }
 
     const uint64_t epoch_id = _motivation_epoch_observer.currentEpochId();
+    uint64_t physical_path_id = MotivationEpochObserver::NO_PHYSICAL_PATH;
+    uint64_t forward_path_backlog = numeric_limits<uint64_t>::max();
+    if (pkt.ev() < _motivation_paths.size()) {
+        const MotivationResolvedPath& path = _motivation_paths[pkt.ev()];
+        if (path.physical_path_id != MotivationEpochObserver::NO_PHYSICAL_PATH &&
+            !path.queues.empty()) {
+            physical_path_id = path.physical_path_id;
+            forward_path_backlog = 0;
+            for (const BaseQueue* queue : path.queues) {
+                forward_path_backlog += queue->backlogDrainTime();
+            }
+        }
+    }
     const simtime_picosec target_spray =
         _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
     _motivation_pending_epoch = _motivation_epoch_observer.observe(
-        eventlist().now(), qdelay, genuine, pkt.ev(),
-        MotivationEpochObserver::NO_PHYSICAL_PATH, _base_rtt, _target_Qdelay, target_spray);
+        eventlist().now(), qdelay, genuine, pkt.ev(), physical_path_id, _base_rtt,
+        _target_Qdelay, target_spray);
 
     const uint64_t event_seq = _motivation_trace_writer.nextEventSeq();
     _motivation_trace_writer.logAck({
@@ -749,14 +857,14 @@ uint64_t UecSrc::motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_r
         epoch_id,
         pkt.acked_psn(),
         pkt.ev(),
-        MotivationEpochObserver::NO_PHYSICAL_PATH,
+        physical_path_id,
         raw_rtt,
         _base_rtt,
         static_cast<int64_t>(qdelay),
         pkt.ecn_echo(),
         genuine,
         pkt.rtx_echo(),
-        std::numeric_limits<uint64_t>::max(),
+        forward_path_backlog,
         motivationSelectionSource(selection.source),
         selection.token_id});
     return event_seq;
