@@ -3,10 +3,11 @@
 ## 1. Scope
 
 This work validates the motivation for Residual-Spread Coordination without implementing
-entropy recycling or congestion-control handoff. The simulator may emit read-only ACK, REPS
-cache, epoch, path, and link observations. An offline Python replay may maintain a shadow cache
+entropy recycling or congestion-control handoff. The simulator may emit read-only ACK, Legacy
+REPS token-queue, epoch, path, and link observations. An offline Python replay may maintain a
+virtual fixed-size shadow cache
 and shadow recycling rounds, but shadow state must never affect entropy selection, packet
-forwarding, REPS freezing, Prism state, or the congestion window.
+forwarding, Legacy REPS state, Prism state, or the congestion window.
 
 The experiments live under a new directory beside `prism_eval`:
 
@@ -36,7 +37,7 @@ M1 does not claim that recycling improves goodput or FCT.
 
 ### 2.2 M2: Effective and ineffective redistribution
 
-M2 tests whether a complete, observable feedback/cache-turnover round can coincide with either:
+M2 tests whether a complete, observable feedback/token-turnover round can coincide with either:
 
 1. a material reduction in spread when healthy-path capacity has headroom; or
 2. no spread reduction when healthy-path capacity cannot absorb the offered load, while the
@@ -45,7 +46,7 @@ M2 tests whether a complete, observable feedback/cache-turnover round can coinci
 The supported claim is limited to:
 
 ```text
-A no-progress state exists after one complete observable correction opportunity, so an
+A no-progress state exists after one complete eight-slot shadow validation opportunity, so an
 explicit handoff condition is worth evaluating in a later mechanism experiment.
 ```
 
@@ -105,7 +106,8 @@ uses seeds `101,102,103`; formal results use seeds `13,14,15,16,17`.
 
 ## 4. Implementation Approach
 
-The simulator emits primitive facts. Python validates and replays those facts. This event-sourced
+The simulator emits primitive facts from the currently evaluated Legacy REPS implementation.
+Python validates and replays those facts into a virtual fixed-size cache. This event-sourced
 approach is preferred over an in-simulator shadow controller because it minimizes behavioral risk,
 allows the round semantics to be tested independently, and permits analysis changes without
 rerunning simulations.
@@ -113,13 +115,13 @@ rerunning simulations.
 The data flow is:
 
 ```text
-UEC ACK / REPS cache operation / Prism epoch
+UEC ACK / Legacy REPS token operation / Prism epoch
                 |
                 v
        read-only trace callbacks
                 |
                 v
- ack.csv + cache.csv + epoch.csv
+ ack.csv + token.csv + epoch.csv
  pathmap.csv + linkmap.csv
                 |
                 v
@@ -169,8 +171,8 @@ flow ID. Unknown schema versions are rejected by the analysis scripts.
 ```text
 schema_version,run_id,seed,scenario,event_seq,time_ps,
 flow_id,epoch_id,acked_psn,entropy,physical_path_id,
-raw_rtt_ps,base_rtt_ps,qdelay_ps,ecn,genuine_sample,retransmitted,freezing,
-forward_path_backlog_ps,selection_source,source_slot,source_generation
+raw_rtt_ps,base_rtt_ps,qdelay_ps,ecn,genuine_sample,retransmitted,
+forward_path_backlog_ps,selection_source,source_token_id
 ```
 
 Semantics:
@@ -178,36 +180,34 @@ Semantics:
 - `qdelay_ps` is the exact `raw_rtt - base_rtt` value presented to the Prism observation path.
 - fallback, probe, missing-send-record, and otherwise invalid samples set `genuine_sample=0`.
 - `forward_path_backlog_ps` scans only the used entropy's resolved forward path at ACK time.
-- `selection_source` is one of `cached`, `frozen`, or `random_explore`.
-- `source_slot` and `source_generation` identify the cache token that selected the packet; they
-  are invalid sentinels for random exploration.
+- `selection_source` is one of `recycled`, `first_window`, or `random_empty`.
+- `source_token_id` identifies the Legacy REPS list token that selected the packet and is an
+  invalid sentinel for first-window or empty-list random selection.
 - The ACK event is ordered before the subsequent REPS `processEv()` event at the same simulation
   time.
 
-### 5.4 Actual REPS cache trace
+### 5.4 Actual Legacy REPS token trace
 
-`<prefix>.cache.csv` contains:
+`<prefix>.token.csv` contains:
 
 ```text
 schema_version,run_id,event_seq,time_ps,flow_id,
-operation,reason,slot,generation,entropy,
-valid_before,valid_after,fresh_before,fresh_after,frozen_before,frozen_after
+operation,reason,token_id,entropy,queue_depth_before,queue_depth_after
 ```
 
 Operations include:
 
 ```text
-add_good_ack
-consume_fresh
-consume_frozen
-random_explore
-reset
-freeze_enter
-freeze_exit
+enqueue_good_ack
+dequeue_recycle
+select_first_window
+select_random_empty
 ```
 
-This trace describes the real one-use REPS token FIFO. It must not describe it as a persistent
-entropy table. `slot + generation` uniquely identifies slot contents across overwrites.
+This trace describes the real unbounded, one-use Legacy REPS token FIFO used by the existing
+`-load_balancing_algo reps` Evaluation arm. It must not describe that list as a fixed cache.
+`token_id` uniquely identifies an enqueue/dequeue/send/ACK lifecycle. The eight-slot structure
+exists only in offline shadow replay.
 
 ### 5.5 Independent observation epoch
 
@@ -246,12 +246,12 @@ Only read-only queue metadata accessors may be added. Queue service behavior is 
 ## 6. Isolation Boundaries
 
 - `UecSrc` owns ACK observations, independent epoch state, and path/link metadata emission.
-- `UecMpReps` exposes selection source and forwards real cache operation observations.
-- `CircularBufferREPS` exposes read-only slot snapshots and operation callbacks.
+- `UecMpRepsLegacy` exposes selection source and real token enqueue/dequeue observations.
+- `CircularBufferREPS` and the `freezing` load-balancing mode are not modified by this task.
 - Callbacks may read pre/post state and write logs, but may not call an RNG, choose an entropy,
   alter a cache decision, or mutate controller state.
-- Python owns admission classification, virtual invalidation, pending replacement state, recycling
-  bitmap, round completion, and `S_ref`.
+- Python owns the virtual eight-slot cache, admission classification, virtual invalidation,
+  pending replacement state, recycling bitmap, round completion, and `S_ref`.
 - `prism_decompose.h` and congestion-control action logic remain unchanged.
 
 ## 7. M1 Experiment
@@ -286,9 +286,9 @@ seeds          101,102,103
 ACK delivery and ECN remains enabled. Formal runs retain one symmetric control, one stable gray
 condition, and only if needed one stronger gray condition.
 
-Calibration selection requires completion rate at least `0.99`, negligible freezing, adequate
-entropy/path coverage, and a high-residual unmarked population in every calibration seed. The
-formal matrix is locked before seeds `13..17` are run.
+Calibration selection requires completion rate at least `0.99`, adequate entropy/path coverage,
+and a high-residual unmarked population in every calibration seed. The formal matrix is locked
+before seeds `13..17` are run.
 
 ### 7.2 Residual calculation
 
@@ -309,12 +309,12 @@ M1 reports:
 
 1. the residual distribution among ECN-unmarked genuine ACKs;
 2. `P(R >= T_spray | ECN=0)`;
-3. the fraction of actual REPS cache tokens that shadow admission would reject;
+3. the fraction of actual Legacy REPS tokens that shadow admission would reject;
 4. next-use persistence for the same flow and entropy;
 5. the risk ratio between current-high and current-low residual groups;
 6. entropy-grouped and deduplicated-physical-path-grouped persistence;
 7. correlation between RTT residual and ACK-time forward-path backlog residual;
-8. entropy/path coverage, freezing, next-use matching interval, and unmatched-next-use rate.
+8. entropy/path coverage, next-use matching interval, and unmatched-next-use rate.
 
 The next-use risk ratio is:
 
@@ -334,7 +334,7 @@ M1 supports the motivation only if:
 - the bootstrap 95% lower confidence bound for `RR` exceeds 1;
 - the absolute future-high probability is nontrivial and not concentrated in one seed or flow;
 - entropy and physical-path analyses agree in direction; and
-- freezing, low coverage, or unmatched next-use observations do not explain the result.
+- low coverage or unmatched next-use observations do not explain the result.
 
 If only the first condition holds, the result is negative: classification disagreement exists, but
 residual lacks demonstrated predictive value.
@@ -343,9 +343,11 @@ The primary three-panel figure shows:
 
 1. ECDFs of ECN-unmarked residual for symmetric and gray conditions;
 2. next-use high-residual probability conditioned on current low/high residual;
-3. actual-cache shadow-rejection exposure and the future-high rate of rejected tokens.
+3. actual-token shadow-rejection exposure and the future-high rate of rejected tokens.
 
 Path-level persistence, backlog correlation, coverage, and per-seed results are appendix outputs.
+Legacy REPS has no freezing state; hard-failure compatibility remains out of scope until the
+mechanism implementation task.
 
 ## 8. M2 Experiment
 
@@ -394,19 +396,22 @@ primarily a high-floor path-wide-overload point.
 
 ### 8.3 Shadow round semantics
 
-Python reconstructs the eight physical cache slots and generations from real cache events.
+Python reconstructs the real Legacy REPS FIFO from token events, then projects it into a virtual
+eight-slot validation cache. The virtual size `B=8` comes from the proposed mechanism design and
+the existing `CircularBufferREPS` default, but it is not presented as Legacy REPS state.
 
 At entry to an actual Prism HOLD epoch:
 
 1. start a high-spread episode and record `S_ref`;
-2. snapshot all eight slots, treating empty slots as pending;
-3. associate cached sends and ACKs through `source_slot + source_generation`;
-4. complete a slot only when its selected token returns a genuine ACK with `ECN=0` and
+2. seed virtual slots from the first eight FIFO tokens that would be selected next, treating
+   missing entries as pending;
+3. associate recycled sends and ACKs through `source_token_id`;
+4. complete a seeded slot only when its selected token returns a genuine ACK with `ECN=0` and
    `R < T_spray`;
 5. treat marked or high-residual ACKs as shadow-invalid/pending without completing the slot;
-6. require a replacement generation to be sent, genuinely ACKed, and admitted before completing
-   an invalidated slot;
-7. suspend ordinary shadow recycling during freezing and protect an ACK-validated survivor; and
+6. assign a later genuine, unmarked, low-residual ACK to one pending slot as its validated
+   replacement; the enqueue caused by that ACK is the replacement-validation event;
+7. never count invalidation alone as completion; and
 8. declare the round complete only when all eight slots are complete.
 
 After validation completion, replay waits for the next full epoch boundary and records `S_end`.
@@ -434,9 +439,9 @@ M2 reports:
 - `F`, `S`, `S_ref`, `S_end`, and `delta_S`;
 - literal and tolerance-aware no-progress rates;
 - Hold duration, consecutive Hold epochs, and actual cwnd;
-- valid-cache count, replacements, and admission pass/fail counts;
+- Legacy FIFO depth, virtual-slot replacements, and admission pass/fail counts;
 - offered load, measured throughput, `C_healthy`, and `C_effective`;
-- entropy/path coverage and freezing.
+- entropy/path coverage.
 
 ### 8.5 Decision rule and figure
 
@@ -463,8 +468,8 @@ tables and appendix plots.
 - Failure to create an explicitly requested trace file aborts the run.
 - Path-resolution failures are logged. They exclude path-level metrics but retain valid
   entropy-level observations.
-- Missing ACK/cache generation links or non-monotonic event ordering invalidate that flow; replay
-  does not guess a slot.
+- Missing ACK/token links or non-monotonic event ordering invalidate that flow; replay does not
+  guess a token.
 - Incomplete rounds are right-censored, not classified as no-progress.
 - Insufficient coverage emits an invalid reason instead of a numeric aggregate.
 - Reproduction scripts clear only their own current-schema raw output before running.
@@ -476,9 +481,9 @@ tables and appendix plots.
 
 Tests cover:
 
-- callback order and slot generation for add, consume, reset, freeze, and unfreeze;
-- byte-identical buffer return values with callbacks disabled and enabled;
-- cached, frozen, and random selection-source metadata;
+- callback order and token identity for Legacy REPS enqueue and dequeue;
+- byte-identical Legacy REPS entropy choices with callbacks disabled and enabled;
+- recycled, first-window, and empty-list random selection-source metadata;
 - independent epoch min/max, `n_min`, and closure semantics; and
 - deduplication of duplicate entropy-to-physical-path mappings.
 
@@ -491,8 +496,7 @@ Hand-authored traces cover:
 - unacknowledged replacement not completing a slot;
 - genuinely ACKed and admitted replacement completing a slot;
 - ECN and fallback rejection;
-- generation overwrite isolation;
-- freezing suspension and survivor protection;
+- token identity isolation across duplicate entropy values;
 - right-censoring;
 - `delta_S` and tolerance classification; and
 - next-use matching that cannot cross flows or incorrect epochs.
