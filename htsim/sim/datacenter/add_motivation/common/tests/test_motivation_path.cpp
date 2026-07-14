@@ -173,6 +173,7 @@ void validatesMotivationTraceStartupConstraints() {
     UecSrc::_sender_based_cc = false;
     UecSrc::_receiver_based_cc = true;
     UecSrc::validateMotivationTraceRuntimeConfig(false, 4);
+    removeTraceFiles();
 }
 
 }  // namespace
