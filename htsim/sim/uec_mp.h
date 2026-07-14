@@ -2,8 +2,10 @@
 #ifndef UEC_MP_H
 #define UEC_MP_H
 
+#include <cstdint>
 #include <list>
 #include <deque>
+#include <functional>
 #include <map>
 #include <optional>
 #include <random>
@@ -12,6 +14,30 @@
 #include <vector>
 #include "eventlist.h"
 #include "buffer_reps.h"
+
+struct UecMpSelection {
+    enum Source : uint8_t { UNKNOWN, RECYCLED, FIRST_WINDOW, RANDOM_EMPTY };
+    static constexpr uint64_t NO_TOKEN = UINT64_MAX;
+    uint32_t entropy = 0;
+    Source source = UNKNOWN;
+    uint64_t token_id = NO_TOKEN;
+};
+
+struct UecMpTokenEvent {
+    enum Operation : uint8_t {
+        ENQUEUE_GOOD_ACK,
+        DEQUEUE_RECYCLE,
+        SELECT_FIRST_WINDOW,
+        SELECT_RANDOM_EMPTY
+    };
+    static constexpr uint64_t NO_EVENT = UINT64_MAX;
+    Operation operation;
+    uint64_t token_id;
+    uint32_t entropy;
+    uint32_t queue_depth_before;
+    uint32_t queue_depth_after;
+    uint64_t related_ack_event_seq = NO_EVENT;
+};
 
 class UecMultipath {
 public:
@@ -30,6 +56,10 @@ public:
      * @param uint64_t cur_cwnd_in_pkts The current congestion window in packets.
      */
     virtual uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) = 0;
+    using TokenObserver = std::function<void(const UecMpTokenEvent&)>;
+    virtual UecMpSelection lastSelection() const { return {}; }
+    virtual void setTokenObserver(TokenObserver) {}
+    virtual void setFeedbackTraceContext(uint64_t) {}
 protected:
     bool _debug;
     string _debug_tag;
@@ -71,10 +101,18 @@ public:
     void processEv(uint32_t path_id, PathFeedback feedback) override;
     uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) override;
     optional<uint32_t> nextEntropyRecycle();
+    UecMpSelection lastSelection() const override { return _last_selection; }
+    void setTokenObserver(TokenObserver observer) override { _token_observer = observer; }
+    void setFeedbackTraceContext(uint64_t feedback_event_seq) override { _feedback_event_seq = feedback_event_seq; }
 private:
+    struct Token { uint32_t entropy; uint64_t id; };
     uint16_t _no_of_paths;
     uint32_t _crt_path;
-    list<uint32_t> _next_pathid;
+    list<Token> _next_tokens;
+    uint64_t _next_token_id = 0;
+    uint64_t _feedback_event_seq = UecMpTokenEvent::NO_EVENT;
+    UecMpSelection _last_selection;
+    TokenObserver _token_observer;
 };
 
 

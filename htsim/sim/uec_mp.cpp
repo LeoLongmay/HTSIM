@@ -224,9 +224,18 @@ UecMpRepsLegacy::UecMpRepsLegacy(uint16_t no_of_paths, bool debug)
 
 void UecMpRepsLegacy::processEv(uint32_t path_id, PathFeedback feedback) {
     if (feedback == PATH_GOOD){
-        _next_pathid.push_back(path_id);
+        uint32_t queue_depth_before = _next_tokens.size();
+        _next_tokens.push_back({path_id, _next_token_id++});
         if (_debug){
-            cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Add " << path_id << " " << _next_pathid.size() << endl;
+            cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Add " << path_id << " " << _next_tokens.size() << endl;
+        }
+        if (_token_observer) {
+            _token_observer({UecMpTokenEvent::ENQUEUE_GOOD_ACK,
+                             _next_tokens.back().id,
+                             path_id,
+                             queue_depth_before,
+                             (uint32_t)_next_tokens.size(),
+                             _feedback_event_seq});
         }
     }
 }
@@ -241,20 +250,50 @@ uint32_t UecMpRepsLegacy::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pk
         if (_debug) 
             cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS FirstWindow " << _crt_path << endl;
 
+        _last_selection = {_crt_path, UecMpSelection::FIRST_WINDOW, UecMpSelection::NO_TOKEN};
+        if (_token_observer) {
+            uint32_t queue_depth = _next_tokens.size();
+            _token_observer({UecMpTokenEvent::SELECT_FIRST_WINDOW,
+                             UecMpSelection::NO_TOKEN,
+                             _crt_path,
+                             queue_depth,
+                             queue_depth});
+        }
+
     } else {
-        if (_next_pathid.empty()) {
+        if (_next_tokens.empty()) {
             assert(_no_of_paths > 0);
 		    _crt_path = random() % _no_of_paths;
 
             if (_debug) 
                 cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Steady " << _crt_path << endl;
 
+            _last_selection = {_crt_path, UecMpSelection::RANDOM_EMPTY, UecMpSelection::NO_TOKEN};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 0,
+                                 0});
+            }
+
         } else {
-            _crt_path = _next_pathid.front();
-            _next_pathid.pop_front();
+            uint32_t queue_depth_before = _next_tokens.size();
+            Token token = _next_tokens.front();
+            _crt_path = token.entropy;
+            _next_tokens.pop_front();
 
             if (_debug) 
-                cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Recycle " << _crt_path << " " << _next_pathid.size() << endl;
+                cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Recycle " << _crt_path << " " << _next_tokens.size() << endl;
+
+            _last_selection = {_crt_path, UecMpSelection::RECYCLED, token.id};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
+                                 token.id,
+                                 _crt_path,
+                                 queue_depth_before,
+                                 (uint32_t)_next_tokens.size()});
+            }
 
         }
     }
@@ -262,14 +301,25 @@ uint32_t UecMpRepsLegacy::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pk
 }
 
 optional<uint32_t> UecMpRepsLegacy::nextEntropyRecycle() {
-    if (_next_pathid.empty()) {
+    if (_next_tokens.empty()) {
         return {};
     } else {
-        _crt_path = _next_pathid.front();
-        _next_pathid.pop_front();
+        uint32_t queue_depth_before = _next_tokens.size();
+        Token token = _next_tokens.front();
+        _crt_path = token.entropy;
+        _next_tokens.pop_front();
 
         if (_debug) 
-            cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " MIXED Recycle " << _crt_path << " " << _next_pathid.size() << endl;
+            cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " MIXED Recycle " << _crt_path << " " << _next_tokens.size() << endl;
+
+        _last_selection = {_crt_path, UecMpSelection::RECYCLED, token.id};
+        if (_token_observer) {
+            _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
+                             token.id,
+                             _crt_path,
+                             queue_depth_before,
+                             (uint32_t)_next_tokens.size()});
+        }
         return { _crt_path };
     }
 }
