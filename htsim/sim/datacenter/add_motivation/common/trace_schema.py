@@ -235,6 +235,7 @@ def load_trace(prefix: Path | str) -> TraceBundle:
     events.sort(key=lambda event: event.event_seq)
 
     ack_by_event_seq = {row["event_seq"]: row for row in loaded["ack"]}
+    enqueued_ack_event_seqs = set()
     for token in loaded["token"]:
         if token["operation"] != "enqueue_good_ack":
             continue
@@ -258,6 +259,25 @@ def load_trace(prefix: Path | str) -> TraceBundle:
                 "related_ack_event_seq",
                 f"ACK flow {ack['flow_id']} differs from token flow {token['flow_id']}",
             )
+        if token["entropy"] != ack["entropy"]:
+            raise _error(
+                token.source_path,
+                "entropy",
+                f"value {token['entropy']} differs from ACK entropy {ack['entropy']}",
+            )
+        if ack["ecn"]:
+            raise _error(
+                token.source_path,
+                "related_ack_event_seq",
+                f"ACK event {related_event_seq} is ECN marked",
+            )
+        if related_event_seq in enqueued_ack_event_seqs:
+            raise _error(
+                token.source_path,
+                "related_ack_event_seq",
+                f"ACK event {related_event_seq} already produced an enqueue",
+            )
+        enqueued_ack_event_seqs.add(related_event_seq)
 
     last_ack_event_by_epoch = {}
     for ack in loaded["ack"]:

@@ -237,6 +237,45 @@ class TraceSchemaTests(unittest.TestCase):
             ):
                 load_trace(prefix)
 
+    def test_rejects_enqueue_entropy_that_differs_from_referenced_ack(self):
+        rows = valid_rows()
+        rows["token"][0]["entropy"] = "2"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.token\.csv.*entropy",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_enqueue_from_ecn_marked_ack(self):
+        rows = valid_rows()
+        rows["ack"][0]["ecn"] = "1"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.token\.csv.*related_ack_event_seq",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_multiple_enqueues_from_one_ack(self):
+        rows = valid_rows()
+        duplicate = dict(rows["token"][0])
+        duplicate.update({
+            "event_seq": "2", "token_id": "43",
+            "queue_depth_before": "1", "queue_depth_after": "2",
+        })
+        rows["token"].append(duplicate)
+        rows["epoch"][0]["event_seq"] = "3"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.token\.csv.*related_ack_event_seq",
+            ):
+                load_trace(prefix)
+
     def test_rejects_epoch_close_before_last_ack_in_same_epoch(self):
         rows = valid_rows()
         later_ack = dict(rows["ack"][0])
@@ -258,6 +297,8 @@ class TraceSchemaTests(unittest.TestCase):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 rows = valid_rows()
                 rows["ack"][0][key] = value
+                if key == "entropy":
+                    rows["token"][0]["entropy"] = value
                 bundle = load_trace(write_trace(directory, rows))
                 self.assertEqual(bundle.ack[0][key], int(value))
 
