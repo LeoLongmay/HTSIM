@@ -192,7 +192,8 @@ Semantics:
 
 ```text
 schema_version,run_id,event_seq,time_ps,flow_id,
-operation,reason,token_id,entropy,queue_depth_before,queue_depth_after
+operation,reason,token_id,entropy,queue_depth_before,queue_depth_after,
+related_ack_event_seq
 ```
 
 Operations include:
@@ -207,7 +208,9 @@ select_random_empty
 This trace describes the real unbounded, one-use Legacy REPS token FIFO used by the existing
 `-load_balancing_algo reps` Evaluation arm. It must not describe that list as a fixed cache.
 `token_id` uniquely identifies an enqueue/dequeue/send/ACK lifecycle. The eight-slot structure
-exists only in offline shadow replay.
+exists only in offline shadow replay. `related_ack_event_seq` explicitly links a good-ACK enqueue
+to the ACK row that generated it and uses `UINT64_MAX` as the invalid sentinel for selection
+events.
 
 ### 5.5 Independent observation epoch
 
