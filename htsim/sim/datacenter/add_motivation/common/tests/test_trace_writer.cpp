@@ -86,12 +86,14 @@ int main() {
                    true, false, 80, "recycled", 17, 1200, 6400, 3200});
     writer.logEpoch({writer.nextEventSeq(), 7, 2, 100, 1200, 4, 500, 300, 550, 250,
                      "hold", "hold", true, 3, 2, 6400, 5200, 3200});
-    writer.logBackground({writer.nextEventSeq(), 1300, 9, "start", 1, 2, 3, 40.5, 0,
+    writer.logBackground({writer.nextEventSeq(), 1300, 9, "start", 1, 2, 3, 25, 0,
                           "q1|q2"});
     writer.logAck({writer.nextEventSeq(), 1350, 7, 3, 42, 4, 6, 710, 500, 210, false,
                    true, false, 90, "first_window", 18, 1300, 7700, 3300});
-    writer.logBackground({writer.nextEventSeq(), 1400, 9, "finish", 1, 2, 3, 40.5, 6000,
+    writer.logBackground({writer.nextEventSeq(), 1400, 9, "finish", 1, 2, 3, 25, 6000,
                           "q1|q2"});
+    writer.logBackground({writer.nextEventSeq(), 1450, 10, "start", 4, 5, 6, 0.123046875, 0,
+                          "q3"});
     writer.close();
 
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 1) ==
@@ -123,12 +125,14 @@ int main() {
     assert(lineAt(std::string(kPrefix) + ".epoch.csv", 2) ==
            "2,run,3,7,2,100,1200,4,500,300,550,250,hold,hold,1,3,2,6400,5200,3200");
     assert(lineAt(std::string(kPrefix) + ".background.csv", 2) ==
-           "2,run,4,1300,9,start,1,2,3,40.5,0,q1|q2");
+           "2,run,4,1300,9,start,1,2,3,25,0,q1|q2");
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 3) ==
            "2,run,13,scenario,5,1350,7,3,42,4,6,710,500,210,0,1,0,90,first_window,18,1300,"
            "7700,3300");
     assert(lineAt(std::string(kPrefix) + ".background.csv", 3) ==
-           "2,run,6,1400,9,finish,1,2,3,40.5,6000,q1|q2");
+           "2,run,6,1400,9,finish,1,2,3,25,6000,q1|q2");
+    assert(lineAt(std::string(kPrefix) + ".background.csv", 4) ==
+           "2,run,7,1450,10,start,4,5,6,0.123046875,0,q3");
 
     removeTraceFiles(kPrefix);
 }

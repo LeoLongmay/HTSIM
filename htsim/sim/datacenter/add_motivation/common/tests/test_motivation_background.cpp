@@ -89,6 +89,21 @@ void testConfigParsing() {
     assert(specs[0].start_ps == UINT64_C(200000000));
     assert(specs[0].stop_ps == UINT64_C(1200000000));
 
+    writeConfig(std::string(kHeader) +
+                "\n1,16,0,3,.123456789,200000000,1200000000\n"
+                "2,17,1,2,0.000000001,200000000,1200000000\n"
+                "3,18,2,1,25.0000000000,200000000,1200000000\n"
+                "4,19,3,0,25.,200000000,1200000000\n"
+                "5,20,4,0,18446744073.709551615,200000000,1200000000\n");
+    const std::vector<MotivationBackgroundSpec> exact_rates =
+        loadMotivationBackgroundConfig(kConfig);
+    assert(exact_rates.size() == 5);
+    assert(exact_rates[0].rate == UINT64_C(123456789));
+    assert(exact_rates[1].rate == UINT64_C(1));
+    assert(exact_rates[2].rate == UINT64_C(25000000000));
+    assert(exact_rates[3].rate == UINT64_C(25000000000));
+    assert(exact_rates[4].rate == UINT64_MAX);
+
     expectInvalid(std::string(kHeader) +
                   "\n0,16,0,3,25,200000000,1200000000\n"
                   "0,17,1,2,10,300000000,900000000\n");
@@ -108,7 +123,18 @@ void testConfigParsing() {
         expectInvalid(std::string(kHeader) + "\n" + row + "\n");
     }
 
-    for (const char* rate : {"nan", "inf", "0", "-1", "1e100"}) {
+    for (const char* rate : {"nan",
+                             "inf",
+                             "0",
+                             "-1",
+                             "+1",
+                             "1e0",
+                             "0x1p0",
+                             ".",
+                             "1.2.3",
+                             "0.0000000015",
+                             "18446744073.709551616",
+                             "18446744074"}) {
         expectInvalid(std::string(kHeader) + "\n0,16,0,3," + rate +
                       ",200000000,1200000000\n");
     }

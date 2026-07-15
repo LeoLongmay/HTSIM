@@ -1,11 +1,9 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 #include "motivation_background.h"
 
-#include <cerrno>
+#include <algorithm>
 #include <charconv>
 #include <cctype>
-#include <cmath>
-#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -76,23 +74,66 @@ Integer parseInteger(const std::string& field, const char* name, size_t line_num
 }
 
 linkspeed_bps parseRate(const std::string& field, size_t line_number) {
-    char* end = nullptr;
-    errno = 0;
-    const double rate_gbps = std::strtod(field.c_str(), &end);
-    if (end == field.c_str() || end != field.c_str() + field.size() || errno == ERANGE ||
-        !std::isfinite(rate_gbps) || rate_gbps <= 0) {
+    const size_t decimal = field.find('.');
+    if (decimal != std::string::npos && field.find('.', decimal + 1) != std::string::npos) {
         throw std::invalid_argument("invalid rate_gbps on line " +
                                     std::to_string(line_number));
     }
 
-    const long double rate_bps = static_cast<long double>(rate_gbps) * 1000000000.0L;
-    if (rate_bps > static_cast<long double>(std::numeric_limits<linkspeed_bps>::max())) {
+    const size_t whole_digits = decimal == std::string::npos ? field.size() : decimal;
+    const size_t fractional_begin = decimal == std::string::npos ? field.size() : decimal + 1;
+    if (whole_digits == 0 && fractional_begin == field.size()) {
+        throw std::invalid_argument("invalid rate_gbps on line " +
+                                    std::to_string(line_number));
+    }
+    for (size_t index = 0; index < field.size(); ++index) {
+        if (index != decimal && (field[index] < '0' || field[index] > '9')) {
+            throw std::invalid_argument("invalid rate_gbps on line " +
+                                        std::to_string(line_number));
+        }
+    }
+
+    linkspeed_bps whole_gbps = 0;
+    if (whole_digits != 0) {
+        const char* begin = field.data();
+        const auto result = std::from_chars(begin, begin + whole_digits, whole_gbps, 10);
+        if (result.ec != std::errc()) {
+            throw std::invalid_argument("overflowing rate_gbps on line " +
+                                        std::to_string(line_number));
+        }
+    }
+
+    constexpr linkspeed_bps kBpsPerGbps = UINT64_C(1000000000);
+    const linkspeed_bps maximum = std::numeric_limits<linkspeed_bps>::max();
+    if (whole_gbps > maximum / kBpsPerGbps) {
         throw std::invalid_argument("overflowing rate_gbps on line " +
                                     std::to_string(line_number));
     }
-    const linkspeed_bps rate = static_cast<linkspeed_bps>(rate_bps);
+
+    linkspeed_bps fractional_bps = 0;
+    const size_t fractional_digits = field.size() - fractional_begin;
+    const size_t converted_digits = std::min<size_t>(fractional_digits, 9);
+    for (size_t index = 0; index < converted_digits; ++index) {
+        fractional_bps = fractional_bps * 10 + (field[fractional_begin + index] - '0');
+    }
+    for (size_t index = converted_digits; index < 9; ++index) {
+        fractional_bps *= 10;
+    }
+    for (size_t index = 9; index < fractional_digits; ++index) {
+        if (field[fractional_begin + index] != '0') {
+            throw std::invalid_argument("rate_gbps has fractional bps on line " +
+                                        std::to_string(line_number));
+        }
+    }
+
+    const linkspeed_bps whole_bps = whole_gbps * kBpsPerGbps;
+    if (fractional_bps > maximum - whole_bps) {
+        throw std::invalid_argument("overflowing rate_gbps on line " +
+                                    std::to_string(line_number));
+    }
+    const linkspeed_bps rate = whole_bps + fractional_bps;
     if (rate == 0) {
-        throw std::invalid_argument("rate_gbps is too small on line " +
+        throw std::invalid_argument("rate_gbps must represent at least one bps on line " +
                                     std::to_string(line_number));
     }
     return rate;
