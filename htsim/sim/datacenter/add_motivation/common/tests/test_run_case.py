@@ -143,6 +143,9 @@ class RunCaseTest(unittest.TestCase):
         self.assertIn("-sender_cc_only", argv)
         self.assertNotIn("-receiver_cc", argv)
         self.assertNotIn("-ecn", argv)
+        self.assertNotIn("-queue_type", argv)
+        self.assertNotIn("-host_queue_type", argv)
+        self.assertNotIn("-motivation_background_config", argv)
 
         manifest = json.loads(manifest_path.read_text(encoding="ascii"))
         self.assertEqual(manifest_path, self.root / "output" / "m1_smoke_s13.manifest.json")
@@ -167,6 +170,11 @@ class RunCaseTest(unittest.TestCase):
         self.assertEqual(manifest["config"]["load_balancing_algo"], "reps")
         self.assertEqual(manifest["config"]["degraded_links"], 2)
         self.assertEqual(manifest["config"]["degraded_capacity_gbps"], 50.0)
+        self.assertIsNone(manifest["config"]["background_config"])
+        self.assertNotIn("network_queue_type", manifest["config"])
+        self.assertNotIn("host_queue_type", manifest["config"])
+        self.assertNotIn("background_config_sha256", manifest)
+        self.assertNotIn("background_safety_contract", manifest)
         self.assertEqual(
             set(manifest["output_filenames"]),
             {
@@ -179,6 +187,51 @@ class RunCaseTest(unittest.TestCase):
                 "pathmap",
                 "linkmap",
                 "manifest",
+            },
+        )
+
+    def test_background_uses_drain_safe_queues_and_records_safety_contract(self):
+        module = load_run_case_module()
+        background = self.root / "background.csv"
+        background.write_text(
+            "background_id,src,dst,path_index,rate_gbps,start_ps,stop_ps\n"
+            "0,32,0,3,25,200000000,1200000000\n",
+            encoding="ascii",
+        )
+
+        with mock.patch.object(module.subprocess, "run", side_effect=self.completed) as run:
+            manifest_path = self.invoke(module, background_config=background)
+
+        argv = run.call_args_list[-1].args[0]
+        self.assertEqual(argv.count("-queue_type"), 1)
+        self.assertEqual(argv[argv.index("-queue_type") + 1], "ecn")
+        self.assertEqual(argv.count("-host_queue_type"), 1)
+        self.assertEqual(argv[argv.index("-host_queue_type") + 1], "fair_prio")
+        self.assertEqual(argv.count("-disable_trim"), 1)
+        self.assertNotIn("-ecn", argv)
+        self.assertEqual(argv.count("-motivation_background_config"), 1)
+        self.assertEqual(
+            argv[argv.index("-motivation_background_config") + 1],
+            str(background.resolve()),
+        )
+
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+        self.assertEqual(manifest["argv"], argv)
+        self.assertEqual(manifest["config"]["background_config"], str(background.resolve()))
+        self.assertEqual(manifest["config"]["network_queue_type"], "ecn")
+        self.assertEqual(manifest["config"]["host_queue_type"], "fair_prio")
+        self.assertEqual(
+            manifest["background_config_sha256"],
+            hashlib.sha256(background.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            manifest["background_safety_contract"],
+            {
+                "enforced_by": "main_uec",
+                "rate_lte_host_queue_bitrate": True,
+                "source_distinct_from_all_foreground_endpoints": True,
+                "source_unique_across_background_streams": True,
+                "stop_plus_route_drain_bound_lte_simulation_end": True,
             },
         )
 
@@ -292,6 +345,7 @@ class RunCaseTest(unittest.TestCase):
             {"degraded_links": 0, "degraded_capacity_gbps": 50},
             {"degraded_links": 2, "degraded_capacity_gbps": 100},
             {"traffic": self.root / "missing.cm"},
+            {"background_config": self.root / "missing-background.csv"},
         )
         for values in invalid:
             with self.subTest(values=values):

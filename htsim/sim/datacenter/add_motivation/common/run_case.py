@@ -122,13 +122,7 @@ def _sha256(path):
 def _background_value(value):
     if value is None:
         return None
-    if isinstance(value, (str, os.PathLike)):
-        return str(_input_file(value, "background_config"))
-    try:
-        json.dumps(value, allow_nan=False)
-    except (TypeError, ValueError) as error:
-        raise ValueError("background_config must be a file path or JSON value") from error
-    return value
+    return str(_input_file(value, "background_config"))
 
 
 def _git_commit():
@@ -204,6 +198,9 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
     topology_sha256 = _sha256(topology_path)
     traffic_sha256 = _sha256(traffic_path)
     binary_sha256 = _sha256(binary_path)
+    background_config_sha256 = (
+        _sha256(Path(background_value)) if background_value is not None else None
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     output_filenames = {name: str(path) for name, path in output_paths.items()}
@@ -219,6 +216,11 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         "-paths", "8",
         "-mtu", str(MTU_BYTES),
         "-q", str(QUEUE_PACKETS),
+        *(
+            ["-queue_type", "ecn", "-host_queue_type", "fair_prio"]
+            if background_value is not None
+            else []
+        ),
         "-disable_trim",
         "-target_q_delay", "14",
         "-prism_t_spray", "14",
@@ -227,6 +229,11 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         "-degraded_links", str(degraded_links),
         "-degraded_capacity_gbps", _number_arg(degraded_capacity_gbps),
         "-seed", str(seed),
+        *(
+            ["-motivation_background_config", background_value]
+            if background_value is not None
+            else []
+        ),
         "-motivation_trace_prefix", str(trace_path),
         "-motivation_run_id", run_id,
         "-motivation_scenario", experiment,
@@ -291,6 +298,21 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         },
         "output_filenames": output_filenames,
     }
+    if background_value is not None:
+        manifest["config"].update(
+            {
+                "network_queue_type": "ecn",
+                "host_queue_type": "fair_prio",
+            }
+        )
+        manifest["background_config_sha256"] = background_config_sha256
+        manifest["background_safety_contract"] = {
+            "enforced_by": "main_uec",
+            "source_distinct_from_all_foreground_endpoints": True,
+            "source_unique_across_background_streams": True,
+            "rate_lte_host_queue_bitrate": True,
+            "stop_plus_route_drain_bound_lte_simulation_end": True,
+        }
 
     temp_name = None
     try:
