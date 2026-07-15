@@ -58,11 +58,41 @@ run_rejected topology_links "degraded link count 129 exceeds topology maximum 12
 run_rejected missing_capacity "missing operand for -degraded_capacity_gbps" -degraded_capacity_gbps
 run_rejected junk_capacity "invalid -degraded_capacity_gbps" -degraded_capacity_gbps 50junk
 run_rejected nonfinite_capacity "invalid -degraded_capacity_gbps" -degraded_capacity_gbps nan
+run_rejected tiny_capacity "degraded scaling would produce zero link rate" \
+    -degraded_links 2 -degraded_capacity_gbps 1e-12
+run_rejected tiny_queue "degraded scaling would produce zero downlink queue size" \
+    -degraded_links 2 -degraded_capacity_gbps 1e-9
+run_rejected tiny_ecn "degraded scaling would produce zero ECN low threshold" \
+    -degraded_links 2 -degraded_capacity_gbps 0.001
 run_rejected excessive_capacity "degraded_capacity_gbps must be in" \
     -degraded_links 2 -degraded_capacity_gbps 101
-run_rejected control_mismatch "degraded configuration requires" \
+run_rejected control_mismatch "control degraded_capacity_gbps must match affected topology rate" \
     -degraded_links 0 -degraded_capacity_gbps 50
-run_rejected gray_mismatch "degraded configuration requires" \
+run_rejected gray_mismatch "degraded_capacity_gbps must be in" \
     -degraded_links 2 -degraded_capacity_gbps 100
 run_rejected mixed_aliases "cannot mix -failed with degraded aliases" \
     -failed 2 -degraded_links 2 -degraded_capacity_gbps 50
+
+AUTO_BASE=(
+    "$DC/htsim_uec"
+    -tm "$HERE/one_flow.cm"
+    -nodes 128
+    -tiers 3
+    -linkspeed 400000
+    -q 211
+    -sender_cc_algo nscc
+    -load_balancing_algo reps_legacy
+    -end 2
+)
+
+"${AUTO_BASE[@]}" -degraded_links 2 -degraded_capacity_gbps 100 \
+    -o "$TMP/auto400-gray.dat" >"$TMP/auto400-gray.stdout" 2>&1
+grep -q "Degraded:" "$TMP/auto400-gray.stdout"
+grep -q "linkspeed set to 100" "$TMP/auto400-gray.stdout"
+
+"${AUTO_BASE[@]}" -degraded_links 0 -degraded_capacity_gbps 400 \
+    -o "$TMP/auto400-control.dat" >"$TMP/auto400-control.stdout" 2>&1
+if grep -q "Degraded:" "$TMP/auto400-control.stdout"; then
+    echo "400 Gbps control unexpectedly degraded links" >&2
+    exit 1
+fi

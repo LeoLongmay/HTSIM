@@ -757,13 +757,6 @@ int main(int argc, char **argv) {
         cerr << "invalid -degraded_capacity_gbps value: must be positive" << endl;
         return 1;
     }
-    if (!failed_alias_set && (degraded_links_set || degraded_capacity_set) &&
-        ((topo_num_failed == 0) != (degraded_capacity_gbps == 100))) {
-        cerr << "degraded configuration requires links=0/capacity=100 for controls or "
-             << "links>0/capacity<100 for gray cases" << endl;
-        return 1;
-    }
-
     if (end_time > 0 && logtime >= timeFromUs((uint32_t)end_time)){
         cout << "Logtime set to endtime" << endl;
         logtime = timeFromUs((uint32_t)end_time) - 1;
@@ -946,17 +939,24 @@ int main(int argc, char **argv) {
         const double normal_rate_gbps =
             speedAsGbps(topo_cfg->degraded_link_normal_rate());
         if (topo_num_failed == 0) {
-            if (degraded_capacity_gbps != normal_rate_gbps) {
+            if (degraded_capacity_set && degraded_capacity_gbps != normal_rate_gbps) {
                 cerr << "control degraded_capacity_gbps must match affected topology rate "
                      << normal_rate_gbps << endl;
                 return 1;
             }
-        } else if (degraded_capacity_gbps >= normal_rate_gbps) {
-            cerr << "degraded_capacity_gbps must be in (0," << normal_rate_gbps
-                 << ") for degraded links" << endl;
-            return 1;
+            degraded_link_ratio = 1;
+        } else {
+            if (!degraded_capacity_set) {
+                cerr << "positive -degraded_links requires -degraded_capacity_gbps" << endl;
+                return 1;
+            }
+            if (degraded_capacity_gbps >= normal_rate_gbps) {
+                cerr << "degraded_capacity_gbps must be in (0," << normal_rate_gbps
+                     << ") for degraded links" << endl;
+                return 1;
+            }
+            degraded_link_ratio = degraded_capacity_gbps / normal_rate_gbps;
         }
-        degraded_link_ratio = degraded_capacity_gbps / normal_rate_gbps;
     }
 
     simtime_picosec network_max_unloaded_rtt = calculate_rtt(topo_cfg.get(), linkspeed);
@@ -997,6 +997,13 @@ int main(int argc, char **argv) {
         topo_cfg->set_ecn_parameters(true, !receiver_driven, ecn_low, ecn_high);
         assert(ecn_low <= ecn_high);
         assert(ecn_high <= queuesize);
+    }
+
+    try {
+        topo_cfg->validate_degraded_link_scaling();
+    } catch (const std::invalid_argument& error) {
+        cerr << error.what() << endl;
+        return 1;
     }
 
     cout << *topo_cfg << endl;

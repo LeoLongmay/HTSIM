@@ -97,6 +97,7 @@ public:
     void set_queue_sizes(mem_b queuesize);
     linkspeed_bps degraded_link_normal_rate() const;
     uint32_t max_degraded_links() const;
+    void validate_degraded_link_scaling() const;
 
     void set_params(uint32_t no_of_nodes);
     void set_custom_params(uint32_t no_of_nodes);

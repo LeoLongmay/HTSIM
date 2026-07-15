@@ -1,5 +1,6 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 #include "fat_tree_topology.h"
+#include <cmath>
 #include <vector>
 #include "string.h"
 #include <sstream>
@@ -433,6 +434,41 @@ uint32_t FatTreeTopologyCfg::max_degraded_links() const {
         return (NAGG - 1) * _agg_switches_per_pod + links_per_agg;
     }
     throw std::logic_error("degraded links require a two- or three-tier fat tree");
+}
+
+void FatTreeTopologyCfg::validate_degraded_link_scaling() const {
+    if (_num_failed_links == 0)
+        return;
+
+    const auto require_positive_scaled_value = [this](long double value,
+                                                       const char* description) {
+        const long double scaled = value * _failed_link_ratio;
+        if (value <= 0 || !std::isfinite(scaled)) {
+            throw std::invalid_argument(
+                string("degraded scaling would produce invalid ") + description);
+        }
+        if (scaled < 1) {
+            throw std::invalid_argument(
+                string("degraded scaling would produce zero ") + description);
+        }
+    };
+
+    require_positive_scaled_value(degraded_link_normal_rate(), "link rate");
+    if (_tiers == 2) {
+        require_positive_scaled_value(_queue_down[AGG_TIER], "downlink queue size");
+        require_positive_scaled_value(_queue_up[TOR_TIER], "uplink queue size");
+    } else {
+        require_positive_scaled_value(_queue_down[CORE_TIER], "downlink queue size");
+    }
+
+    if (_enable_ecn) {
+        if (_ecn_low < 0 || _ecn_high < _ecn_low)
+            throw std::invalid_argument("degraded scaling has invalid ECN thresholds");
+        if (_ecn_low > 0)
+            require_positive_scaled_value(_ecn_low, "ECN low threshold");
+        if (_ecn_high > 0)
+            require_positive_scaled_value(_ecn_high, "ECN high threshold");
+    }
 }
 
 void FatTreeTopologyCfg::set_queue_sizes(mem_b queuesize) {
