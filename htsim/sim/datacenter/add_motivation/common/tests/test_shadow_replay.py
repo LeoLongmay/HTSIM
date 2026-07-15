@@ -1,3 +1,4 @@
+import dataclasses
 import unittest
 from collections import defaultdict
 
@@ -7,7 +8,11 @@ from htsim.sim.datacenter.add_motivation.common.shadow_replay import (
     SlotState,
     replay_shadow,
 )
-from htsim.sim.datacenter.add_motivation.common.trace_schema import EventRef, TraceBundle
+from htsim.sim.datacenter.add_motivation.common.trace_schema import (
+    EventRef,
+    TraceBundle,
+    TraceValidationError,
+)
 
 
 UINT64_MAX = 2**64 - 1
@@ -358,6 +363,51 @@ class ShadowReplayTests(unittest.TestCase):
         self.assertFalse(round_.complete)
         self.assertTrue(all(slot.state is SlotState.COMPLETE for slot in round_.slots))
 
+    def test_unclosed_tail_epoch_acks_are_excluded_and_round_is_censored(self):
+        builder = self.new_builder()
+        seed_fifo(builder, count=1)
+        select_and_ack(builder, 0, 0, 0)
+        tail_epoch = builder.close_epoch(7)
+        bundle = builder.bundle()
+        bundle = dataclasses.replace(
+            bundle,
+            epoch=tuple(row for row in bundle.epoch if row is not tail_epoch),
+            events=tuple(
+                event for event in bundle.events
+                if not (event.kind == "epoch" and event.row is tail_epoch)
+            ),
+        )
+
+        round_ = replay_shadow(bundle)[0]
+
+        self.assertTrue(round_.censored)
+        self.assertEqual(round_.censor_reason, "trace_end_before_slot_completion")
+        self.assertEqual(round_.excluded_tail_ack_count, 1)
+        self.assertEqual(
+            round_.excluded_tail_ack_reason,
+            "ack_epoch_not_closed_at_trace_end",
+        )
+
+    def test_missing_middle_epoch_ack_remains_a_strict_error(self):
+        builder = self.new_builder()
+        seed_fifo(builder, count=1)
+        builder.ack(7, 0)
+        middle_epoch = builder.close_epoch(7)
+        builder.ack(7, 0)
+        builder.close_epoch(7)
+        bundle = builder.bundle()
+        bundle = dataclasses.replace(
+            bundle,
+            epoch=tuple(row for row in bundle.epoch if row is not middle_epoch),
+            events=tuple(
+                event for event in bundle.events
+                if not (event.kind == "epoch" and event.row is middle_epoch)
+            ),
+        )
+
+        with self.assertRaises(TraceValidationError):
+            replay_shadow(bundle)
+
     def test_completion_uses_next_raw_epoch_spread_and_delta_direction(self):
         builder = self.new_builder()
         seed_fifo(builder, s_ref_ps=20_000_000)
@@ -399,6 +449,17 @@ class ShadowReplayTests(unittest.TestCase):
 
         self.assertEqual(len(rounds), 1)
         self.assertEqual(rounds[0].start_epoch_id, 1)
+
+    def test_actual_hold_starts_episode_when_observed_region_is_not_hold(self):
+        builder = self.new_builder()
+        seed_fifo(builder, count=2)
+        builder.rows["epoch"][-1]["observed_region"] = "increase"
+
+        rounds = replay_shadow(builder.bundle())
+
+        self.assertEqual(len(rounds), 1)
+        self.assertEqual(rounds[0].start_epoch_id, 0)
+        self.assertEqual(rounds[0].s_ref_ps, 20_000_000)
 
     def test_rejects_non_eight_slots_and_noncanonical_threshold(self):
         builder = self.new_builder()

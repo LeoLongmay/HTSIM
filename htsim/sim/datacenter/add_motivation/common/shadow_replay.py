@@ -124,6 +124,8 @@ class ShadowRound:
     replacement_count: int = 0
     admission_pass_count: int = 0
     admission_fail_count: int = 0
+    excluded_tail_ack_count: int = 0
+    excluded_tail_ack_reason: Optional[str] = None
 
     @property
     def no_progress(self) -> bool:
@@ -296,6 +298,37 @@ def _censor(active: _ActiveRound, reason: str) -> None:
     active.result.censor_reason = reason
 
 
+def _unclosed_tail_ack_event_seqs(bundle: TraceBundle) -> set[int]:
+    closed_by_flow: dict[int, list[dict]] = {}
+    for epoch in bundle.epoch:
+        closed_by_flow.setdefault(epoch["flow_id"], []).append(epoch)
+
+    missing_by_flow: dict[int, list[dict]] = {}
+    closed_identities = {
+        (epoch["flow_id"], epoch["epoch_id"]) for epoch in bundle.epoch
+    }
+    for ack in bundle.ack:
+        identity = (ack["flow_id"], ack["epoch_id"])
+        if identity not in closed_identities:
+            missing_by_flow.setdefault(ack["flow_id"], []).append(ack)
+
+    excluded = set()
+    for flow_id, missing in missing_by_flow.items():
+        missing_epoch_ids = {ack["epoch_id"] for ack in missing}
+        closed = closed_by_flow.get(flow_id, ())
+        if not closed:
+            is_tail = len(missing_epoch_ids) == 1
+        else:
+            last_closed = max(closed, key=lambda epoch: epoch["epoch_id"])
+            is_tail = (
+                missing_epoch_ids == {last_closed["epoch_id"] + 1}
+                and all(ack["event_seq"] > last_closed["event_seq"] for ack in missing)
+            )
+        if is_tail:
+            excluded.update(ack["event_seq"] for ack in missing)
+    return excluded
+
+
 def replay_shadow(
     bundle: TraceBundle,
     slots: int = SHADOW_SLOTS,
@@ -332,7 +365,15 @@ def replay_shadow(
             "unit fixtures may pass injection_time_ps"
         )
 
-    attached = attach_same_epoch_residuals(bundle, threshold_ps=threshold_ps)
+    excluded_tail_ack_event_seqs = _unclosed_tail_ack_event_seqs(bundle)
+    residual_bundle = dataclasses.replace(
+        bundle,
+        ack=tuple(
+            ack for ack in bundle.ack
+            if ack["event_seq"] not in excluded_tail_ack_event_seqs
+        ),
+    )
+    attached = attach_same_epoch_residuals(residual_bundle, threshold_ps=threshold_ps)
     residual_by_event_seq = {item.row["event_seq"]: item for item in attached}
 
     fifos: dict[int, LegacyFifo] = {}
@@ -365,6 +406,8 @@ def replay_shadow(
                 ):
                     active.selected_seed_token_ids.add(token_id)
             elif row["operation"] == "enqueue_good_ack":
+                if row["related_ack_event_seq"] in excluded_tail_ack_event_seqs:
+                    continue
                 _handle_enqueue_admission(
                     active,
                     row,
@@ -375,6 +418,13 @@ def replay_shadow(
 
         if event.kind == "ack":
             active = active_by_flow.get(row["flow_id"])
+            if event.event_seq in excluded_tail_ack_event_seqs:
+                if active is not None:
+                    active.result.excluded_tail_ack_count += 1
+                    active.result.excluded_tail_ack_reason = (
+                        "ack_epoch_not_closed_at_trace_end"
+                    )
+                continue
             if active is not None:
                 _handle_seeded_ack(
                     active,
@@ -401,7 +451,7 @@ def replay_shadow(
             continue
         if not after_injection(event.event_seq, row["end_ps"]):
             continue
-        if row["actual_region"] != "hold" or row["observed_region"] != "hold":
+        if row["actual_region"] != "hold":
             continue
 
         fifo = fifos.setdefault(flow_id, LegacyFifo())
