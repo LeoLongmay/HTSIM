@@ -156,6 +156,20 @@ if ( ENABLE_TESTS )
             PROPERTIES TIMEOUT 60
         )
     endforeach()
+
+    add_executable(test_motivation_background
+        datacenter/add_motivation/common/tests/test_motivation_background.cpp)
+    target_link_libraries(test_motivation_background PRIVATE htsim)
+    add_test(NAME motivation_background COMMAND test_motivation_background)
+    set_tests_properties(motivation_background PROPERTIES LABELS "motivation" TIMEOUT 60)
+
+    add_test(
+        NAME motivation_background_cli
+        COMMAND bash
+            ${CMAKE_CURRENT_SOURCE_DIR}/datacenter/add_motivation/common/tests/test_motivation_background_cli.sh
+            $<TARGET_FILE:htsim_uec>)
+    set_tests_properties(motivation_background_cli
+        PROPERTIES LABELS "motivation;integration" TIMEOUT 120)
 endif()
 
 # Always print ENABLE_TESTS status, so folks don't miss it.

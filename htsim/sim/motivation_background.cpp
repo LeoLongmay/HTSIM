@@ -14,13 +14,16 @@
 #include <utility>
 
 #include "cbrpacket.h"
+#include "pipe.h"
 #include "queue.h"
 
 namespace {
 
 constexpr const char* kConfigHeader =
     "background_id,src,dst,path_index,rate_gbps,start_ps,stop_ps";
-constexpr uint64_t kPacketBitsPicoseconds = UINT64_C(1500) * 8 * UINT64_C(1000000000000);
+constexpr uint64_t kPacketBitsPicoseconds =
+    static_cast<uint64_t>(kMotivationBackgroundPacketBytes) * 8 *
+    UINT64_C(1000000000000);
 // Keep trace-rate arithmetic in the range where integer bps are exactly representable as double.
 constexpr linkspeed_bps kMaximumExactTraceRate = UINT64_C(1) << 53;
 
@@ -261,6 +264,55 @@ std::string motivationBackgroundQueueFingerprint(const route_t& route) {
     return fingerprint.str();
 }
 
+simtime_picosec motivationBackgroundRouteDrainBound(const route_t& route) {
+    if (route.size() == 0) {
+        throw std::invalid_argument("motivation background route is empty");
+    }
+
+    simtime_picosec bound = 0;
+    const auto add_duration = [&bound](simtime_picosec duration) {
+        if (duration > std::numeric_limits<simtime_picosec>::max() - bound) {
+            throw std::overflow_error("motivation background route drain bound overflow");
+        }
+        bound += duration;
+    };
+
+    for (PacketSink* element : route) {
+        if (const auto* queue = dynamic_cast<const BaseQueue*>(element)) {
+            if (queue->bitrate() == 0 || queue->maxsize() < 0) {
+                throw std::invalid_argument(
+                    "motivation background route has an unbounded queue: " +
+                    queue->queueName());
+            }
+            const uint64_t queued_bytes = static_cast<uint64_t>(queue->maxsize());
+            if (queued_bytes > std::numeric_limits<uint64_t>::max() -
+                                   kMotivationBackgroundPacketBytes) {
+                throw std::overflow_error(
+                    "motivation background queue drain byte bound overflow");
+            }
+            const unsigned __int128 bits_picoseconds =
+                static_cast<unsigned __int128>(queued_bytes +
+                                               kMotivationBackgroundPacketBytes) *
+                8 * UINT64_C(1000000000000);
+            const unsigned __int128 duration =
+                (bits_picoseconds + queue->bitrate() - 1) / queue->bitrate();
+            if (duration > std::numeric_limits<simtime_picosec>::max()) {
+                throw std::overflow_error(
+                    "motivation background queue drain time overflow");
+            }
+            add_duration(static_cast<simtime_picosec>(duration));
+            continue;
+        }
+        if (auto* pipe = dynamic_cast<Pipe*>(element)) {
+            add_duration(pipe->delay());
+            continue;
+        }
+        throw std::invalid_argument(
+            "motivation background route contains an element without a drain bound");
+    }
+    return bound;
+}
+
 void MotivationBackgroundSink::receivePacket(Packet& packet) {
     const uint64_t packet_bytes = packet.size();
     if (packet_bytes > std::numeric_limits<uint64_t>::max() - _delivered_bytes) {
@@ -311,6 +363,8 @@ void MotivationBackgroundSource::connect(route_t& route, MotivationBackgroundSin
     }
     _route = &route;
     _sink = &sink;
+    // Register finish before packet events exist. Equivalent-time EventList entries retain
+    // insertion order, so the finish snapshot excludes an arrival exactly at stop_ps.
     eventlist().sourceIsPending(*this, _spec.start_ps);
     eventlist().sourceIsPending(*this, _spec.stop_ps);
 }
@@ -360,7 +414,8 @@ void MotivationBackgroundSource::sendPacket() {
     if (_route == nullptr || _sink == nullptr) {
         throw std::logic_error("motivation background source is not connected");
     }
-    if (_sent_bytes > std::numeric_limits<uint64_t>::max() - kPacketBytes) {
+    if (_sent_bytes > std::numeric_limits<uint64_t>::max() -
+                          kMotivationBackgroundPacketBytes) {
         throw std::overflow_error("motivation background sent-byte counter overflow");
     }
     if (_next_packet_id > std::numeric_limits<packetid_t>::max()) {
@@ -368,9 +423,10 @@ void MotivationBackgroundSource::sendPacket() {
     }
 
     CbrPacket* packet = MotivationBackgroundPacket::newpkt(
-        _flow, *_route, static_cast<packetid_t>(_next_packet_id), kPacketBytes);
+        _flow, *_route, static_cast<packetid_t>(_next_packet_id),
+        kMotivationBackgroundPacketBytes);
     ++_next_packet_id;
-    _sent_bytes += kPacketBytes;
+    _sent_bytes += kMotivationBackgroundPacketBytes;
     packet->set_src(_spec.src);
     packet->set_dst(_spec.dst);
     packet->set_pathid(_spec.path_index);

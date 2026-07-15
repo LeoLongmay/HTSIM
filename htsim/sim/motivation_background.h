@@ -21,10 +21,14 @@ struct MotivationBackgroundSpec {
     simtime_picosec stop_ps;
 };
 
+constexpr uint32_t kMotivationBackgroundPacketBytes = 1500;
+
 std::vector<MotivationBackgroundSpec> loadMotivationBackgroundConfig(
     const std::string& path);
 std::string formatMotivationBackgroundRateGbps(double rate_gbps);
 std::string motivationBackgroundQueueFingerprint(const route_t& route);
+// Conservative time for one emitted packet to leave every bounded queue and pipe.
+simtime_picosec motivationBackgroundRouteDrainBound(const route_t& route);
 
 class MotivationBackgroundSink : public PacketSink {
 public:
@@ -32,6 +36,7 @@ public:
 
     void receivePacket(Packet& packet) override;
     const std::string& nodename() override { return _nodename; }
+    // This counter includes all arrivals, including packets draining after stop_ps.
     uint64_t deliveredBytes() const { return _delivered_bytes; }
 
 private:
@@ -45,6 +50,8 @@ public:
                                MotivationTraceWriter& trace_writer,
                                std::string queue_fingerprint);
 
+    // The finish trace snapshots deliveries whose arrival time is strictly less than
+    // stop_ps. A packet arriving exactly at stop_ps drains afterward and is excluded.
     void connect(route_t& route, MotivationBackgroundSink& sink);
     void doNextEvent() override;
 
@@ -52,8 +59,6 @@ public:
     uint64_t sentBytes() const { return _sent_bytes; }
 
 private:
-    static constexpr uint32_t kPacketBytes = 1500;
-
     void log(const char* operation, uint64_t delivered_bytes);
     void sendPacket();
 

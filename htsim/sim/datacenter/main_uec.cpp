@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -105,7 +106,6 @@ uint32_t calculate_bdp_pkt(FatTreeTopologyCfg* t_cfg, linkspeed_bps host_linkspe
 }
 
 int main(int argc, char **argv) {
-    Clock c(timeFromSec(5 / 100.), eventlist);
     bool param_queuesize_set = false;
     uint32_t queuesize_pkt = 0;
     linkspeed_bps linkspeed = speedFromMbps((double)HOST_NIC);
@@ -181,6 +181,7 @@ int main(int argc, char **argv) {
     int64_t motivation_flow_id = -1;
     std::string motivation_background_config;
     bool motivation_background_config_set = false;
+    vector<MotivationBackgroundSpec> motivation_background_specs;
 
     while (i<argc) {
         if (!strcmp(argv[i],"-o")) {
@@ -795,6 +796,15 @@ int main(int argc, char **argv) {
         return 1;
     }
     try {
+        if (motivation_background_config_set) {
+            motivation_background_specs =
+                loadMotivationBackgroundConfig(motivation_background_config);
+        }
+    } catch (const std::exception& error) {
+        cerr << error.what() << endl;
+        return 1;
+    }
+    try {
         UecSrc::configureMotivationTrace(motivation_prefix, motivation_run_id,
                                          motivation_scenario, static_cast<uint32_t>(seed),
                                          motivation_flow_id);
@@ -831,6 +841,7 @@ int main(int argc, char **argv) {
     FatTreeSwitch::_trim_size = trimsize;
 
     eventlist.setEndtime(timeFromMs((double)end_time));
+    Clock c(timeFromSec(5 / 100.), eventlist);
 
     switch (route_strategy) {
     case ECMP_FIB_ECN:
@@ -1427,18 +1438,16 @@ int main(int argc, char **argv) {
     vector<unique_ptr<MotivationBackgroundSource>> motivation_background_sources;
     if (motivation_background_config_set) {
         try {
-            const vector<MotivationBackgroundSpec> background_specs =
-                loadMotivationBackgroundConfig(motivation_background_config);
-            motivation_background_routes.reserve(background_specs.size());
-            motivation_background_sinks.reserve(background_specs.size());
-            motivation_background_sources.reserve(background_specs.size());
+            if (end_time <= 0) {
+                throw invalid_argument(
+                    "motivation background traffic requires a finite simulation end");
+            }
+            const simtime_picosec simulation_end_ps = timeFromMs((double)end_time);
+            motivation_background_routes.reserve(motivation_background_specs.size());
+            motivation_background_sinks.reserve(motivation_background_specs.size());
+            motivation_background_sources.reserve(motivation_background_specs.size());
 
-            for (const MotivationBackgroundSpec& spec : background_specs) {
-                if (end_time > 0 && spec.stop_ps >= timeFromMs((double)end_time)) {
-                    throw invalid_argument(
-                        "motivation background stop must precede simulation end for ID " +
-                        to_string(spec.background_id));
-                }
+            for (const MotivationBackgroundSpec& spec : motivation_background_specs) {
                 if (spec.src >= no_of_nodes || spec.dst >= no_of_nodes) {
                     throw invalid_argument("motivation background endpoint is outside topology for ID " +
                                            to_string(spec.background_id));
@@ -1467,6 +1476,18 @@ int main(int argc, char **argv) {
                     throw runtime_error("motivation background path has no queues for ID " +
                                         to_string(spec.background_id));
                 }
+                const simtime_picosec drain_bound =
+                    motivationBackgroundRouteDrainBound(selected_path);
+                if (drain_bound > numeric_limits<simtime_picosec>::max() - spec.stop_ps) {
+                    throw overflow_error(
+                        "motivation background drain deadline overflow for ID " +
+                        to_string(spec.background_id));
+                }
+                if (spec.stop_ps + drain_bound > simulation_end_ps) {
+                    throw invalid_argument(
+                        "motivation background cannot drain before simulation end for ID " +
+                        to_string(spec.background_id));
+                }
 
                 auto sink = make_unique<MotivationBackgroundSink>();
                 auto route = make_unique<Route>(selected_path.size() + 1);
@@ -1476,11 +1497,17 @@ int main(int argc, char **argv) {
                 route->push_back(sink.get());
                 auto source = make_unique<MotivationBackgroundSource>(
                     eventlist, spec, UecSrc::motivationTrace(), queue_fingerprint);
-                source->connect(*route, *sink);
 
                 motivation_background_routes.push_back(move(route));
                 motivation_background_sinks.push_back(move(sink));
                 motivation_background_sources.push_back(move(source));
+            }
+
+            // Every row and lifetime is valid before any source enters EventList.
+            for (size_t index = 0; index < motivation_background_sources.size(); ++index) {
+                motivation_background_sources[index]->connect(
+                    *motivation_background_routes[index],
+                    *motivation_background_sinks[index]);
             }
         } catch (const exception& error) {
             cerr << error.what() << endl;

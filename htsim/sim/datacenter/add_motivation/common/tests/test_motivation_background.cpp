@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -76,15 +77,19 @@ std::string lineAt(const std::string& path, size_t line_number) {
 
 class ForwardingQueue : public BaseQueue {
 public:
-    ForwardingQueue(EventList& eventlist, const std::string& name)
-        : BaseQueue(speedFromGbps(100), eventlist, nullptr) {
+    ForwardingQueue(EventList& eventlist, const std::string& name,
+                    linkspeed_bps rate = speedFromGbps(100), mem_b maximum = 0)
+        : BaseQueue(rate, eventlist, nullptr), _maximum(maximum) {
         forceName(name);
     }
 
     void receivePacket(Packet& packet) override { packet.sendOn(); }
     void doNextEvent() override {}
     mem_b queuesize() const override { return 0; }
-    mem_b maxsize() const override { return 0; }
+    mem_b maxsize() const override { return _maximum; }
+
+private:
+    mem_b _maximum;
 };
 
 void testConfigParsing() {
@@ -187,11 +192,71 @@ void testAbsentConfigDoesNotPerturbRng() {
     }
     assert(failed);
     assert(random() == expected_missing);
+
+    writeConfig("bad header\n");
+    srandom(404);
+    const long expected_malformed_random = random();
+    srandom(404);
+    expectInvalid("bad header\n");
+    assert(random() == expected_malformed_random);
+
+    srand(505);
+    const int expected_malformed_rand = rand();
+    srand(505);
+    expectInvalid("bad header\n");
+    assert(rand() == expected_malformed_rand);
+}
+
+void testRouteDrainBound(EventList& eventlist) {
+    ForwardingQueue first(eventlist, "bounded-a", speedFromGbps(100), 1500);
+    Pipe pipe(UINT64_C(1000000), eventlist);
+    ForwardingQueue second(eventlist, "bounded-b", speedFromGbps(25), 3000);
+    Route route;
+    route.push_back(&first);
+    route.push_back(&pipe);
+    route.push_back(&second);
+    assert(motivationBackgroundRouteDrainBound(route) == UINT64_C(2680000));
+
+    MotivationBackgroundSink unsupported;
+    Route unsupported_route;
+    unsupported_route.push_back(&unsupported);
+    bool unsupported_failed = false;
+    try {
+        (void)motivationBackgroundRouteDrainBound(unsupported_route);
+    } catch (const std::invalid_argument&) {
+        unsupported_failed = true;
+    }
+    assert(unsupported_failed);
+
+    ForwardingQueue unbounded(eventlist, "unbounded", speedFromGbps(100), -1);
+    Route unbounded_route;
+    unbounded_route.push_back(&unbounded);
+    bool unbounded_failed = false;
+    try {
+        (void)motivationBackgroundRouteDrainBound(unbounded_route);
+    } catch (const std::invalid_argument&) {
+        unbounded_failed = true;
+    }
+    assert(unbounded_failed);
+
+    Pipe maximum_delay(std::numeric_limits<simtime_picosec>::max(), eventlist);
+    Pipe overflow_delay(1, eventlist);
+    Route overflow_route;
+    overflow_route.push_back(&maximum_delay);
+    overflow_route.push_back(&overflow_delay);
+    bool overflow_failed = false;
+    try {
+        (void)motivationBackgroundRouteDrainBound(overflow_route);
+    } catch (const std::overflow_error&) {
+        overflow_failed = true;
+    }
+    assert(overflow_failed);
 }
 
 void testDeterministicTrafficAndTrace() {
     EventList eventlist;
     eventlist.setEndtime(UINT64_C(7000000));
+    testRouteDrainBound(eventlist);
 
     MotivationTraceWriter writer;
     writer.configure(kTracePrefix, "background-run", "m2", 77, -1);
@@ -226,7 +291,7 @@ void testDeterministicTrafficAndTrace() {
     assert(source.period() == UINT64_C(1000000));
     source.connect(route, sink);
 
-    Pipe delayed_pipe(UINT64_C(1000000), eventlist);
+    Pipe delayed_pipe(UINT64_C(200000), eventlist);
     MotivationBackgroundSink delayed_sink;
     Route delayed_route;
     delayed_route.push_back(&delayed_pipe);
