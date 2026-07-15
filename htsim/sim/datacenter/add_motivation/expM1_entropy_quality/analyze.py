@@ -47,10 +47,16 @@ MIN_COMPLETION_RATE = 0.99
 MIN_COVERED_FLOW_FRACTION = 0.75
 MIN_ENTROPY_COVERAGE = 6
 MIN_PATH_COVERAGE = 2
-DEFAULT_MIN_FUTURE_HIGH = 0.10
-DEFAULT_MAX_UNMATCHED_RATE = 0.25
+MIN_FUTURE_HIGH = 0.10
+MAX_UNMATCHED_RATE = 0.25
 BOOTSTRAP_SAMPLES = 10_000
 BOOTSTRAP_SEED = 20260714
+BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
+BOOTSTRAP_LOWER_PERCENTILE = 0.025
+BOOTSTRAP_UPPER_PERCENTILE = 0.975
+RISK_RATIO_CI_LOWER_BOUND = 1.0
+MIN_FUTURE_HIGH_CONTRIBUTING_FLOW_CLUSTERS = 2
+MAX_HIGH_RETRANSMITTED_COUNT = 0
 UINT64_MAX = 2**64 - 1
 
 
@@ -411,7 +417,7 @@ def analyze_bundle(
         auxiliary.valid
         and auxiliary.completion_rate is not None
         and auxiliary.completion_rate >= MIN_COMPLETION_RATE
-        and high_retransmitted == 0
+        and high_retransmitted <= MAX_HIGH_RETRANSMITTED_COUNT
     )
 
     summary = RunSummary(
@@ -714,7 +720,6 @@ def select_formal(
             -float(row["minimum_phi_increase"]),
             int(row["degraded_links"]),
             -float(row["degraded_capacity_gbps"]),
-            float(row["offered_load"]),
             str(row["scenario_id"]),
         ),
     )
@@ -885,20 +890,74 @@ def _token_aggregate(token_rows: list[dict]) -> list[dict]:
 
 def _formal_result(
     summaries: list[dict], next_rows: list[dict], group_rows: list[dict],
-    *, min_future_high: float, max_unmatched_rate: float,
 ) -> dict:
     gray = [row for row in summaries if row["arm"] == "gray"]
-    controls = {(row["seed"], row["offered_load"]): row for row in summaries if row["arm"] == "symmetric"}
+    symmetric = [row for row in summaries if row["arm"] == "symmetric"]
+    controls_by_key = defaultdict(list)
+    for row in symmetric:
+        controls_by_key[(row["seed"], row["offered_load"])].append(row)
+    paired_controls = [
+        controls_by_key[(row["seed"], row["offered_load"])][0]
+        for row in gray
+        if len(controls_by_key[(row["seed"], row["offered_load"])]) == 1
+    ]
     predicates = {}
     predicates["formal_seed_coverage"] = (
-        {row["seed"] for row in gray} == set(FORMAL_SEEDS)
-        and all((row["seed"], row["offered_load"]) in controls for row in gray)
+        len(gray) == len(FORMAL_SEEDS)
+        and len(symmetric) == len(FORMAL_SEEDS)
+        and {row["seed"] for row in gray} == set(FORMAL_SEEDS)
+        and {row["seed"] for row in symmetric} == set(FORMAL_SEEDS)
+        and len({row["offered_load"] for row in gray}) == 1
+        and len(paired_controls) == len(gray)
     )
     predicates["gray_phi_above_control_every_seed"] = predicates["formal_seed_coverage"] and all(
         _finite(row["unmarked_high_ratio"])
-        and _finite(controls[(row["seed"], row["offered_load"])]["unmarked_high_ratio"])
-        and row["unmarked_high_ratio"] > controls[(row["seed"], row["offered_load"])]["unmarked_high_ratio"]
+        and _finite(control["unmarked_high_ratio"])
+        and row["unmarked_high_ratio"] > control["unmarked_high_ratio"]
+        for row, control in zip(gray, paired_controls)
+    )
+
+    predicates["gray_completion_adequate"] = bool(gray) and all(
+        _truth(row, "aux_valid")
+        and _finite(row["completion_rate"])
+        and row["completion_rate"] >= MIN_COMPLETION_RATE
         for row in gray
+    )
+    complete_controls = len(paired_controls) == len(FORMAL_SEEDS)
+    predicates["control_completion_adequate"] = complete_controls and all(
+        _truth(row, "aux_valid")
+        and _finite(row["completion_rate"])
+        and row["completion_rate"] >= MIN_COMPLETION_RATE
+        for row in paired_controls
+    )
+    predicates["gray_nonzero_unmarked_denominator"] = bool(gray) and all(
+        (_as_int(row, "unmarked_count") or 0) > 0 for row in gray
+    )
+    predicates["control_nonzero_unmarked_denominator"] = complete_controls and all(
+        (_as_int(row, "unmarked_count") or 0) > 0 for row in paired_controls
+    )
+    predicates["gray_flow_coverage_adequate"] = bool(gray) and all(
+        _truth(row, "coverage_adequate") for row in gray
+    )
+    predicates["control_flow_coverage_adequate"] = complete_controls and all(
+        _truth(row, "coverage_adequate") for row in paired_controls
+    )
+    predicates["gray_matching_adequate"] = bool(gray) and all(
+        _finite(row["unmatched_next_use_rate"])
+        and row["unmatched_next_use_rate"] <= MAX_UNMATCHED_RATE
+        for row in gray
+    )
+    predicates["control_matching_adequate"] = complete_controls and all(
+        _finite(row["unmatched_next_use_rate"])
+        and row["unmatched_next_use_rate"] <= MAX_UNMATCHED_RATE
+        for row in paired_controls
+    )
+    predicates["gray_no_hard_loss_or_freezing_explanation"] = bool(gray) and all(
+        _truth(row, "loss_freezing_clear") for row in gray
+    )
+    predicates["control_no_hard_loss_or_freezing_explanation"] = (
+        complete_controls
+        and all(_truth(row, "loss_freezing_clear") for row in paired_controls)
     )
 
     gray_next = [
@@ -919,7 +978,9 @@ def _formal_result(
             )
         except ValueError:
             risk_low = risk_high = None
-    predicates["risk_ratio_bootstrap_lower_above_1"] = risk_low is not None and risk_low > 1
+    predicates["risk_ratio_bootstrap_lower_above_1"] = (
+        risk_low is not None and risk_low > RISK_RATIO_CI_LOWER_BOUND
+    )
 
     high_probability = _condition_probability(flow_rows, "high")
     by_seed_high = []
@@ -934,31 +995,16 @@ def _formal_result(
     )
     predicates["future_high_probability_nontrivial"] = bool(
         high_probability is not None
-        and high_probability >= min_future_high
+        and high_probability >= MIN_FUTURE_HIGH
         and len(by_seed_high) == len(FORMAL_SEEDS)
-        and all(value is not None and value >= min_future_high for value in by_seed_high)
-        and high_contributors >= 2
+        and all(value is not None and value >= MIN_FUTURE_HIGH for value in by_seed_high)
+        and high_contributors >= MIN_FUTURE_HIGH_CONTRIBUTING_FLOW_CLUSTERS
     )
 
     gray_groups = [row for row in group_rows if row["arm"] == "gray"]
     predicates["entropy_persistence_positive"] = _overall_group_direction(gray_groups, "entropy")
     predicates["deduplicated_path_persistence_positive"] = _overall_group_direction(
         gray_groups, "physical_path"
-    )
-    predicates["coverage_and_matching_adequate"] = bool(gray) and all(
-        _truth(row, "coverage_adequate")
-        and _finite(row["unmatched_next_use_rate"])
-        and row["unmatched_next_use_rate"] <= max_unmatched_rate
-        for row in gray
-    )
-    predicates["completion_adequate"] = bool(gray) and all(
-        _truth(row, "aux_valid")
-        and _finite(row["completion_rate"])
-        and row["completion_rate"] >= MIN_COMPLETION_RATE
-        for row in gray
-    )
-    predicates["no_hard_loss_or_freezing_explanation"] = bool(gray) and all(
-        _truth(row, "loss_freezing_clear") for row in gray
     )
     failed = [name for name, passed in predicates.items() if not passed]
     return {
@@ -968,10 +1014,34 @@ def _formal_result(
         "risk_ratio_ci_low": _csv_value(risk_low),
         "risk_ratio_ci_high": _csv_value(risk_high),
         "future_high_given_current_high": _csv_value(high_probability),
-        "min_future_high_threshold": min_future_high,
-        "max_unmatched_rate_threshold": max_unmatched_rate,
+        "residual_threshold_ps": PRIMARY_THRESHOLD_PS,
+        "residual_threshold_rule": ">=",
+        "completion_rate_threshold": MIN_COMPLETION_RATE,
+        "flow_coverage_fraction_threshold": MIN_COVERED_FLOW_FRACTION,
+        "entropy_coverage_count_threshold": MIN_ENTROPY_COVERAGE,
+        "physical_path_coverage_count_threshold": MIN_PATH_COVERAGE,
+        "min_future_high_threshold": MIN_FUTURE_HIGH,
+        "max_unmatched_rate_threshold": MAX_UNMATCHED_RATE,
         "bootstrap_samples": BOOTSTRAP_SAMPLES,
         "bootstrap_seed": BOOTSTRAP_SEED,
+        "bootstrap_confidence_level": BOOTSTRAP_CONFIDENCE_LEVEL,
+        "bootstrap_lower_percentile": BOOTSTRAP_LOWER_PERCENTILE,
+        "bootstrap_upper_percentile": BOOTSTRAP_UPPER_PERCENTILE,
+        "bootstrap_cluster_unit": "run_id,flow_id",
+        "risk_ratio_ci_lower_bound_threshold": RISK_RATIO_CI_LOWER_BOUND,
+        "risk_ratio_ci_lower_bound_rule": ">1",
+        "min_future_high_contributing_flow_clusters": (
+            MIN_FUTURE_HIGH_CONTRIBUTING_FLOW_CLUSTERS
+        ),
+        "required_formal_seeds": ";".join(str(seed) for seed in FORMAL_SEEDS),
+        "required_formal_seed_count": len(FORMAL_SEEDS),
+        "evidence_required_for_arms": "gray;load-matched symmetric control",
+        "phi_control_rule": "gray>load-matched symmetric in every formal seed",
+        "loss_freezing_max_high_retransmitted_count": MAX_HIGH_RETRANSMITTED_COUNT,
+        "loss_freezing_criterion": (
+            "valid auxiliary completion>=0.99 and zero retransmitted genuine "
+            "ECN-unmarked high-residual ACKs"
+        ),
         "predicates_json": json.dumps(predicates, sort_keys=True),
     }
 
@@ -979,10 +1049,6 @@ def _formal_result(
 def analyze_phase(
     phase: str,
     phase_dir: Path,
-    *,
-    threshold_ps: int = PRIMARY_THRESHOLD_PS,
-    min_future_high: float = DEFAULT_MIN_FUTURE_HIGH,
-    max_unmatched_rate: float = DEFAULT_MAX_UNMATCHED_RATE,
 ) -> tuple[list[dict], Optional[dict]]:
     """Read one phase directory and atomically replace its aggregate CSV tables."""
 
@@ -1007,7 +1073,7 @@ def analyze_phase(
         run_id = metadata["run_id"]
         prefix = phase_dir / run_id
         analysis = analyze_bundle(
-            load_trace(prefix), threshold_ps=threshold_ps,
+            load_trace(prefix), threshold_ps=PRIMARY_THRESHOLD_PS,
             auxiliary=parse_flow_output(phase_dir / f"{run_id}.dat"),
         )
         summary_rows.append(_summary_dict(analysis.summary, metadata))
@@ -1030,19 +1096,9 @@ def analyze_phase(
 
     formal = None
     if phase == "formal":
-        formal = _formal_result(
-            summary_rows, next_rows, group_rows,
-            min_future_high=min_future_high, max_unmatched_rate=max_unmatched_rate,
-        )
+        formal = _formal_result(summary_rows, next_rows, group_rows)
         _write_table(phase_dir / "formal_result.csv", [formal], list(formal))
     return summary_rows, formal
-
-
-def _probability(value: str) -> float:
-    parsed = float(value)
-    if not 0 <= parsed <= 1:
-        raise argparse.ArgumentTypeError("must be in [0, 1]")
-    return parsed
 
 
 def main(argv=None) -> int:
@@ -1051,20 +1107,13 @@ def main(argv=None) -> int:
     mode.add_argument("--calibration", action="store_true")
     mode.add_argument("--formal", action="store_true")
     parser.add_argument("--select-formal", action="store_true")
-    parser.add_argument("--threshold-ps", type=int, default=PRIMARY_THRESHOLD_PS)
-    parser.add_argument("--min-future-high", type=_probability, default=DEFAULT_MIN_FUTURE_HIGH)
-    parser.add_argument("--max-unmatched-rate", type=_probability, default=DEFAULT_MAX_UNMATCHED_RATE)
     args = parser.parse_args(argv)
     if args.select_formal and not args.calibration:
         parser.error("--select-formal requires --calibration")
     phase = "calibration" if args.calibration else "formal"
     phase_dir = HERE / "data" / phase
     try:
-        summaries, formal = analyze_phase(
-            phase, phase_dir, threshold_ps=args.threshold_ps,
-            min_future_high=args.min_future_high,
-            max_unmatched_rate=args.max_unmatched_rate,
-        )
+        summaries, formal = analyze_phase(phase, phase_dir)
         if args.select_formal:
             selection = select_formal(
                 summaries, FORMAL_CONFIG, phase_dir / "calibration_selection.csv"

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -119,11 +121,12 @@ class RunMetricTests(unittest.TestCase):
 
 class SelectionTests(unittest.TestCase):
     @staticmethod
-    def passing(seed, arm, phi, *, degraded_links=0, capacity=100.0):
+    def passing(seed, arm, phi, *, degraded_links=0, capacity=100.0,
+                offered_load=0.5):
         return {
             "run_id": f"calibration_{arm}_s{seed}", "seed": seed,
             "scenario_id": arm, "arm": "symmetric" if degraded_links == 0 else "gray",
-            "offered_load": 0.5, "degraded_links": degraded_links,
+            "offered_load": offered_load, "degraded_links": degraded_links,
             "degraded_capacity_gbps": capacity, "completion_rate": 1.0,
             "aux_valid": 1, "unmarked_count": 10, "unmarked_high_ratio": phi,
             "risk_ratio": 2.0, "coverage_adequate": 1,
@@ -161,6 +164,31 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(formal.read_text(encoding="ascii"), "sentinel\n")
             self.assertIn("no_qualifying_cell", result_path.read_text(encoding="ascii"))
 
+    def test_final_ranking_tie_break_is_scenario_id_not_offered_load(self):
+        rows = []
+        for seed in (101, 102, 103):
+            rows.extend([
+                self.passing(seed, "symmetric_l03", 0.1, offered_load=0.3),
+                self.passing(seed, "symmetric_l07", 0.1, offered_load=0.7),
+                self.passing(
+                    seed, "zeta_l03", 0.4, degraded_links=2,
+                    capacity=50.0, offered_load=0.3,
+                ),
+                self.passing(
+                    seed, "alpha_l07", 0.4, degraded_links=2,
+                    capacity=50.0, offered_load=0.7,
+                ),
+            ])
+        with tempfile.TemporaryDirectory() as directory:
+            result = analyze.select_formal(
+                rows, Path(directory) / "formal.csv",
+                Path(directory) / "selection.csv",
+            )
+
+        self.assertTrue(result.selected)
+        self.assertEqual(result.scenario_id, "alpha_l07")
+        self.assertEqual(result.control_scenario_id, "symmetric_l07")
+
 
 class AuxiliaryTests(unittest.TestCase):
     def test_missing_flow_events_are_invalid_not_zero(self):
@@ -177,15 +205,119 @@ class AuxiliaryTests(unittest.TestCase):
 
 
 class FormalPredicateTests(unittest.TestCase):
+    @staticmethod
+    def summary(seed, arm):
+        return {
+            "run_id": f"formal_{arm}_s{seed}", "seed": seed, "arm": arm,
+            "offered_load": 0.5, "unmarked_high_ratio": 0.4 if arm == "gray" else 0.1,
+            "unmarked_count": 10, "coverage_adequate": 1,
+            "unmatched_next_use_rate": 0.1, "aux_valid": 1,
+            "completion_rate": 1.0, "loss_freezing_clear": 1,
+        }
+
+    @staticmethod
+    def evidence():
+        summaries = []
+        next_rows = []
+        group_rows = []
+        for seed in analyze.FORMAL_SEEDS:
+            summaries.extend([
+                FormalPredicateTests.summary(seed, "symmetric"),
+                FormalPredicateTests.summary(seed, "gray"),
+            ])
+            for flow_id, low_future_high in ((1, False), (2, True)):
+                common = {
+                    "run_id": f"formal_gray_s{seed}", "seed": seed,
+                    "arm": "gray", "flow_id": flow_id, "matched": True,
+                }
+                next_rows.extend([
+                    {**common, "current_high": True, "next_high": True},
+                    {**common, "current_high": False,
+                     "next_high": low_future_high},
+                ])
+            for grouping in ("entropy", "physical_path"):
+                group_rows.append({
+                    "arm": "gray", "grouping": grouping, "group_id": seed,
+                    "comparable": True,
+                    "next_high_given_current_high": 1.0,
+                    "next_high_given_current_low": 0.5,
+                })
+        return summaries, next_rows, group_rows
+
     def test_missing_formal_evidence_is_rejected_with_explicit_predicates(self):
-        result = analyze._formal_result(
-            [], [], [], min_future_high=0.10, max_unmatched_rate=0.25
-        )
+        result = analyze._formal_result([], [], [])
 
         self.assertEqual(result["accepted"], 0)
         self.assertIn("formal_seed_coverage", result["failed_predicates"])
         self.assertIn("risk_ratio_bootstrap_lower_above_1", result["failed_predicates"])
         self.assertEqual(result["min_future_high_threshold"], 0.10)
+
+    def test_invalid_load_matched_controls_fail_every_control_gate(self):
+        summaries, next_rows, group_rows = self.evidence()
+        for row in summaries:
+            if row["arm"] == "symmetric" and row["seed"] == 13:
+                row.update({
+                    "completion_rate": 0.5,
+                    "unmarked_count": 0,
+                    "coverage_adequate": 0,
+                    "unmatched_next_use_rate": 0.9,
+                    "loss_freezing_clear": 0,
+                })
+        with mock.patch.object(
+            analyze, "cluster_bootstrap", return_value=(1.5, 2.5)
+        ):
+            result = analyze._formal_result(summaries, next_rows, group_rows)
+
+        self.assertEqual(result["accepted"], 0)
+        failed = set(result["failed_predicates"].split(";"))
+        self.assertTrue({
+            "control_completion_adequate",
+            "control_nonzero_unmarked_denominator",
+            "control_flow_coverage_adequate",
+            "control_matching_adequate",
+            "control_no_hard_loss_or_freezing_explanation",
+        }.issubset(failed))
+
+    def test_formal_result_emits_complete_fixed_evidence_contract(self):
+        summaries, next_rows, group_rows = self.evidence()
+        with mock.patch.object(
+            analyze, "cluster_bootstrap", return_value=(1.5, 2.5)
+        ):
+            result = analyze._formal_result(summaries, next_rows, group_rows)
+
+        self.assertEqual(result["accepted"], 1)
+        self.assertEqual(result["residual_threshold_ps"], 14_000_000)
+        self.assertEqual(result["completion_rate_threshold"], 0.99)
+        self.assertEqual(result["flow_coverage_fraction_threshold"], 0.75)
+        self.assertEqual(result["entropy_coverage_count_threshold"], 6)
+        self.assertEqual(result["physical_path_coverage_count_threshold"], 2)
+        self.assertEqual(result["bootstrap_samples"], 10_000)
+        self.assertEqual(result["bootstrap_confidence_level"], 0.95)
+        self.assertEqual(result["risk_ratio_ci_lower_bound_threshold"], 1.0)
+        self.assertEqual(result["risk_ratio_ci_lower_bound_rule"], ">1")
+        self.assertEqual(result["min_future_high_threshold"], 0.10)
+        self.assertEqual(result["min_future_high_contributing_flow_clusters"], 2)
+        self.assertEqual(result["max_unmatched_rate_threshold"], 0.25)
+        self.assertEqual(result["required_formal_seeds"], "13;14;15;16;17")
+        self.assertEqual(result["evidence_required_for_arms"],
+                         "gray;load-matched symmetric control")
+        self.assertEqual(result["loss_freezing_max_high_retransmitted_count"], 0)
+        self.assertIn("retransmitted", result["loss_freezing_criterion"])
+
+
+class FixedThresholdCliTests(unittest.TestCase):
+    def test_evidence_threshold_override_flags_are_rejected(self):
+        attempts = (
+            ("--threshold-ps", "13000000"),
+            ("--min-future-high", "0"),
+            ("--max-unmatched-rate", "1"),
+        )
+        for flag, value in attempts:
+            with self.subTest(flag=flag):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as raised:
+                        analyze.main(["--formal", flag, value])
+                self.assertEqual(raised.exception.code, 2)
 
 
 if __name__ == "__main__":

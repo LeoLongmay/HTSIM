@@ -32,10 +32,19 @@ python3 htsim/sim/datacenter/add_motivation/expM1_entropy_quality/analyze.py --f
 python3 htsim/sim/datacenter/add_motivation/expM1_entropy_quality/make_figs.py --render
 ```
 
-The primary residual threshold is `14,000,000 ps` (`14 us`). Formal analysis also records the
-configured absolute future-high floor (`--min-future-high`, default `0.10`) and maximum unmatched
-next-use rate (`--max-unmatched-rate`, default `0.25`). These are explicit acceptance thresholds,
-not data-dependent heuristics.
+The evidence policy is fixed in code and has no CLI overrides:
+
+- residual-high means `residual_ps >= 14,000,000` (`14 us`);
+- completion rate is at least `0.99` for every gray row and load-matched symmetric control;
+- at least `0.75` of flows each cover at least `6` entropies and `2` resolved physical paths;
+- unmatched next-use rate is at most `0.25` for every gray row and control;
+- the future-high probability given current-high is at least `0.10` in every formal seed and has at
+  least `2` contributing `(run_id, flow_id)` clusters;
+- the flow-cluster bootstrap uses seed `20260714`, `10,000` samples, and the `2.5/97.5` percentiles
+  for a `0.95` confidence interval; its risk-ratio lower bound must be strictly greater than `1.0`;
+- formal seeds are exactly `13,14,15,16,17`; and
+- loss/freezing clearance requires valid auxiliary completion at least `0.99` and zero retransmitted
+  genuine ECN-unmarked high-residual ACKs.
 
 ## Outputs
 
@@ -54,7 +63,7 @@ Raw Task 7 run outputs and aggregate tables stay below the requested phase direc
 | `data/formal/tokens.csv` | Shadow exposure and rejected-token future-high aggregate denominators/rates for panel 3. |
 | `data/formal/coverage.csv` | Per-flow distinct entropy and resolved physical-path coverage. |
 | `data/formal/group_direction.csv` | Entropy-group and deduplicated physical-path-group persistence checks. |
-| `data/formal/formal_result.csv` | `accepted`, every configured threshold, bootstrap risk-ratio bounds, and explicit `failed_predicates`. |
+| `data/formal/formal_result.csv` | `accepted`, every fixed evidence constant/rule, bootstrap risk-ratio bounds, arm-specific predicates, and explicit `failed_predicates`. |
 | `figs/m1_entropy_quality.{png,pdf}` | Three-panel formal figure rendered from aggregate CSVs only. |
 
 `phi` is `P(residual >= 14 us | genuine ACK, ECN=0)`. A next-use match is the next genuine ACK with
@@ -64,11 +73,12 @@ Risk ratio is `P(next high | current high) / P(next high | current low)`. Empty 
 denominators remain blank with an invalid reason where applicable; unavailable simulator auxiliary
 data is never replaced by zero.
 
-Formal acceptance requires gray phi above its load-matched symmetric control in every seed, a
-10,000-resample flow-cluster risk-ratio lower bound above one, the configured nontrivial future-high
-probability in every seed and more than one flow cluster, positive entropy and deduplicated-path
-directions, adequate coverage/matching, completion at least `0.99`, and no hard-loss/freezing
-explanation. Any failed condition produces `accepted=0` and names the failed predicates.
+Formal acceptance requires gray phi above its load-matched symmetric control in every seed and a
+10,000-resample flow-cluster risk-ratio lower bound strictly above one. Every gray row and every
+load-matched symmetric control must independently pass completion, nonzero unmarked denominator,
+flow entropy/path coverage, unmatched matching, and loss/freezing gates. Gray persistence must also
+pass the fixed future-high, entropy-direction, and deduplicated-path-direction rules. Any failed
+condition produces `accepted=0`; control failures use `control_`-prefixed predicate names.
 
 ## Selection And Negative Results
 
@@ -76,7 +86,7 @@ A calibration cell qualifies only if every seed has completion at least `0.99`, 
 denominator, at least 75% of flows covering six entropies and two resolved physical paths, gray phi
 above the load-matched control, risk-ratio direction above one, and no loss/freezing signature.
 Ranking maximizes the minimum seed-level phi increase, then prefers fewer degraded links, higher
-capacity, lower offered load, and scenario ID for deterministic final ties.
+capacity, and lexicographically lower scenario ID as the only deterministic final tie-break.
 
 If no cell qualifies, `calibration_selection.csv` records `no_qualifying_cell` and the explicit
 reasons. The command exits nonzero and leaves `configs/formal.csv` unchanged. Criteria are not
