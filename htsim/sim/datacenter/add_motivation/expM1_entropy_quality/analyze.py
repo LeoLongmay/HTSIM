@@ -9,7 +9,9 @@ import dataclasses
 import json
 import math
 import os
+import random
 import re
+import stat
 import statistics
 import subprocess
 import sys
@@ -58,6 +60,8 @@ RISK_RATIO_CI_LOWER_BOUND = 1.0
 MIN_FUTURE_HIGH_CONTRIBUTING_FLOW_CLUSTERS = 2
 MAX_HIGH_RETRANSMITTED_COUNT = 0
 UINT64_MAX = 2**64 - 1
+TRACE_SUFFIXES = ("ack", "token", "epoch", "background", "pathmap", "linkmap")
+RR_BOOTSTRAP_MIN_VALID_FRACTION = 0.95
 
 
 @dataclasses.dataclass(frozen=True)
@@ -126,6 +130,23 @@ class SelectionResult:
     reason: str
 
 
+@dataclasses.dataclass(frozen=True)
+class RiskRatioBootstrapResult:
+    point_estimate: Optional[float]
+    point_status: str
+    ci_low: Optional[float]
+    ci_high: Optional[float]
+    total_replicates: int
+    valid_replicates: int
+    finite_replicates: int
+    infinite_replicates: int
+    undefined_replicates: int
+    undefined_reasons: dict[str, int]
+    valid_fraction: float
+    minimum_valid_replicates: int
+    adequate: bool
+
+
 def _ratio(numerator: float, denominator: float) -> Optional[float]:
     return numerator / denominator if denominator else None
 
@@ -165,13 +186,95 @@ def _condition_probability(flow_rows: Iterable[dict], state: str) -> Optional[fl
     return _mean(row[f"{state}_probability"] for row in flow_rows)
 
 
-def _risk_ratio_from_flow_rows(flow_rows: Iterable[dict]) -> Optional[float]:
+def _risk_ratio_estimate(flow_rows: Iterable[dict]) -> tuple[Optional[float], str]:
     rows = list(flow_rows)
     high = _condition_probability(rows, "high")
     low = _condition_probability(rows, "low")
-    if high is None or low is None or low <= 0:
-        return None
-    return high / low
+    if high is None:
+        return None, "undefined_missing_high_conditioning"
+    if low is None:
+        return None, "undefined_missing_low_conditioning"
+    if not 0 <= high <= 1 or not 0 <= low <= 1:
+        return None, "undefined_invalid_probability"
+    if low == 0:
+        if high > 0:
+            return math.inf, "positive_over_zero"
+        return None, "undefined_zero_over_zero"
+    return high / low, "finite"
+
+
+def _risk_ratio_from_flow_rows(flow_rows: Iterable[dict]) -> Optional[float]:
+    return _risk_ratio_estimate(flow_rows)[0]
+
+
+def risk_ratio_cluster_bootstrap(
+    flow_rows: Iterable[dict], *, samples: int = BOOTSTRAP_SAMPLES,
+    seed: int = BOOTSTRAP_SEED,
+) -> RiskRatioBootstrapResult:
+    """Bootstrap flow clusters while retaining +inf and accounting for undefined RR."""
+
+    if isinstance(samples, bool) or not isinstance(samples, int) or samples <= 0:
+        raise ValueError("samples must be a positive integer")
+    grouped = defaultdict(list)
+    for row in flow_rows:
+        grouped[row["cluster_id"]].append(row)
+    if not grouped:
+        point, status = _risk_ratio_estimate(())
+        return RiskRatioBootstrapResult(
+            point, status, None, None, samples, 0, 0, 0, samples,
+            {"missing_high_conditioning": samples}, 0.0,
+            math.ceil(samples * RR_BOOTSTRAP_MIN_VALID_FRACTION), False,
+        )
+
+    clusters = sorted(grouped, key=str)
+    point, point_status = _risk_ratio_estimate(
+        row for cluster in clusters for row in grouped[cluster]
+    )
+    rng = random.Random(seed)
+    estimates = []
+    finite_count = 0
+    infinite_count = 0
+    undefined_reasons = defaultdict(int)
+    for _replicate in range(samples):
+        selected = [rng.choice(clusters) for _cluster in clusters]
+        sample = [row for cluster in selected for row in grouped[cluster]]
+        estimate, status = _risk_ratio_estimate(sample)
+        if status == "finite":
+            finite_count += 1
+            estimates.append(estimate)
+        elif status == "positive_over_zero":
+            infinite_count += 1
+            estimates.append(math.inf)
+        else:
+            undefined_reasons[status.removeprefix("undefined_")] += 1
+
+    estimates.sort()
+    valid_count = len(estimates)
+    undefined_count = samples - valid_count
+    if estimates:
+        low_index = min(int(BOOTSTRAP_LOWER_PERCENTILE * valid_count), valid_count - 1)
+        high_index = min(int(BOOTSTRAP_UPPER_PERCENTILE * valid_count), valid_count - 1)
+        ci_low = estimates[low_index]
+        ci_high = estimates[high_index]
+    else:
+        ci_low = ci_high = None
+    minimum_valid = math.ceil(samples * RR_BOOTSTRAP_MIN_VALID_FRACTION)
+    valid_fraction = valid_count / samples
+    return RiskRatioBootstrapResult(
+        point_estimate=point,
+        point_status=point_status,
+        ci_low=ci_low,
+        ci_high=ci_high,
+        total_replicates=samples,
+        valid_replicates=valid_count,
+        finite_replicates=finite_count,
+        infinite_replicates=infinite_count,
+        undefined_replicates=undefined_count,
+        undefined_reasons=dict(sorted(undefined_reasons.items())),
+        valid_fraction=valid_fraction,
+        minimum_valid_replicates=minimum_valid,
+        adequate=valid_count >= minimum_valid,
+    )
 
 
 def _make_next_use_rows(attached: tuple[ResidualAck, ...]) -> list[dict]:
@@ -310,8 +413,13 @@ def _token_rows(bundle, attached: tuple[ResidualAck, ...]) -> list[dict]:
             dequeues[(token["flow_id"], token["token_id"])].append(token)
     selected = defaultdict(list)
     for ack_row in bundle.ack:
-        token_id = ack_row.get("source_token_id", 0)
-        if token_id:
+        if "source_token_id" not in ack_row:
+            continue
+        token_id = ack_row["source_token_id"]
+        if (
+            ack_row.get("selection_source") == "recycled"
+            and token_id != UINT64_MAX
+        ):
             selected[(ack_row["flow_id"], token_id)].append(ack_row)
 
     output = []
@@ -578,6 +686,19 @@ def _as_int(row: dict, key: str) -> Optional[int]:
     return int(value) if value is not None and value.is_integer() else None
 
 
+def _as_risk_ratio(row: dict, key: str) -> Optional[float]:
+    value = row.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(parsed) or parsed < 0:
+        return None
+    return parsed
+
+
 def _truth(row: dict, key: str) -> bool:
     return row.get(key) in (True, 1, 1.0, "1", "true", "True")
 
@@ -608,20 +729,25 @@ def _base_scenario_id(value: str, seed: int) -> str:
     return value[:-len(suffix)] if value.endswith(suffix) else value
 
 
-def _candidate_failures(gray_rows: list[dict], controls: dict[tuple[float, int], dict]) -> list[str]:
+def _candidate_failures(
+    gray_rows: list[dict], controls: dict[tuple[float, int], list[dict]], load: float,
+) -> tuple[list[str], dict[int, dict], str]:
     failures = []
     by_seed = {_as_int(row, "seed"): row for row in gray_rows}
-    if set(by_seed) != set(CALIBRATION_SEEDS):
+    if len(by_seed) != len(gray_rows) or set(by_seed) != set(CALIBRATION_SEEDS):
         failures.append("missing_calibration_seed")
+    unique_controls = {}
     for seed in CALIBRATION_SEEDS:
         gray = by_seed.get(seed)
-        if gray is None:
-            continue
-        load = _as_float(gray, "offered_load")
-        control = controls.get((load, seed)) if load is not None else None
+        matches = controls.get((load, seed), [])
         prefix = f"seed_{seed}:"
-        if control is None:
+        if not matches:
             failures.append(prefix + "missing_load_matched_control")
+        elif len(matches) > 1:
+            failures.append(prefix + "duplicate_load_matched_control")
+        else:
+            unique_controls[seed] = matches[0]
+        if gray is None:
             continue
         completion = _as_float(gray, "completion_rate")
         if not _truth(gray, "aux_valid") or completion is None or completion < MIN_COMPLETION_RATE:
@@ -631,15 +757,23 @@ def _candidate_failures(gray_rows: list[dict], controls: dict[tuple[float, int],
         if not _truth(gray, "coverage_adequate"):
             failures.append(prefix + "coverage_below_75pct_6_entropy_2_path")
         gray_phi = _as_float(gray, "unmarked_high_ratio")
-        control_phi = _as_float(control, "unmarked_high_ratio")
+        control = unique_controls.get(seed)
+        control_phi = _as_float(control, "unmarked_high_ratio") if control else None
         if gray_phi is None or control_phi is None or gray_phi <= control_phi:
             failures.append(prefix + "gray_phi_not_above_control")
-        risk = _as_float(gray, "risk_ratio")
+        risk = _as_risk_ratio(gray, "risk_ratio")
         if risk is None or risk <= 1:
             failures.append(prefix + "risk_ratio_not_above_1")
         if not _truth(gray, "loss_freezing_clear"):
             failures.append(prefix + "loss_or_freezing_signature")
-    return failures
+    control_ids = {
+        _base_scenario_id(str(row.get("scenario_id", "")), seed)
+        for seed, row in unique_controls.items()
+    }
+    if len(unique_controls) == len(CALIBRATION_SEEDS) and len(control_ids) != 1:
+        failures.append("inconsistent_control_scenario_id")
+    control_id = next(iter(control_ids)) if len(control_ids) == 1 else ""
+    return failures, unique_controls, control_id
 
 
 def select_formal(
@@ -650,7 +784,7 @@ def select_formal(
     """Select a calibration cell without weakening criteria or touching formal on failure."""
 
     rows = list(summary_rows)
-    controls = {}
+    controls = defaultdict(list)
     candidates = defaultdict(list)
     for row in rows:
         seed = _as_int(row, "seed")
@@ -658,7 +792,7 @@ def select_formal(
         if seed is None or load is None:
             continue
         if row.get("arm") == "symmetric" or (_as_int(row, "degraded_links") == 0):
-            controls[(load, seed)] = row
+            controls[(load, seed)].append(row)
         else:
             key = (
                 _base_scenario_id(str(row.get("scenario_id", "")), seed),
@@ -672,22 +806,20 @@ def select_formal(
     for key in sorted(candidates, key=str):
         scenario_id, degraded_links, capacity, load = key
         gray_rows = candidates[key]
-        failures = _candidate_failures(gray_rows, controls)
+        failures, unique_controls, control_id = _candidate_failures(
+            gray_rows, controls, load
+        )
         increases = []
         for gray in gray_rows:
             seed = _as_int(gray, "seed")
-            control = controls.get((load, seed))
+            control = unique_controls.get(seed)
             gray_phi = _as_float(gray, "unmarked_high_ratio")
             control_phi = _as_float(control, "unmarked_high_ratio") if control else None
             if gray_phi is not None and control_phi is not None:
                 increases.append(gray_phi - control_phi)
-        control_ids = {
-            _base_scenario_id(str(row.get("scenario_id", "")), _as_int(row, "seed"))
-            for (control_load, _seed), row in controls.items() if control_load == load
-        }
         evaluations.append({
             "scenario_id": scenario_id,
-            "control_scenario_id": min(control_ids) if control_ids else "",
+            "control_scenario_id": control_id,
             "degraded_links": degraded_links,
             "degraded_capacity_gbps": capacity,
             "offered_load": load,
@@ -766,12 +898,20 @@ def _offered_load(scenario_id: str) -> float:
     return int(match.group(1)) / 10.0
 
 
-def _manifest_metadata(path: Path, phase: str) -> dict:
+def _read_manifest(path: Path) -> dict:
     try:
-        manifest = json.loads(path.read_text(encoding="ascii"))
+        return json.loads(path.read_text(encoding="ascii"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid manifest {path}: {exc}") from exc
-    required = ("schema_version", "run_id", "seed", "phase", "config")
+
+
+def _manifest_metadata(path: Path, phase: str, manifest: Optional[dict] = None) -> dict:
+    if manifest is None:
+        manifest = _read_manifest(path)
+    required = (
+        "schema_version", "run_id", "seed", "phase", "experiment", "config",
+        "output_filenames",
+    )
     missing = [key for key in required if key not in manifest]
     if missing:
         raise ValueError(f"manifest {path} is missing keys: {missing}")
@@ -795,19 +935,86 @@ def _manifest_metadata(path: Path, phase: str) -> dict:
         or not _finite(config["degraded_capacity_gbps"])
     ):
         raise ValueError(f"manifest {path} has invalid degraded-capacity config")
+    arm = "symmetric" if config["degraded_links"] == 0 else "gray"
+    if not scenario_id.startswith(f"{arm}_"):
+        raise ValueError(
+            f"manifest {path} scenario_id {scenario_id!r} disagrees with config arm {arm!r}"
+        )
     return {
         "run_id": run_id,
         "seed": seed,
+        "phase": phase,
+        "experiment": manifest["experiment"],
         "scenario_id": scenario_id,
-        "arm": "symmetric" if config["degraded_links"] == 0 else "gray",
+        "arm": arm,
         "offered_load": _offered_load(scenario_id),
         "degraded_links": config["degraded_links"],
         "degraded_capacity_gbps": config["degraded_capacity_gbps"],
     }
 
 
+def _validated_regular_input(path: Path, phase_dir: Path, label: str) -> Path:
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError as exc:
+        raise ValueError(f"{label} input is missing: {path}: {exc}") from exc
+    if stat.S_ISLNK(mode):
+        raise ValueError(f"{label} input must not be a symlink: {path}")
+    if not stat.S_ISREG(mode):
+        raise ValueError(f"{label} input must be a regular file: {path}")
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(HERE)
+        resolved.relative_to(phase_dir.resolve(strict=True))
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"{label} input must resolve under M1 phase directory {phase_dir}: {path}"
+        ) from exc
+    return resolved
+
+
+def _validate_run_inputs(
+    manifest_path: Path, manifest: dict, phase_dir: Path, run_id: str,
+) -> tuple[Path, Path]:
+    expected = {
+        "manifest": manifest_path,
+        "simulation": phase_dir / f"{run_id}.dat",
+        **{kind: phase_dir / f"{run_id}.{kind}.csv" for kind in TRACE_SUFFIXES},
+    }
+    outputs = manifest.get("output_filenames")
+    if not isinstance(outputs, dict):
+        raise ValueError(f"manifest {manifest_path} has invalid output_filenames")
+    for label, path in expected.items():
+        _validated_regular_input(path, phase_dir, label)
+        recorded = outputs.get(label)
+        if not isinstance(recorded, str) or Path(recorded) != path:
+            raise ValueError(
+                f"manifest {manifest_path} output_filenames {label!r} does not bind to {path}"
+            )
+    return phase_dir / run_id, expected["simulation"]
+
+
+def _validate_bundle_binding(bundle, manifest: dict) -> None:
+    if bundle.run_id != manifest["run_id"]:
+        raise ValueError(
+            f"trace run_id {bundle.run_id!r} differs from manifest run_id "
+            f"{manifest['run_id']!r}"
+        )
+    for row in bundle.ack:
+        if row.get("seed") != manifest["seed"]:
+            raise ValueError(
+                f"ACK seed {row.get('seed')!r} differs from manifest seed "
+                f"{manifest['seed']!r}"
+            )
+        if row.get("scenario") != manifest["experiment"]:
+            raise ValueError(
+                f"ACK scenario {row.get('scenario')!r} differs from manifest experiment "
+                f"{manifest['experiment']!r}"
+            )
+
+
 def _enrich(rows: Iterable[dict], metadata: dict) -> list[dict]:
-    return [{**metadata, **row} for row in rows]
+    return [{**row, **metadata} for row in rows]
 
 
 def _csv_value(value):
@@ -820,7 +1027,7 @@ def _csv_value(value):
 
 def _summary_dict(summary: RunSummary, metadata: dict) -> dict:
     values = dataclasses.asdict(summary)
-    return {**metadata, **{key: _csv_value(value) for key, value in values.items()}}
+    return {**{key: _csv_value(value) for key, value in values.items()}, **metadata}
 
 
 def _write_table(path: Path, rows: list[dict], fallback_fields: list[str]) -> None:
@@ -965,21 +1172,16 @@ def _formal_result(
         for row in next_rows if row["arm"] == "gray" and row["matched"]
     ]
     flow_rows = _flow_condition_rows(gray_next)
-    risk = _risk_ratio_from_flow_rows(flow_rows)
-    risk_low = risk_high = None
-    if flow_rows and risk is not None:
-        try:
-            risk_low, risk_high = cluster_bootstrap(
-                flow_rows,
-                lambda row: row["cluster_id"],
-                lambda sample: _risk_ratio_from_flow_rows(sample),
-                samples=BOOTSTRAP_SAMPLES,
-                seed=BOOTSTRAP_SEED,
-            )
-        except ValueError:
-            risk_low = risk_high = None
+    risk_bootstrap = risk_ratio_cluster_bootstrap(flow_rows)
+    risk = risk_bootstrap.point_estimate
+    risk_low = risk_bootstrap.ci_low
+    risk_high = risk_bootstrap.ci_high
+    predicates["risk_ratio_defined"] = risk is not None
+    predicates["risk_ratio_bootstrap_validity_adequate"] = risk_bootstrap.adequate
     predicates["risk_ratio_bootstrap_lower_above_1"] = (
-        risk_low is not None and risk_low > RISK_RATIO_CI_LOWER_BOUND
+        risk_bootstrap.adequate
+        and risk_low is not None
+        and risk_low > RISK_RATIO_CI_LOWER_BOUND
     )
 
     high_probability = _condition_probability(flow_rows, "high")
@@ -1013,6 +1215,19 @@ def _formal_result(
         "risk_ratio": _csv_value(risk),
         "risk_ratio_ci_low": _csv_value(risk_low),
         "risk_ratio_ci_high": _csv_value(risk_high),
+        "risk_ratio_status": risk_bootstrap.point_status,
+        "risk_ratio_bootstrap_valid_replicates": risk_bootstrap.valid_replicates,
+        "risk_ratio_bootstrap_finite_replicates": risk_bootstrap.finite_replicates,
+        "risk_ratio_bootstrap_infinite_replicates": risk_bootstrap.infinite_replicates,
+        "risk_ratio_bootstrap_undefined_replicates": risk_bootstrap.undefined_replicates,
+        "risk_ratio_bootstrap_undefined_reasons": json.dumps(
+            risk_bootstrap.undefined_reasons, sort_keys=True
+        ),
+        "risk_ratio_bootstrap_valid_fraction": risk_bootstrap.valid_fraction,
+        "risk_ratio_bootstrap_min_valid_fraction": RR_BOOTSTRAP_MIN_VALID_FRACTION,
+        "risk_ratio_bootstrap_min_valid_replicates": (
+            risk_bootstrap.minimum_valid_replicates
+        ),
         "future_high_given_current_high": _csv_value(high_probability),
         "residual_threshold_ps": PRIMARY_THRESHOLD_PS,
         "residual_threshold_rule": ">=",
@@ -1069,12 +1284,18 @@ def analyze_phase(
     coverage_rows = []
     group_rows = []
     for manifest_path in manifests:
-        metadata = _manifest_metadata(manifest_path, phase)
+        _validated_regular_input(manifest_path, phase_dir, "manifest")
+        manifest = _read_manifest(manifest_path)
+        metadata = _manifest_metadata(manifest_path, phase, manifest)
         run_id = metadata["run_id"]
-        prefix = phase_dir / run_id
+        prefix, simulation_path = _validate_run_inputs(
+            manifest_path, manifest, phase_dir, run_id
+        )
+        trace = load_trace(prefix)
+        _validate_bundle_binding(trace, manifest)
         analysis = analyze_bundle(
-            load_trace(prefix), threshold_ps=PRIMARY_THRESHOLD_PS,
-            auxiliary=parse_flow_output(phase_dir / f"{run_id}.dat"),
+            trace, threshold_ps=PRIMARY_THRESHOLD_PS,
+            auxiliary=parse_flow_output(simulation_path),
         )
         summary_rows.append(_summary_dict(analysis.summary, metadata))
         residual_rows.extend(_enrich(analysis.residual_rows, metadata))

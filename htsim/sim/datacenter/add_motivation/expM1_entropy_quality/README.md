@@ -41,7 +41,8 @@ The evidence policy is fixed in code and has no CLI overrides:
 - the future-high probability given current-high is at least `0.10` in every formal seed and has at
   least `2` contributing `(run_id, flow_id)` clusters;
 - the flow-cluster bootstrap uses seed `20260714`, `10,000` samples, and the `2.5/97.5` percentiles
-  for a `0.95` confidence interval; its risk-ratio lower bound must be strictly greater than `1.0`;
+  for a `0.95` confidence interval; at least `0.95` (`9,500`) RR replicates must be valid and the
+  resulting risk-ratio lower bound must be strictly greater than `1.0`;
 - formal seeds are exactly `13,14,15,16,17`; and
 - loss/freezing clearance requires valid auxiliary completion at least `0.99` and zero retransmitted
   genuine ECN-unmarked high-residual ACKs.
@@ -63,7 +64,7 @@ Raw Task 7 run outputs and aggregate tables stay below the requested phase direc
 | `data/formal/tokens.csv` | Shadow exposure and rejected-token future-high aggregate denominators/rates for panel 3. |
 | `data/formal/coverage.csv` | Per-flow distinct entropy and resolved physical-path coverage. |
 | `data/formal/group_direction.csv` | Entropy-group and deduplicated physical-path-group persistence checks. |
-| `data/formal/formal_result.csv` | `accepted`, every fixed evidence constant/rule, bootstrap risk-ratio bounds, arm-specific predicates, and explicit `failed_predicates`. |
+| `data/formal/formal_result.csv` | `accepted`, every fixed evidence constant/rule, RR point status, finite/infinite/undefined bootstrap counts and reasons, bounds, arm-specific predicates, and explicit `failed_predicates`. |
 | `figs/m1_entropy_quality.{png,pdf}` | Three-panel formal figure rendered from aggregate CSVs only. |
 
 `phi` is `P(residual >= 14 us | genuine ACK, ECN=0)`. A next-use match is the next genuine ACK with
@@ -72,6 +73,11 @@ floor. Conditioning probabilities are means of per-flow rates so packet-heavy fl
 Risk ratio is `P(next high | current high) / P(next high | current low)`. Empty or undefined
 denominators remain blank with an invalid reason where applicable; unavailable simulator auxiliary
 data is never replaced by zero.
+
+The RR bootstrap treats positive-over-zero as valid `+inf`, while `0/0` and an absent high or low
+conditioning denominator are undefined. Percentiles include finite and `+inf` valid replicates.
+Formal acceptance requires a defined point RR, at least `9,500` valid replicates, and a lower bound
+strictly above `1.0`; `formal_result.csv` preserves all undefined counts and reasons.
 
 Formal acceptance requires gray phi above its load-matched symmetric control in every seed and a
 10,000-resample flow-cluster risk-ratio lower bound strictly above one. Every gray row and every
@@ -87,6 +93,9 @@ denominator, at least 75% of flows covering six entropies and two resolved physi
 above the load-matched control, risk-ratio direction above one, and no loss/freezing signature.
 Ranking maximizes the minimum seed-level phi increase, then prefers fewer degraded links, higher
 capacity, and lexicographically lower scenario ID as the only deterministic final tie-break.
+For each offered load, calibration requires exactly one symmetric control per seed and the same
+normalized control `scenario_id` across seeds `101,102,103`; duplicates or inconsistent IDs make
+every dependent candidate ineligible.
 
 If no cell qualifies, `calibration_selection.csv` records `no_qualifying_cell` and the explicit
 reasons. The command exits nonzero and leaves `configs/formal.csv` unchanged. Criteria are not
@@ -99,6 +108,15 @@ ACK residuals, ECN bits, Legacy token lifecycle events, path IDs, and simulator 
 observed facts. "Shadow rejected" is an offline classification: an actual Legacy token whose linked
 admission ACK was genuine, unmarked, and high residual. It does not mean the simulator rejected,
 recycled, invalidated, or rerouted that token.
+Token ID `0` is a valid exact identity; absence is identified only by the `UINT64_MAX` no-token
+sentinel together with a non-`recycled` selection source.
 
 Task 1 behavior, residual-driven recycling, cache replacement, controller handoff, and any new
 congestion-control action are explicitly excluded from M1.
+
+Each analyzed manifest, six trace leaves, and simulator `.dat` leaf must be a regular non-symlink
+file resolving inside the requested M1 phase directory and must match the manifest's exact recorded
+output path. Trace run ID, every ACK seed, and every ACK experiment label are bound to the manifest;
+manifest phase, scenario naming, and degraded-capacity config determine aggregate labels and cannot
+be overwritten by trace rows. Plotting similarly rejects negative residuals, values outside `[0,1]`,
+or confidence intervals that do not contain their estimate.

@@ -60,6 +60,20 @@ def _number(row: dict, key: str, source: str) -> float:
     return value
 
 
+def _nonnegative(row: dict, key: str, source: str) -> float:
+    value = _number(row, key, source)
+    if value < 0:
+        raise ValueError(f"{source}: {key} must be nonnegative")
+    return value
+
+
+def _unit_interval(row: dict, key: str, source: str) -> float:
+    value = _number(row, key, source)
+    if not 0 <= value <= 1:
+        raise ValueError(f"{source}: {key} must be in [0, 1]")
+    return value
+
+
 def _ecdf(values: list[float]) -> tuple[list[float], list[float]]:
     ordered = sorted(values)
     if not ordered:
@@ -71,6 +85,8 @@ def _conditioning_by_arm(rows: list[dict]) -> dict[tuple[str, str], dict]:
     indexed = {}
     for row in rows:
         key = (row["arm"], row["current_state"])
+        if key[0] not in ARMS or key[1] not in ("low", "high"):
+            raise ValueError(f"conditioning.csv has unknown arm/state row {key}")
         if key in indexed:
             raise ValueError(f"conditioning.csv has duplicate row {key}")
         indexed[key] = row
@@ -84,6 +100,8 @@ def _tokens_by_arm(rows: list[dict]) -> dict[str, dict]:
     indexed = {}
     for row in rows:
         arm = row["arm"]
+        if arm not in ARMS:
+            raise ValueError(f"tokens.csv has unknown arm {arm!r}")
         if arm in indexed:
             raise ValueError(f"tokens.csv has duplicate arm {arm!r}")
         indexed[arm] = row
@@ -106,16 +124,42 @@ def render(data_dir: Path = FORMAL_DATA, figure_dir: Path = FIGS) -> tuple[Path,
         {"arm", "shadow_rejection_exposure", "rejected_token_future_high_rate"},
     ))
 
+    residual_values = {arm: [] for arm in ARMS}
+    for row in residual_rows:
+        arm = row["arm"]
+        if arm not in ARMS:
+            raise ValueError(f"ecdf.csv has unknown arm {arm!r}")
+        residual_values[arm].append(
+            _nonnegative(row, "residual_ps", "ecdf.csv") / 1e6
+        )
+    for arm in ARMS:
+        if not residual_values[arm]:
+            raise ValueError(f"ecdf.csv has no {arm} residual observations")
+
+    conditioning_values = {}
+    for arm in ARMS:
+        for state in ("low", "high"):
+            row = conditioning[(arm, state)]
+            estimate = _unit_interval(row, "probability", "conditioning.csv")
+            ci_low = _unit_interval(row, "ci_low", "conditioning.csv")
+            ci_high = _unit_interval(row, "ci_high", "conditioning.csv")
+            if not ci_low <= estimate <= ci_high:
+                raise ValueError(
+                    "conditioning.csv: CI must satisfy low <= estimate <= high"
+                )
+            conditioning_values[(arm, state)] = (estimate, ci_low, ci_high)
+
+    token_values = {
+        (arm, key): _unit_interval(tokens[arm], key, "tokens.csv")
+        for arm in ARMS
+        for key in ("shadow_rejection_exposure", "rejected_token_future_high_rate")
+    }
+
     plot_style.apply_style(font_size=10)
     fig, axes = plt.subplots(1, 3, figsize=(11.2, 3.35))
 
     for arm in ARMS:
-        values = [
-            _number(row, "residual_ps", "ecdf.csv") / 1e6
-            for row in residual_rows if row["arm"] == arm
-        ]
-        if not values:
-            raise ValueError(f"ecdf.csv has no {arm} residual observations")
+        values = residual_values[arm]
         x_values, y_values = _ecdf(values)
         axes[0].step(
             x_values, y_values, where="post", color=ARM_COLORS[arm],
@@ -134,9 +178,9 @@ def render(data_dir: Path = FORMAL_DATA, figure_dir: Path = FIGS) -> tuple[Path,
     width = 0.34
     for arm_index, arm in enumerate(ARMS):
         positions = [center + (arm_index - 0.5) * width for center in centers]
-        values = [_number(conditioning[(arm, state)], "probability", "conditioning.csv") for state in states]
-        lows = [_number(conditioning[(arm, state)], "ci_low", "conditioning.csv") for state in states]
-        highs = [_number(conditioning[(arm, state)], "ci_high", "conditioning.csv") for state in states]
+        values = [conditioning_values[(arm, state)][0] for state in states]
+        lows = [conditioning_values[(arm, state)][1] for state in states]
+        highs = [conditioning_values[(arm, state)][2] for state in states]
         errors = [[value - low for value, low in zip(values, lows)],
                   [high - value for value, high in zip(values, highs)]]
         axes[1].bar(
@@ -156,7 +200,7 @@ def render(data_dir: Path = FORMAL_DATA, figure_dir: Path = FIGS) -> tuple[Path,
     centers = range(len(measures))
     for arm_index, arm in enumerate(ARMS):
         positions = [center + (arm_index - 0.5) * width for center in centers]
-        values = [_number(tokens[arm], key, "tokens.csv") for key, _label in measures]
+        values = [token_values[(arm, key)] for key, _label in measures]
         axes[2].bar(
             positions, values, width=width, color=ARM_COLORS[arm], label=ARM_LABELS[arm],
             edgecolor="white", linewidth=0.5,

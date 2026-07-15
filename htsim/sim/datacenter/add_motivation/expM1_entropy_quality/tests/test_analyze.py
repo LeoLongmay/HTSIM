@@ -1,6 +1,8 @@
 import contextlib
 import io
 import json
+import math
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,10 +11,16 @@ from unittest import mock
 from htsim.sim.datacenter.add_motivation.common.residual_join import ResidualAck
 from htsim.sim.datacenter.add_motivation.common.trace_schema import TraceBundle
 from htsim.sim.datacenter.add_motivation.expM1_entropy_quality import analyze
+from htsim.sim.datacenter.add_motivation.expM1_entropy_quality import make_figs
 
 
 def ack(event_seq, flow_id, entropy, residual_ps, *, ecn=False,
-        source_token_id=0, physical_path_id=None, retransmitted=False):
+        source_token_id=analyze.UINT64_MAX, physical_path_id=None,
+        retransmitted=False, selection_source=None):
+    if selection_source is None:
+        selection_source = (
+            "recycled" if source_token_id != analyze.UINT64_MAX else "unknown"
+        )
     return {
         "event_seq": event_seq,
         "time_ps": event_seq * 1_000,
@@ -23,6 +31,7 @@ def ack(event_seq, flow_id, entropy, residual_ps, *, ecn=False,
         "ecn": ecn,
         "genuine_sample": True,
         "retransmitted": retransmitted,
+        "selection_source": selection_source,
         "source_token_id": source_token_id,
         "new_data_bytes_sent_total": event_seq * 4150,
         "newly_acked_bytes": 4150,
@@ -118,6 +127,26 @@ class RunMetricTests(unittest.TestCase):
         self.assertEqual([row["token_id"] for row in rejected], [41])
         self.assertEqual(rejected[0]["selected_ack_event_seq"], 8)
 
+    def test_rejected_token_id_zero_matches_recycled_ack(self):
+        rows = [
+            ack(1, 1, 7, 20_000_000),
+            ack(4, 1, 7, 20_000_000, ecn=True, source_token_id=0),
+        ]
+        tokens = [
+            {"event_seq": 2, "flow_id": 1, "operation": "enqueue_good_ack",
+             "token_id": 0, "entropy": 7, "related_ack_event_seq": 1},
+            {"event_seq": 3, "flow_id": 1, "operation": "dequeue_recycle",
+             "token_id": 0, "entropy": 7, "related_ack_event_seq": 0},
+        ]
+        with mock.patch.object(
+            analyze, "attach_same_epoch_residuals", return_value=joined(rows)
+        ):
+            result = analyze.analyze_bundle(bundle(rows, tokens))
+
+        self.assertEqual(result.summary.rejected_token_selected_count, 1)
+        self.assertEqual(result.summary.rejected_token_future_high_rate, 1.0)
+        self.assertEqual(result.token_rows[0]["selected_ack_event_seq"], 4)
+
 
 class SelectionTests(unittest.TestCase):
     @staticmethod
@@ -189,6 +218,44 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(result.scenario_id, "alpha_l07")
         self.assertEqual(result.control_scenario_id, "symmetric_l07")
 
+    def test_duplicate_load_seed_controls_make_candidate_ineligible(self):
+        rows = []
+        for seed in analyze.CALIBRATION_SEEDS:
+            rows.append(self.passing(seed, "symmetric_l05", 0.1))
+            rows.append(self.passing(
+                seed, "gray_l05", 0.4, degraded_links=2, capacity=50.0
+            ))
+        rows.append(self.passing(101, "symmetric_duplicate_l05", 0.1))
+        with tempfile.TemporaryDirectory() as directory:
+            result_path = Path(directory) / "selection.csv"
+            result = analyze.select_formal(
+                rows, Path(directory) / "formal.csv", result_path
+            )
+            report = result_path.read_text(encoding="ascii")
+
+        self.assertFalse(result.selected)
+        self.assertIn("duplicate_load_matched_control", report)
+
+    def test_control_scenario_id_must_match_across_calibration_seeds(self):
+        rows = []
+        for seed, control_id in zip(
+            analyze.CALIBRATION_SEEDS,
+            ("symmetric_a_l05", "symmetric_b_l05", "symmetric_a_l05"),
+        ):
+            rows.append(self.passing(seed, control_id, 0.1))
+            rows.append(self.passing(
+                seed, "gray_l05", 0.4, degraded_links=2, capacity=50.0
+            ))
+        with tempfile.TemporaryDirectory() as directory:
+            result_path = Path(directory) / "selection.csv"
+            result = analyze.select_formal(
+                rows, Path(directory) / "formal.csv", result_path
+            )
+            report = result_path.read_text(encoding="ascii")
+
+        self.assertFalse(result.selected)
+        self.assertIn("inconsistent_control_scenario_id", report)
+
 
 class AuxiliaryTests(unittest.TestCase):
     def test_missing_flow_events_are_invalid_not_zero(self):
@@ -202,6 +269,46 @@ class AuxiliaryTests(unittest.TestCase):
         self.assertIsNone(auxiliary.goodput_gbps)
         self.assertIsNone(auxiliary.p99_fct_us)
         self.assertIn("FLOW_EVENT", auxiliary.invalid_reason)
+
+
+class RiskRatioBootstrapTests(unittest.TestCase):
+    def test_infinite_rr_replicates_are_valid_and_retained_in_percentiles(self):
+        rows = [
+            {"cluster_id": 1, "high_probability": 1.0, "low_probability": 0.0},
+            {"cluster_id": 2, "high_probability": 0.5, "low_probability": 0.0},
+        ]
+        result = analyze.risk_ratio_cluster_bootstrap(rows, samples=100, seed=7)
+
+        self.assertEqual(result.point_status, "positive_over_zero")
+        self.assertTrue(math.isinf(result.point_estimate))
+        self.assertEqual(result.valid_replicates, 100)
+        self.assertEqual(result.infinite_replicates, 100)
+        self.assertEqual(result.undefined_replicates, 0)
+        self.assertTrue(math.isinf(result.ci_low))
+        self.assertTrue(result.adequate)
+
+    def test_zero_over_zero_replicates_are_undefined_with_reason(self):
+        rows = [
+            {"cluster_id": 1, "high_probability": 0.0, "low_probability": 0.0},
+        ]
+        result = analyze.risk_ratio_cluster_bootstrap(rows, samples=20, seed=7)
+
+        self.assertEqual(result.point_status, "undefined_zero_over_zero")
+        self.assertIsNone(result.point_estimate)
+        self.assertEqual(result.valid_replicates, 0)
+        self.assertEqual(result.undefined_replicates, 20)
+        self.assertEqual(result.undefined_reasons["zero_over_zero"], 20)
+        self.assertIsNone(result.ci_low)
+        self.assertFalse(result.adequate)
+
+    def test_absent_conditioning_denominator_is_undefined(self):
+        rows = [
+            {"cluster_id": 1, "high_probability": None, "low_probability": 0.5},
+        ]
+        result = analyze.risk_ratio_cluster_bootstrap(rows, samples=20, seed=7)
+
+        self.assertEqual(result.point_status, "undefined_missing_high_conditioning")
+        self.assertEqual(result.undefined_reasons["missing_high_conditioning"], 20)
 
 
 class FormalPredicateTests(unittest.TestCase):
@@ -280,10 +387,7 @@ class FormalPredicateTests(unittest.TestCase):
 
     def test_formal_result_emits_complete_fixed_evidence_contract(self):
         summaries, next_rows, group_rows = self.evidence()
-        with mock.patch.object(
-            analyze, "cluster_bootstrap", return_value=(1.5, 2.5)
-        ):
-            result = analyze._formal_result(summaries, next_rows, group_rows)
+        result = analyze._formal_result(summaries, next_rows, group_rows)
 
         self.assertEqual(result["accepted"], 1)
         self.assertEqual(result["residual_threshold_ps"], 14_000_000)
@@ -293,6 +397,11 @@ class FormalPredicateTests(unittest.TestCase):
         self.assertEqual(result["physical_path_coverage_count_threshold"], 2)
         self.assertEqual(result["bootstrap_samples"], 10_000)
         self.assertEqual(result["bootstrap_confidence_level"], 0.95)
+        self.assertEqual(result["risk_ratio_bootstrap_valid_replicates"], 10_000)
+        self.assertGreater(result["risk_ratio_bootstrap_infinite_replicates"], 0)
+        self.assertEqual(result["risk_ratio_bootstrap_undefined_replicates"], 0)
+        self.assertEqual(result["risk_ratio_bootstrap_min_valid_fraction"], 0.95)
+        self.assertEqual(result["risk_ratio_bootstrap_min_valid_replicates"], 9_500)
         self.assertEqual(result["risk_ratio_ci_lower_bound_threshold"], 1.0)
         self.assertEqual(result["risk_ratio_ci_lower_bound_rule"], ">1")
         self.assertEqual(result["min_future_high_threshold"], 0.10)
@@ -318,6 +427,87 @@ class FixedThresholdCliTests(unittest.TestCase):
                     with self.assertRaises(SystemExit) as raised:
                         analyze.main(["--formal", flag, value])
                 self.assertEqual(raised.exception.code, 2)
+
+
+class InputBindingTests(unittest.TestCase):
+    def test_trace_bundle_identity_seed_and_scenario_are_bound_to_manifest(self):
+        manifest = {
+            "run_id": "formal_gray_s13", "seed": 13,
+            "experiment": "M1_entropy_quality", "phase": "formal",
+        }
+        valid_ack = {"seed": 13, "scenario": "M1_entropy_quality"}
+        cases = (
+            (TraceBundle("copied", (), (), (), (), (), (), ()), "run_id"),
+            (TraceBundle("formal_gray_s13", ({**valid_ack, "seed": 14},), (), (),
+                         (), (), (), ()), "ACK seed"),
+            (TraceBundle("formal_gray_s13", ({**valid_ack, "scenario": "other"},),
+                         (), (), (), (), (), ()), "ACK scenario"),
+        )
+        for trace, reason in cases:
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
+                analyze._validate_bundle_binding(trace, manifest)
+
+    def test_run_inputs_reject_symlink_and_copied_manifest_output(self):
+        data_root = analyze.HERE / "data"
+        data_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".m1_input_test_", dir=data_root) as directory:
+            phase_dir = Path(directory)
+            run_id = "formal_gray_s13"
+            manifest_path = phase_dir / f"{run_id}.manifest.json"
+            expected = {
+                "manifest": manifest_path,
+                "simulation": phase_dir / f"{run_id}.dat",
+                **{kind: phase_dir / f"{run_id}.{kind}.csv"
+                   for kind in analyze.TRACE_SUFFIXES},
+            }
+            for path in expected.values():
+                path.write_text("fixture\n", encoding="ascii")
+            manifest = {
+                "output_filenames": {key: str(path) for key, path in expected.items()}
+            }
+
+            copied = phase_dir / "copied.ack.csv"
+            copied.write_text("fixture\n", encoding="ascii")
+            manifest["output_filenames"]["ack"] = str(copied)
+            with self.assertRaisesRegex(ValueError, "output_filenames.*ack"):
+                analyze._validate_run_inputs(manifest_path, manifest, phase_dir, run_id)
+
+            manifest["output_filenames"]["ack"] = str(expected["ack"])
+            expected["token"].unlink()
+            os.symlink(expected["ack"], expected["token"])
+            with self.assertRaisesRegex(ValueError, "token.*symlink"):
+                analyze._validate_run_inputs(manifest_path, manifest, phase_dir, run_id)
+
+
+class PlotValidationTests(unittest.TestCase):
+    def _assert_fixture_rejected(self, filename, old, new, reason):
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            make_figs._write_fixture(data_dir)
+            path = data_dir / filename
+            path.write_text(
+                path.read_text(encoding="ascii").replace(old, new, 1),
+                encoding="ascii",
+            )
+            with self.assertRaisesRegex(ValueError, reason):
+                make_figs.render(data_dir, data_dir / "figs")
+
+    def test_rejects_negative_residual(self):
+        self._assert_fixture_rejected(
+            "ecdf.csv", "symmetric,0", "symmetric,-1", "nonnegative"
+        )
+
+    def test_rejects_probability_outside_unit_interval(self):
+        self._assert_fixture_rejected(
+            "conditioning.csv", "symmetric,low,0.18", "symmetric,low,1.2",
+            "\[0, 1\]",
+        )
+
+    def test_rejects_ci_that_does_not_contain_estimate(self):
+        self._assert_fixture_rejected(
+            "conditioning.csv", "0.18,0.12,0.25", "0.18,0.19,0.25",
+            "CI.*estimate",
+        )
 
 
 if __name__ == "__main__":
