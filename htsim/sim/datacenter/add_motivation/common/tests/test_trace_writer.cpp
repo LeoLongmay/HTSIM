@@ -1,4 +1,4 @@
-#include "motivation_trace.h"
+#include "motivation_background.h"
 
 #include <cassert>
 #include <cstdio>
@@ -139,6 +139,8 @@ int main() {
     const std::string boundary_row = lineAt(std::string(kPrefix) + ".background.csv", 5);
     assert(boundary_row ==
            "2,run,8,1500,11,start,7,8,9,9007199.2547409926,0,q4");
+    assert(boundary_row.find(formatMotivationBackgroundRateGbps(
+               speedAsGbps(kMaximumExactTraceRate))) != std::string::npos);
     assert(speedFromGbps(std::stod("9007199.2547409926")) == kMaximumExactTraceRate);
 
     removeTraceFiles(kPrefix);

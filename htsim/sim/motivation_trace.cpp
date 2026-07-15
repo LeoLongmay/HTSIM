@@ -2,10 +2,10 @@
 #include "motivation_trace.h"
 
 #include <array>
-#include <iomanip>
-#include <limits>
 #include <stdexcept>
 #include <utility>
+
+#include "motivation_background.h"
 
 namespace {
 
@@ -36,12 +36,6 @@ std::pair<const char*, const char*> tokenOperation(UecMpTokenEvent::Operation op
         return {"select_random_empty", "random_empty"};
     }
     throw std::invalid_argument("unknown UEC multipath token operation");
-}
-
-void writeRoundTripDouble(std::ostream& stream, double value) {
-    const std::streamsize previous_precision = stream.precision();
-    stream << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
-    stream.precision(previous_precision);
 }
 
 }  // namespace
@@ -155,7 +149,7 @@ void MotivationTraceWriter::logBackground(const MotivationBackgroundRecord& reco
     _background << kSchemaVersion << ',' << _config.run_id << ',' << record.event_seq << ','
                 << record.time_ps << ',' << record.background_id << ',' << record.operation << ','
                 << record.src << ',' << record.dst << ',' << record.path_index << ',';
-    writeRoundTripDouble(_background, record.configured_rate_gbps);
+    _background << formatMotivationBackgroundRateGbps(record.configured_rate_gbps);
     _background << ',' << record.delivered_bytes << ',' << record.queue_fingerprint << '\n';
 }
 

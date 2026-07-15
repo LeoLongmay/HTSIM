@@ -23,6 +23,7 @@ struct MotivationBackgroundSpec {
 
 std::vector<MotivationBackgroundSpec> loadMotivationBackgroundConfig(
     const std::string& path);
+std::string formatMotivationBackgroundRateGbps(double rate_gbps);
 std::string motivationBackgroundQueueFingerprint(const route_t& route);
 
 class MotivationBackgroundSink : public PacketSink {

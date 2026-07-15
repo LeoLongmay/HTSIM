@@ -5,7 +5,9 @@
 #include <charconv>
 #include <cctype>
 #include <fstream>
+#include <iomanip>
 #include <limits>
+#include <locale>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_set>
@@ -19,7 +21,7 @@ namespace {
 constexpr const char* kConfigHeader =
     "background_id,src,dst,path_index,rate_gbps,start_ps,stop_ps";
 constexpr uint64_t kPacketBitsPicoseconds = UINT64_C(1500) * 8 * UINT64_C(1000000000000);
-// MotivationBackgroundRecord stores Gbps as double, whose exact integer range ends at 2^53.
+// Keep trace-rate arithmetic in the range where integer bps are exactly representable as double.
 constexpr linkspeed_bps kMaximumExactTraceRate = UINT64_C(1) << 53;
 
 class MotivationBackgroundPacket final : public CbrPacket {
@@ -142,6 +144,20 @@ linkspeed_bps parseRate(const std::string& field, size_t line_number) {
         throw std::invalid_argument("rate_gbps exceeds exact trace maximum of 2^53 bps on line " +
                                     std::to_string(line_number));
     }
+
+    const std::string trace_rate =
+        formatMotivationBackgroundRateGbps(speedAsGbps(rate));
+    double parsed_trace_rate = 0;
+    const char* trace_begin = trace_rate.data();
+    const char* trace_end = trace_begin + trace_rate.size();
+    const auto trace_result = std::from_chars(
+        trace_begin, trace_end, parsed_trace_rate, std::chars_format::general);
+    if (trace_result.ec != std::errc() || trace_result.ptr != trace_end ||
+        speedFromGbps(parsed_trace_rate) != rate) {
+        throw std::invalid_argument(
+            "rate_gbps does not round-trip exactly through the background trace on line " +
+            std::to_string(line_number));
+    }
     return rate;
 }
 
@@ -163,6 +179,15 @@ std::string csvField(const std::string& value) {
 }
 
 }  // namespace
+
+std::string formatMotivationBackgroundRateGbps(double rate_gbps) {
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << std::defaultfloat
+           << std::setprecision(std::numeric_limits<double>::max_digits10)
+           << rate_gbps;
+    return output.str();
+}
 
 std::vector<MotivationBackgroundSpec> loadMotivationBackgroundConfig(
     const std::string& path) {

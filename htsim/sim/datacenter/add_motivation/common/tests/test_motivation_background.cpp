@@ -53,6 +53,17 @@ void expectInvalid(const std::string& body) {
     assert(failed);
 }
 
+void expectInvalidContaining(const std::string& body, const std::string& message) {
+    writeConfig(body);
+    try {
+        (void)loadMotivationBackgroundConfig(kConfig);
+    } catch (const std::invalid_argument& error) {
+        assert(std::string(error.what()).find(message) != std::string::npos);
+        return;
+    }
+    assert(false);
+}
+
 std::string lineAt(const std::string& path, size_t line_number) {
     std::ifstream input(path);
     assert(input.good());
@@ -94,15 +105,19 @@ void testConfigParsing() {
                 "2,17,1,2,0.000000001,200000000,1200000000\n"
                 "3,18,2,1,25.0000000000,200000000,1200000000\n"
                 "4,19,3,0,25.,200000000,1200000000\n"
-                "5,20,4,0,9007199.254740992,200000000,1200000000\n");
+                "5,20,4,0,0.1,200000000,1200000000\n"
+                "6,21,5,0,9007199.254740991,200000000,1200000000\n"
+                "7,22,6,0,9007199.254740992,200000000,1200000000\n");
     const std::vector<MotivationBackgroundSpec> exact_rates =
         loadMotivationBackgroundConfig(kConfig);
-    assert(exact_rates.size() == 5);
+    assert(exact_rates.size() == 7);
     assert(exact_rates[0].rate == UINT64_C(123456789));
     assert(exact_rates[1].rate == UINT64_C(1));
     assert(exact_rates[2].rate == UINT64_C(25000000000));
     assert(exact_rates[3].rate == UINT64_C(25000000000));
-    assert(exact_rates[4].rate == (UINT64_C(1) << 53));
+    assert(exact_rates[4].rate == UINT64_C(100000000));
+    assert(exact_rates[5].rate == (UINT64_C(1) << 53) - 1);
+    assert(exact_rates[6].rate == (UINT64_C(1) << 53));
 
     expectInvalid(std::string(kHeader) +
                   "\n0,16,0,3,25,200000000,1200000000\n"
@@ -139,6 +154,10 @@ void testConfigParsing() {
         expectInvalid(std::string(kHeader) + "\n0,16,0,3," + rate +
                       ",200000000,1200000000\n");
     }
+    expectInvalidContaining(
+        std::string(kHeader) +
+            "\n0,16,0,3,9007199.254740990,200000000,1200000000\n",
+        "does not round-trip exactly through the background trace");
     expectInvalid(std::string(kHeader) + "\n0,16,16,3,25,200000000,1200000000\n");
     expectInvalid(std::string(kHeader) + "\n0,16,0,3,25,1200000000,1200000000\n");
     expectInvalid(std::string(kHeader) + "\n0,16,0,3,25,1200000001,1200000000\n");
