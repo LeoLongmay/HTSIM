@@ -220,11 +220,14 @@ def _handle_seeded_ack(
     residual_by_event_seq: dict[int, ResidualAck],
     threshold_ps: int,
 ) -> None:
-    if active.waiting_for_end_epoch:
-        return
     token_id = ack.get("source_token_id")
     slot_index = active.seeded_slot_by_token_id.get(token_id)
-    if slot_index is None or token_id not in active.selected_seed_token_ids:
+    if slot_index is not None and token_id not in active.selected_seed_token_ids:
+        raise ReplayError(
+            f"flow {active.result.flow_id} seeded token_id {token_id} returned ACK "
+            f"event {ack['event_seq']} without a prior dequeue_recycle"
+        )
+    if active.waiting_for_end_epoch or slot_index is None:
         return
 
     slot = active.result.slots[slot_index]

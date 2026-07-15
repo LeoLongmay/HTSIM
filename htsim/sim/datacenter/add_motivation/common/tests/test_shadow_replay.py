@@ -239,7 +239,7 @@ class ShadowReplayTests(unittest.TestCase):
         self.assertTrue(all(slot.state is SlotState.COMPLETE for slot in round_.slots))
         self.assertEqual(round_.seeded_pass_count, 8)
 
-    def test_duplicate_entropy_ack_completes_only_matching_token_id(self):
+    def test_seeded_ack_without_matching_dequeue_is_rejected(self):
         builder = self.new_builder()
         seed_fifo(builder, count=2, first_token_id=41)
         builder.rows["ack"][1]["entropy"] = 0
@@ -254,10 +254,25 @@ class ShadowReplayTests(unittest.TestCase):
         )
         builder.close_epoch(7)
 
+        with self.assertRaisesRegex(ReplayError, r"flow 7.*token_id 42.*dequeue"):
+            replay_shadow(builder.bundle())
+
+    def test_nonseeded_recycled_ack_remains_ignorable(self):
+        builder = self.new_builder()
+        seed_fifo(builder, count=1)
+        builder.ack(
+            7,
+            0,
+            entropy=55,
+            source_token_id=999,
+            selection_source="recycled",
+        )
+        builder.close_epoch(7)
+
         round_ = replay_shadow(builder.bundle())[0]
 
         self.assertEqual(round_.slots[0].state, SlotState.SEEDED)
-        self.assertEqual(round_.slots[1].state, SlotState.SEEDED)
+        self.assertTrue(round_.censored)
 
     def test_high_residual_and_ecn_seeded_acks_become_pending(self):
         builder = self.new_builder()
