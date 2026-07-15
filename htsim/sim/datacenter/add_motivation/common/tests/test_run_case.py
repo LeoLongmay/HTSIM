@@ -2,6 +2,7 @@ import csv
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,42 @@ ADD_MOTIVATION = Path(__file__).resolve().parents[2]
 RUN_CASE_PATH = ADD_MOTIVATION / "common" / "run_case.py"
 TOPOLOGY = ADD_MOTIVATION.parent / "topologies" / "fat_tree_128_1os.topo"
 M1_CONFIGS = ADD_MOTIVATION / "expM1_entropy_quality" / "configs"
+TRACE_HEADERS = {
+    "ack": (
+        "schema_version", "run_id", "seed", "scenario", "event_seq", "time_ps",
+        "flow_id", "epoch_id", "acked_psn", "entropy", "physical_path_id",
+        "raw_rtt_ps", "base_rtt_ps", "qdelay_ps", "ecn", "genuine_sample",
+        "retransmitted", "forward_path_backlog_ps", "selection_source",
+        "source_token_id", "newly_acked_bytes", "new_data_bytes_sent_total",
+        "cwnd_bytes",
+    ),
+    "token": (
+        "schema_version", "run_id", "event_seq", "time_ps", "flow_id", "operation",
+        "reason", "token_id", "entropy", "queue_depth_before", "queue_depth_after",
+        "related_ack_event_seq",
+    ),
+    "epoch": (
+        "schema_version", "run_id", "event_seq", "flow_id", "epoch_id", "start_ps",
+        "end_ps", "sample_count", "raw_floor_ps", "raw_spread_ps", "smooth_floor_ps",
+        "smooth_spread_ps", "observed_region", "actual_region", "engaged",
+        "entropy_coverage", "physical_path_coverage", "new_data_bytes_sent_total",
+        "acked_bytes_total", "cwnd_bytes",
+    ),
+    "background": (
+        "schema_version", "run_id", "event_seq", "time_ps", "background_id",
+        "operation", "src", "dst", "path_index", "configured_rate_gbps",
+        "delivered_bytes", "queue_fingerprint",
+    ),
+    "pathmap": (
+        "schema_version", "run_id", "flow_id", "entropy", "physical_path_id",
+        "resolution_status", "queue_fingerprint", "bottleneck_rate_gbps",
+        "contains_reduced_link", "ordered_queue_ids",
+    ),
+    "linkmap": (
+        "schema_version", "run_id", "queue_id", "queue_name", "rate_gbps",
+        "reduced_speed",
+    ),
+}
 
 
 def load_run_case_module():
@@ -37,10 +74,23 @@ class RunCaseTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    @staticmethod
-    def completed(argv, **kwargs):
+    def write_valid_outputs(self, argv):
+        simulation = Path(argv[argv.index("-o") + 1])
+        simulation.write_bytes(b"nonempty simulator output\n")
+        prefix = Path(argv[argv.index("-motivation_trace_prefix") + 1])
+        run_id = argv[argv.index("-motivation_run_id") + 1]
+        for kind, header in TRACE_HEADERS.items():
+            path = Path(f"{prefix}.{kind}.csv")
+            path.write_text(",".join(header) + "\n", encoding="ascii")
+        with Path(f"{prefix}.linkmap.csv").open("a", encoding="ascii") as stream:
+            stream.write(f"2,{run_id},1,queue-1,100,0\n")
+
+    def completed(self, argv, **kwargs):
         if argv[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(argv, 0, stdout="3318d33cafefeed\n")
+        kwargs["stdout"].write("simulator stdout\n")
+        kwargs["stdout"].flush()
+        self.write_valid_outputs(argv)
         return subprocess.CompletedProcess(argv, 0)
 
     def invoke(self, module, **overrides):
@@ -106,6 +156,14 @@ class RunCaseTest(unittest.TestCase):
             manifest["traffic_sha256"],
             hashlib.sha256(self.traffic.read_bytes()).hexdigest(),
         )
+        self.assertEqual(
+            manifest["topology_sha256"],
+            hashlib.sha256(TOPOLOGY.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            manifest["binary_sha256"],
+            hashlib.sha256(module.BINARY.read_bytes()).hexdigest(),
+        )
         self.assertEqual(manifest["config"]["load_balancing_algo"], "reps")
         self.assertEqual(manifest["config"]["degraded_links"], 2)
         self.assertEqual(manifest["config"]["degraded_capacity_gbps"], 50.0)
@@ -139,6 +197,79 @@ class RunCaseTest(unittest.TestCase):
         self.assertFalse((self.root / "output" / "m1_smoke_s13.manifest.json").exists())
         self.assertEqual(list((self.root / "output").glob("*.tmp")), [])
 
+    def test_rejects_stale_manifest_before_running_any_subprocess(self):
+        module = load_run_case_module()
+        output = self.root / "output"
+        output.mkdir()
+        (output / "m1_smoke_s13.manifest.json").write_text("stale\n", encoding="ascii")
+
+        with mock.patch.object(module.subprocess, "run") as run:
+            with self.assertRaises(FileExistsError):
+                self.invoke(module)
+            run.assert_not_called()
+
+    def test_rejects_output_symlink_before_running_any_subprocess(self):
+        module = load_run_case_module()
+        output = self.root / "output"
+        output.mkdir()
+        os.symlink(self.traffic, output / "m1_smoke_s13.stdout")
+
+        with mock.patch.object(module.subprocess, "run") as run:
+            with self.assertRaises(FileExistsError):
+                self.invoke(module)
+            run.assert_not_called()
+
+    def test_does_not_publish_manifest_for_invalid_trace_outputs(self):
+        module = load_run_case_module()
+
+        def malformed_trace(argv, **kwargs):
+            result = self.completed(argv, **kwargs)
+            if argv[:3] != ["git", "rev-parse", "HEAD"]:
+                prefix = Path(argv[argv.index("-motivation_trace_prefix") + 1])
+                Path(f"{prefix}.ack.csv").write_text("wrong,header\n", encoding="ascii")
+            return result
+
+        with mock.patch.object(module.subprocess, "run", side_effect=malformed_trace):
+            with self.assertRaises(ValueError):
+                self.invoke(module)
+
+        self.assertFalse((self.root / "output" / "m1_smoke_s13.manifest.json").exists())
+
+    def test_does_not_publish_manifest_for_trace_run_id_mismatch(self):
+        module = load_run_case_module()
+
+        def wrong_run_id(argv, **kwargs):
+            result = self.completed(argv, **kwargs)
+            if argv[:3] != ["git", "rev-parse", "HEAD"]:
+                prefix = Path(argv[argv.index("-motivation_trace_prefix") + 1])
+                linkmap = Path(f"{prefix}.linkmap.csv")
+                header = ",".join(TRACE_HEADERS["linkmap"])
+                linkmap.write_text(f"{header}\n2,other,1,queue-1,100,0\n", encoding="ascii")
+            return result
+
+        with mock.patch.object(module.subprocess, "run", side_effect=wrong_run_id):
+            with self.assertRaisesRegex(ValueError, "trace run_id mismatch"):
+                self.invoke(module)
+
+        self.assertFalse((self.root / "output" / "m1_smoke_s13.manifest.json").exists())
+
+    def test_does_not_publish_manifest_for_post_run_output_symlink(self):
+        module = load_run_case_module()
+
+        def symlink_output(argv, **kwargs):
+            result = self.completed(argv, **kwargs)
+            if argv[:3] != ["git", "rev-parse", "HEAD"]:
+                simulation = Path(argv[argv.index("-o") + 1])
+                simulation.unlink()
+                os.symlink(self.traffic, simulation)
+            return result
+
+        with mock.patch.object(module.subprocess, "run", side_effect=symlink_output):
+            with self.assertRaisesRegex(ValueError, "regular non-symlink"):
+                self.invoke(module)
+
+        self.assertFalse((self.root / "output" / "m1_smoke_s13.manifest.json").exists())
+
     def test_rejects_output_and_trace_paths_outside_add_motivation(self):
         module = load_run_case_module()
         outside = ADD_MOTIVATION.parent / "escaped-task7-output"
@@ -155,8 +286,11 @@ class RunCaseTest(unittest.TestCase):
             {"cc": "receiver"},
             {"seed": -1},
             {"degraded_links": -1},
+            {"degraded_links": 2**32},
             {"degraded_capacity_gbps": 0},
             {"degraded_capacity_gbps": 101},
+            {"degraded_links": 0, "degraded_capacity_gbps": 50},
+            {"degraded_links": 2, "degraded_capacity_gbps": 100},
             {"traffic": self.root / "missing.cm"},
         )
         for values in invalid:
@@ -168,6 +302,24 @@ class RunCaseTest(unittest.TestCase):
 
 
 class M1ConfigTest(unittest.TestCase):
+    def test_scenario_identifier_helper_is_conservative(self):
+        module = load_run_case_module()
+        self.assertEqual(module.validate_identifier("gray_c50-d2.s13", "scenario_id"),
+                         "gray_c50-d2.s13")
+        for value in ("", "../escape", "/absolute", "has space", "line\nbreak"):
+            with self.subTest(value=value):
+                with self.assertRaises((TypeError, ValueError)):
+                    module.validate_identifier(value, "scenario_id")
+
+    def test_scripts_validate_scenario_before_filename_construction(self):
+        experiment = ADD_MOTIVATION / "expM1_entropy_quality"
+        for name in ("calibrate.sh", "repro.sh"):
+            with self.subTest(script=name):
+                script = (experiment / name).read_text(encoding="ascii")
+                validation = script.index('--validate-identifier "$scenario_id"')
+                filename = script.index('traffic="$OUT/${run_id}.cm"')
+                self.assertLess(validation, filename)
+
     def test_calibration_is_exact_product_and_formal_is_header_only(self):
         calibration = M1_CONFIGS / "calibration.csv"
         with calibration.open(newline="", encoding="ascii") as handle:

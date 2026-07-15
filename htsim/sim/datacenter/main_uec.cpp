@@ -1,6 +1,9 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 //#include "config.h"
 #include <cassert>
+#include <cerrno>
+#include <charconv>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -47,6 +50,35 @@ uint32_t DEFAULT_NONTRIMMING_QUEUESIZE_FACTOR = 5;
 // #define DEFAULT_CWND 50
 
 EventList eventlist;
+
+namespace {
+
+bool parse_degraded_count(const char* flag, const char* text, uint32_t& value) {
+    const char* end = text + strlen(text);
+    const auto result = std::from_chars(text, end, value, 10);
+    if (text == end || result.ec != std::errc() || result.ptr != end) {
+        cerr << "invalid " << flag << " value: " << text << endl;
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+bool parse_degraded_capacity(const char* text, double& value) {
+    if (text[0] == '\0' || std::isspace(static_cast<unsigned char>(text[0]))) {
+        cerr << "invalid -degraded_capacity_gbps value: " << text << endl;
+        return false;
+    }
+    char* end = nullptr;
+    errno = 0;
+    value = strtod(text, &end);
+    if (end == text || *end != '\0' || errno == ERANGE || !isfinite(value)) {
+        cerr << "invalid -degraded_capacity_gbps value: " << text << endl;
+        return false;
+    }
+    return true;
+}
 
 void exit_error(char* progr) {
     cout << "Usage " << progr << " [-nodes N]\n\t[-cwnd cwnd_size]\n\t[-q queue_size]\n\t[-queue_type composite|random|lossless|lossless_input|]\n\t[-tm traffic_matrix_file]\n\t[-strat route_strategy (single,rand,perm,pull,ecmp,\n\tecmp_host path_count,ecmp_ar,ecmp_rr,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-hop_latency x] per hop wire latency in us,default 1\n\t[-target_q_delay x] target_queuing_delay in us, default is 6us \n\t[-switch_latency x] switching latency in us, default 0\n\t[-host_queue_type  swift|prio|fair_prio]\n\t[-logtime dt] sample time for sinklogger, etc\n\t[-conn_reuse] enable connection reuse" << endl;
@@ -112,7 +144,9 @@ int main(int argc, char **argv) {
     uint32_t queue_size_bdp_factor = 0;
     uint32_t topo_num_failed = 0;
     double degraded_link_ratio = 0.25;
-    double degraded_capacity_gbps = 0;
+    double degraded_capacity_gbps = 100;
+    bool failed_alias_set = false;
+    bool degraded_links_set = false;
     bool degraded_capacity_set = false;
 
     bool receiver_driven = false;
@@ -554,14 +588,43 @@ int main(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"-failed")){
             // Compatibility alias: number of links degraded to 25% linkspeed.
-            topo_num_failed = atoi(argv[i+1]);
+            if (i + 1 >= argc) {
+                cerr << "missing operand for -failed" << endl;
+                return 1;
+            }
+            if (failed_alias_set) {
+                cerr << "duplicate -failed" << endl;
+                return 1;
+            }
+            if (!parse_degraded_count("-failed", argv[i+1], topo_num_failed))
+                return 1;
+            failed_alias_set = true;
             i++;
         } else if (!strcmp(argv[i],"-degraded_links")){
-            topo_num_failed = atoi(argv[i+1]);
+            if (i + 1 >= argc) {
+                cerr << "missing operand for -degraded_links" << endl;
+                return 1;
+            }
+            if (degraded_links_set) {
+                cerr << "duplicate -degraded_links" << endl;
+                return 1;
+            }
+            if (!parse_degraded_count("-degraded_links", argv[i+1], topo_num_failed))
+                return 1;
+            degraded_links_set = true;
             cout << "degraded_links " << topo_num_failed << endl;
             i++;
         } else if (!strcmp(argv[i],"-degraded_capacity_gbps")){
-            degraded_capacity_gbps = atof(argv[i+1]);
+            if (i + 1 >= argc) {
+                cerr << "missing operand for -degraded_capacity_gbps" << endl;
+                return 1;
+            }
+            if (degraded_capacity_set) {
+                cerr << "duplicate -degraded_capacity_gbps" << endl;
+                return 1;
+            }
+            if (!parse_degraded_capacity(argv[i+1], degraded_capacity_gbps))
+                return 1;
             degraded_capacity_set = true;
             cout << "degraded_capacity_gbps " << degraded_capacity_gbps << endl;
             i++;
@@ -686,6 +749,21 @@ int main(int argc, char **argv) {
         i++;
     }
 
+    if (failed_alias_set && (degraded_links_set || degraded_capacity_set)) {
+        cerr << "cannot mix -failed with degraded aliases" << endl;
+        return 1;
+    }
+    if (degraded_capacity_set && degraded_capacity_gbps <= 0) {
+        cerr << "invalid -degraded_capacity_gbps value: must be positive" << endl;
+        return 1;
+    }
+    if (!failed_alias_set && (degraded_links_set || degraded_capacity_set) &&
+        ((topo_num_failed == 0) != (degraded_capacity_gbps == 100))) {
+        cerr << "degraded configuration requires links=0/capacity=100 for controls or "
+             << "links>0/capacity<100 for gray cases" << endl;
+        return 1;
+    }
+
     if (end_time > 0 && logtime >= timeFromUs((uint32_t)end_time)){
         cout << "Logtime set to endtime" << endl;
         logtime = timeFromUs((uint32_t)end_time) - 1;
@@ -694,16 +772,6 @@ int main(int argc, char **argv) {
     assert(trimsize >= 64 && trimsize <= (uint32_t)packet_size);
 
     cout << "Packet size (MTU) is " << packet_size << endl;
-
-    if (degraded_capacity_set) {
-        const double normal_rate_gbps = speedAsGbps(linkspeed);
-        if (!isfinite(degraded_capacity_gbps) || degraded_capacity_gbps <= 0 ||
-            degraded_capacity_gbps > normal_rate_gbps) {
-            cerr << "degraded_capacity_gbps must be in (0," << normal_rate_gbps << "]" << endl;
-            return 1;
-        }
-        degraded_link_ratio = degraded_capacity_gbps / normal_rate_gbps;
-    }
 
     if (motivation_run_id.find_first_of(",\r\n") != std::string::npos ||
         motivation_scenario.find_first_of(",\r\n") != std::string::npos) {
@@ -867,6 +935,28 @@ int main(int argc, char **argv) {
         topo_cfg = make_unique<FatTreeTopologyCfg>(tiers, no_of_nodes, linkspeed, memFromPkt(queuesize_pkt),
                                                    hop_latency, switch_latency, 
                                                    qt, snd_type);
+    }
+
+    if (topo_num_failed > 0 && topo_num_failed > topo_cfg->max_degraded_links()) {
+        cerr << "degraded link count " << topo_num_failed << " exceeds topology maximum "
+             << topo_cfg->max_degraded_links() << endl;
+        return 1;
+    }
+    if (degraded_links_set || degraded_capacity_set) {
+        const double normal_rate_gbps =
+            speedAsGbps(topo_cfg->degraded_link_normal_rate());
+        if (topo_num_failed == 0) {
+            if (degraded_capacity_gbps != normal_rate_gbps) {
+                cerr << "control degraded_capacity_gbps must match affected topology rate "
+                     << normal_rate_gbps << endl;
+                return 1;
+            }
+        } else if (degraded_capacity_gbps >= normal_rate_gbps) {
+            cerr << "degraded_capacity_gbps must be in (0," << normal_rate_gbps
+                 << ") for degraded links" << endl;
+            return 1;
+        }
+        degraded_link_ratio = degraded_capacity_gbps / normal_rate_gbps;
     }
 
     simtime_picosec network_max_unloaded_rtt = calculate_rtt(topo_cfg.get(), linkspeed);

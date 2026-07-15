@@ -417,6 +417,24 @@ void FatTreeTopologyCfg::set_linkspeeds(linkspeed_bps linkspeed) {
     if (_downlink_speeds[CORE_TIER] == 0) { _downlink_speeds[CORE_TIER] = linkspeed;}
 }
 
+linkspeed_bps FatTreeTopologyCfg::degraded_link_normal_rate() const {
+    if (_tiers == 2)
+        return _downlink_speeds[AGG_TIER];
+    if (_tiers == 3)
+        return _downlink_speeds[CORE_TIER];
+    throw std::logic_error("degraded links require a two- or three-tier fat tree");
+}
+
+uint32_t FatTreeTopologyCfg::max_degraded_links() const {
+    if (_tiers == 2)
+        return NAGG;
+    if (_tiers == 3) {
+        const uint32_t links_per_agg = _radix_up[AGG_TIER] / _bundlesize[CORE_TIER];
+        return (NAGG - 1) * _agg_switches_per_pod + links_per_agg;
+    }
+    throw std::logic_error("degraded links require a two- or three-tier fat tree");
+}
+
 void FatTreeTopologyCfg::set_queue_sizes(mem_b queuesize) {
     // all tiers use the same queuesize
     for (int tier = TOR_TIER; tier <= CORE_TIER; tier++) {

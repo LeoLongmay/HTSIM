@@ -67,7 +67,7 @@ public:
         _ecn_high = ecn_high;
     }
 
-    void set_failed_links(int num_failed_links) {
+    void set_failed_links(uint32_t num_failed_links) {
         _num_failed_links = num_failed_links;
     }
 
@@ -95,6 +95,8 @@ public:
 
     void set_linkspeeds(linkspeed_bps linkspeed);
     void set_queue_sizes(mem_b queuesize);
+    linkspeed_bps degraded_link_normal_rate() const;
+    uint32_t max_degraded_links() const;
 
     void set_params(uint32_t no_of_nodes);
     void set_custom_params(uint32_t no_of_nodes);

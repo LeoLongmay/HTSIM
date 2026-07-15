@@ -15,8 +15,10 @@ mkdir -p "$OUT"
 while IFS=, read -r scenario_id degraded_links degraded_capacity offered_load seed; do
     [ "$scenario_id" = "scenario_id" ] && continue
     [ -n "$scenario_id" ] || continue
+    python3 "$RUNNER" --validate-identifier "$scenario_id" >/dev/null
 
     run_id="calibration_${scenario_id}"
+    python3 "$RUNNER" --validate-identifier "$run_id" >/dev/null
     traffic="$OUT/${run_id}.cm"
     python3 "$GENERATOR" "$traffic" 64 16 8000000 128 16 \
         "$offered_load" 8000 1600 "$seed"

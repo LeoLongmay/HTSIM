@@ -38,7 +38,9 @@ run_one() {
     local degraded_capacity="$3"
     local offered_load="$4"
     local seed="$5"
+    python3 "$RUNNER" --validate-identifier "$scenario_id" >/dev/null
     local run_id="${PHASE}_${scenario_id}_s${seed}"
+    python3 "$RUNNER" --validate-identifier "$run_id" >/dev/null
     local traffic="$OUT/${run_id}.cm"
 
     python3 "$GENERATOR" "$traffic" 64 16 8000000 128 16 \

@@ -7,9 +7,15 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
+
+try:
+    from htsim.sim.datacenter.add_motivation.common.trace_schema import load_trace
+except ModuleNotFoundError:
+    from trace_schema import load_trace
 
 
 COMMON_DIR = Path(__file__).resolve().parent
@@ -39,7 +45,7 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 TRACE_SUFFIXES = ("ack", "token", "epoch", "background", "pathmap", "linkmap")
 
 
-def _safe_name(value, field):
+def validate_identifier(value, field):
     if not isinstance(value, str):
         raise TypeError(f"{field} must be a string")
     if not SAFE_NAME.fullmatch(value):
@@ -61,6 +67,56 @@ def _contained_path(value, field):
     except ValueError as error:
         raise ValueError(f"{field} must remain inside {ADD_MOTIVATION_DIR}") from error
     return path
+
+
+def _validate_output_parent(path, field):
+    parent = path.parent.resolve(strict=False)
+    try:
+        parent.relative_to(ADD_MOTIVATION_DIR)
+    except ValueError as error:
+        raise ValueError(f"{field} parent must remain inside {ADD_MOTIVATION_DIR}") from error
+
+
+def _reject_existing_outputs(outputs):
+    for name, path in outputs.items():
+        _validate_output_parent(path, name)
+        if not os.path.lexists(path):
+            continue
+        mode = os.lstat(path).st_mode
+        if stat.S_ISLNK(mode):
+            kind = "symlink"
+        elif not stat.S_ISREG(mode):
+            kind = "non-regular file"
+        else:
+            kind = "stale file"
+        raise FileExistsError(f"refusing to overwrite {kind} for {name}: {path}")
+
+
+def _open_exclusive_stdout(path):
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o644)
+    return os.fdopen(descriptor, "w", encoding="ascii")
+
+
+def _validate_regular_output(path, name):
+    try:
+        metadata = os.lstat(path)
+    except OSError as error:
+        raise ValueError(f"missing {name} output: {path}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{name} output must be a regular non-symlink file: {path}")
+    if metadata.st_size <= 0:
+        raise ValueError(f"{name} output is empty: {path}")
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _background_value(value):
@@ -96,8 +152,8 @@ def _number_arg(value):
 def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
              out_dir, trace_prefix, degraded_links=0,
              degraded_capacity_gbps=100.0, background_config=None):
-    experiment = _safe_name(experiment, "experiment")
-    run_id = _safe_name(run_id, "run_id")
+    experiment = validate_identifier(experiment, "experiment")
+    run_id = validate_identifier(run_id, "run_id")
     if phase not in VALID_PHASES:
         raise ValueError(f"phase must be one of {sorted(VALID_PHASES)}")
     if cc not in VALID_CCS:
@@ -115,6 +171,11 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         0 < degraded_capacity_gbps <= NORMAL_CAPACITY_GBPS
     ):
         raise ValueError("degraded_capacity_gbps must be in (0, 100]")
+    if (degraded_links == 0) != (degraded_capacity_gbps == NORMAL_CAPACITY_GBPS):
+        raise ValueError(
+            "controls require degraded_links=0 and degraded_capacity_gbps=100; "
+            "gray cases require degraded_links>0 and degraded_capacity_gbps<100"
+        )
 
     topology_path = _input_file(topology, "topology")
     traffic_path = _input_file(traffic, "traffic")
@@ -126,17 +187,26 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         raise ValueError(f"trace_prefix is a directory: {trace_path}")
     background_value = _background_value(background_config)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    trace_path.parent.mkdir(parents=True, exist_ok=True)
     simulation_path = output_dir / f"{run_id}.dat"
     stdout_path = output_dir / f"{run_id}.stdout"
     manifest_path = output_dir / f"{run_id}.manifest.json"
-    output_filenames = {
-        "simulation": str(simulation_path),
-        "stdout": str(stdout_path),
-        **{name: f"{trace_path}.{name}.csv" for name in TRACE_SUFFIXES},
-        "manifest": str(manifest_path),
+    output_paths = {
+        "simulation": simulation_path,
+        "stdout": stdout_path,
+        **{name: Path(f"{trace_path}.{name}.csv") for name in TRACE_SUFFIXES},
+        "manifest": manifest_path,
     }
+    _reject_existing_outputs(output_paths)
+
+    binary_path = BINARY.resolve(strict=True)
+    if not binary_path.is_file():
+        raise ValueError(f"htsim_uec must resolve to a regular file: {BINARY}")
+    topology_sha256 = _sha256(topology_path)
+    traffic_sha256 = _sha256(traffic_path)
+    binary_sha256 = _sha256(binary_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    output_filenames = {name: str(path) for name, path in output_paths.items()}
 
     argv = [
         str(BINARY),
@@ -165,14 +235,23 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
     ]
 
     commit = _git_commit()
-    traffic_sha256 = hashlib.sha256(traffic_path.read_bytes()).hexdigest()
-    with stdout_path.open("w", encoding="ascii") as stdout:
+    with _open_exclusive_stdout(stdout_path) as stdout:
         subprocess.run(
             argv,
             check=True,
             cwd=output_dir,
             stdout=stdout,
             stderr=subprocess.STDOUT,
+        )
+
+    _validate_regular_output(stdout_path, "stdout")
+    _validate_regular_output(simulation_path, "simulation")
+    for kind in TRACE_SUFFIXES:
+        _validate_regular_output(output_paths[kind], kind)
+    bundle = load_trace(trace_path)
+    if bundle.run_id != run_id:
+        raise ValueError(
+            f"trace run_id mismatch: expected {run_id!r}, got {bundle.run_id!r}"
         )
 
     manifest = {
@@ -184,8 +263,11 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         "run_id": run_id,
         "seed": seed,
         "topology": str(topology_path),
+        "topology_sha256": topology_sha256,
         "traffic": str(traffic_path),
         "traffic_sha256": traffic_sha256,
+        "binary": str(binary_path),
+        "binary_sha256": binary_sha256,
         "queue_bytes": QUEUE_BYTES,
         "config": {
             "cc": cc,
@@ -225,7 +307,9 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_name, manifest_path)
+        os.link(temp_name, manifest_path, follow_symlinks=False)
+        os.unlink(temp_name)
+        temp_name = None
     finally:
         if temp_name is not None and os.path.exists(temp_name):
             os.unlink(temp_name)
@@ -234,6 +318,19 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
 
 
 def main(argv=None):
+    if argv is None:
+        import sys
+        argv = sys.argv[1:]
+    if argv[:1] == ["--validate-identifier"]:
+        validator = argparse.ArgumentParser(description="Validate a conservative identifier")
+        validator.add_argument("--validate-identifier", required=True)
+        args = validator.parse_args(argv)
+        try:
+            print(validate_identifier(args.validate_identifier, "scenario_id"))
+        except (TypeError, ValueError) as error:
+            validator.error(str(error))
+        return
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment", required=True)
     parser.add_argument("--phase", required=True, choices=sorted(VALID_PHASES))
