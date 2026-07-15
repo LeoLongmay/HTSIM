@@ -23,12 +23,21 @@ struct MotivationBackgroundSpec {
 
 constexpr uint32_t kMotivationBackgroundPacketBytes = 1500;
 
+struct MotivationBackgroundDrainPolicy {
+    // No foreground connection has this background's source as src or dst.
+    bool source_endpoint_isolated;
+    // The selected topology mode constructs ECNQueue without any pause producer.
+    bool pause_free_ecn_path;
+};
+
 std::vector<MotivationBackgroundSpec> loadMotivationBackgroundConfig(
     const std::string& path);
 std::string formatMotivationBackgroundRateGbps(double rate_gbps);
 std::string motivationBackgroundQueueFingerprint(const route_t& route);
-// Conservative time for one emitted packet to leave every bounded queue and pipe.
-simtime_picosec motivationBackgroundRouteDrainBound(const route_t& route);
+// Conservative time for one emitted packet to leave a class-checked route.
+simtime_picosec motivationBackgroundRouteDrainBound(
+    const route_t& route, const MotivationBackgroundSpec& spec,
+    const MotivationBackgroundDrainPolicy& policy);
 
 class MotivationBackgroundSink : public PacketSink {
 public:

@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "pipe.h"
+#include "compositequeue.h"
+#include "ecnqueue.h"
 #include "queue.h"
 
 namespace {
@@ -208,32 +210,98 @@ void testAbsentConfigDoesNotPerturbRng() {
 }
 
 void testRouteDrainBound(EventList& eventlist) {
-    ForwardingQueue first(eventlist, "bounded-a", speedFromGbps(100), 1500);
+    const MotivationBackgroundSpec spec{
+        20, 16, 0, 0, speedFromGbps(25), UINT64_C(1000000), UINT64_C(2000000)};
+    const MotivationBackgroundDrainPolicy safe_policy{true, true};
+    FairPriorityQueue host(
+        speedFromGbps(100), 0, eventlist, nullptr);
     Pipe pipe(UINT64_C(1000000), eventlist);
-    ForwardingQueue second(eventlist, "bounded-b", speedFromGbps(25), 3000);
+    ECNQueue downstream(
+        speedFromGbps(25), 3000, eventlist, nullptr, 1500);
     Route route;
-    route.push_back(&first);
+    route.push_back(&host);
     route.push_back(&pipe);
-    route.push_back(&second);
-    assert(motivationBackgroundRouteDrainBound(route) == UINT64_C(2680000));
+    route.push_back(&downstream);
+    assert(motivationBackgroundRouteDrainBound(route, spec, safe_policy) ==
+           UINT64_C(2560000));
+
+    bool isolation_failed = false;
+    try {
+        (void)motivationBackgroundRouteDrainBound(
+            route, spec, MotivationBackgroundDrainPolicy{false, true});
+    } catch (const std::invalid_argument&) {
+        isolation_failed = true;
+    }
+    assert(isolation_failed);
+
+    const MotivationBackgroundSpec excessive_rate{
+        21, 16, 0, 0, speedFromGbps(101), UINT64_C(1000000), UINT64_C(2000000)};
+    bool rate_failed = false;
+    try {
+        (void)motivationBackgroundRouteDrainBound(route, excessive_rate, safe_policy);
+    } catch (const std::invalid_argument&) {
+        rate_failed = true;
+    }
+    assert(rate_failed);
+
+    bool pause_policy_failed = false;
+    try {
+        (void)motivationBackgroundRouteDrainBound(
+            route, spec, MotivationBackgroundDrainPolicy{true, false});
+    } catch (const std::invalid_argument&) {
+        pause_policy_failed = true;
+    }
+    assert(pause_policy_failed);
+
+    FairPriorityQueue second_host(
+        speedFromGbps(100), 0, eventlist, nullptr);
+    Route repeated_host_route;
+    repeated_host_route.push_back(&host);
+    repeated_host_route.push_back(&second_host);
+    bool repeated_host_failed = false;
+    try {
+        (void)motivationBackgroundRouteDrainBound(
+            repeated_host_route, spec, safe_policy);
+    } catch (const std::invalid_argument&) {
+        repeated_host_failed = true;
+    }
+    assert(repeated_host_failed);
+
+    CompositeQueue composite(
+        speedFromGbps(100), 3000, eventlist, nullptr, 64);
+    Route composite_route;
+    composite_route.push_back(&host);
+    composite_route.push_back(&composite);
+    bool composite_failed = false;
+    try {
+        (void)motivationBackgroundRouteDrainBound(
+            composite_route, spec, safe_policy);
+    } catch (const std::invalid_argument&) {
+        composite_failed = true;
+    }
+    assert(composite_failed);
 
     MotivationBackgroundSink unsupported;
     Route unsupported_route;
     unsupported_route.push_back(&unsupported);
     bool unsupported_failed = false;
     try {
-        (void)motivationBackgroundRouteDrainBound(unsupported_route);
+        (void)motivationBackgroundRouteDrainBound(
+            unsupported_route, spec, safe_policy);
     } catch (const std::invalid_argument&) {
         unsupported_failed = true;
     }
     assert(unsupported_failed);
 
-    ForwardingQueue unbounded(eventlist, "unbounded", speedFromGbps(100), -1);
+    ECNQueue unbounded(
+        speedFromGbps(100), -1, eventlist, nullptr, 0);
     Route unbounded_route;
+    unbounded_route.push_back(&host);
     unbounded_route.push_back(&unbounded);
     bool unbounded_failed = false;
     try {
-        (void)motivationBackgroundRouteDrainBound(unbounded_route);
+        (void)motivationBackgroundRouteDrainBound(
+            unbounded_route, spec, safe_policy);
     } catch (const std::invalid_argument&) {
         unbounded_failed = true;
     }
@@ -242,11 +310,13 @@ void testRouteDrainBound(EventList& eventlist) {
     Pipe maximum_delay(std::numeric_limits<simtime_picosec>::max(), eventlist);
     Pipe overflow_delay(1, eventlist);
     Route overflow_route;
+    overflow_route.push_back(&host);
     overflow_route.push_back(&maximum_delay);
     overflow_route.push_back(&overflow_delay);
     bool overflow_failed = false;
     try {
-        (void)motivationBackgroundRouteDrainBound(overflow_route);
+        (void)motivationBackgroundRouteDrainBound(
+            overflow_route, spec, safe_policy);
     } catch (const std::overflow_error&) {
         overflow_failed = true;
     }

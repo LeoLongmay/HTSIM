@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <string.h>
+#include <unordered_set>
 
 #include <math.h>
 #include <unistd.h>
@@ -83,7 +84,7 @@ bool parse_degraded_capacity(const char* text, double& value) {
 }
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-cwnd cwnd_size]\n\t[-q queue_size]\n\t[-queue_type composite|random|lossless|lossless_input|]\n\t[-tm traffic_matrix_file]\n\t[-strat route_strategy (single,rand,perm,pull,ecmp,\n\tecmp_host path_count,ecmp_ar,ecmp_rr,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-hop_latency x] per hop wire latency in us,default 1\n\t[-target_q_delay x] target_queuing_delay in us, default is 6us \n\t[-switch_latency x] switching latency in us, default 0\n\t[-host_queue_type  swift|prio|fair_prio]\n\t[-logtime dt] sample time for sinklogger, etc\n\t[-conn_reuse] enable connection reuse" << endl;
+    cout << "Usage " << progr << " [-nodes N]\n\t[-cwnd cwnd_size]\n\t[-q queue_size]\n\t[-queue_type composite|ecn|random|lossless|lossless_input|]\n\t[-tm traffic_matrix_file]\n\t[-strat route_strategy (single,rand,perm,pull,ecmp,\n\tecmp_host path_count,ecmp_ar,ecmp_rr,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-hop_latency x] per hop wire latency in us,default 1\n\t[-target_q_delay x] target_queuing_delay in us, default is 6us \n\t[-switch_latency x] switching latency in us, default 0\n\t[-host_queue_type  swift|prio|fair_prio]\n\t[-logtime dt] sample time for sinklogger, etc\n\t[-conn_reuse] enable connection reuse" << endl;
     exit(1);
 }
 
@@ -459,6 +460,9 @@ int main(int argc, char **argv) {
             } 
             else if (!strcmp(argv[i+1], "composite_ecn")) {
                 qt = COMPOSITE_ECN;
+            }
+            else if (!strcmp(argv[i+1], "ecn")) {
+                qt = ECN;
             }
             else if (!strcmp(argv[i+1], "aeolus")){
                 qt = AEOLUS;
@@ -1102,6 +1106,15 @@ int main(int argc, char **argv) {
     list <const Route*> routes;
 
     vector<connection*>* all_conns = conns->getAllConnections();
+    vector<bool> foreground_endpoints(no_of_nodes, false);
+    for (const connection* foreground : *all_conns) {
+        if (foreground->src >= 0 && foreground->dst >= 0 &&
+            static_cast<uint32_t>(foreground->src) < no_of_nodes &&
+            static_cast<uint32_t>(foreground->dst) < no_of_nodes) {
+            foreground_endpoints[foreground->src] = true;
+            foreground_endpoints[foreground->dst] = true;
+        }
+    }
     vector <UecSrc*> uec_srcs;
 
     map<flowid_t, pair<UecSrc*, UecSink*>> flowmap;
@@ -1442,15 +1455,30 @@ int main(int argc, char **argv) {
                 throw invalid_argument(
                     "motivation background traffic requires a finite simulation end");
             }
+            if (!motivation_background_specs.empty() && !goal_filename.empty()) {
+                throw invalid_argument(
+                    "motivation background endpoint isolation cannot be proven for GOAL traffic");
+            }
             const simtime_picosec simulation_end_ps = timeFromMs((double)end_time);
             motivation_background_routes.reserve(motivation_background_specs.size());
             motivation_background_sinks.reserve(motivation_background_specs.size());
             motivation_background_sources.reserve(motivation_background_specs.size());
+            unordered_set<uint32_t> background_source_endpoints;
 
             for (const MotivationBackgroundSpec& spec : motivation_background_specs) {
                 if (spec.src >= no_of_nodes || spec.dst >= no_of_nodes) {
                     throw invalid_argument("motivation background endpoint is outside topology for ID " +
                                            to_string(spec.background_id));
+                }
+                if (foreground_endpoints[spec.src]) {
+                    throw invalid_argument(
+                        "motivation background source endpoint is used by foreground traffic for ID " +
+                        to_string(spec.background_id));
+                }
+                if (!background_source_endpoints.insert(spec.src).second) {
+                    throw invalid_argument(
+                        "motivation background source endpoint is shared by multiple backgrounds for ID " +
+                        to_string(spec.background_id));
                 }
 
                 unique_ptr<vector<const Route*>> paths(
@@ -1477,7 +1505,12 @@ int main(int argc, char **argv) {
                                         to_string(spec.background_id));
                 }
                 const simtime_picosec drain_bound =
-                    motivationBackgroundRouteDrainBound(selected_path);
+                    motivationBackgroundRouteDrainBound(
+                        selected_path, spec,
+                        MotivationBackgroundDrainPolicy{
+                            true,
+                            // ECN topology mode does not construct pause-frame producers.
+                            qt == ECN});
                 if (drain_bound > numeric_limits<simtime_picosec>::max() - spec.stop_ps) {
                     throw overflow_error(
                         "motivation background drain deadline overflow for ID " +

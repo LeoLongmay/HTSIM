@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "cbrpacket.h"
+#include "ecnqueue.h"
 #include "pipe.h"
 #include "queue.h"
 
@@ -264,7 +265,9 @@ std::string motivationBackgroundQueueFingerprint(const route_t& route) {
     return fingerprint.str();
 }
 
-simtime_picosec motivationBackgroundRouteDrainBound(const route_t& route) {
+simtime_picosec motivationBackgroundRouteDrainBound(
+    const route_t& route, const MotivationBackgroundSpec& spec,
+    const MotivationBackgroundDrainPolicy& policy) {
     if (route.size() == 0) {
         throw std::invalid_argument("motivation background route is empty");
     }
@@ -276,10 +279,55 @@ simtime_picosec motivationBackgroundRouteDrainBound(const route_t& route) {
         }
         bound += duration;
     };
+    const auto serialization_duration = [](uint64_t bytes, linkspeed_bps bitrate) {
+        if (bitrate == 0) {
+            throw std::invalid_argument(
+                "motivation background route has a zero-rate queue");
+        }
+        const unsigned __int128 bits_picoseconds =
+            static_cast<unsigned __int128>(bytes) * 8 * UINT64_C(1000000000000);
+        const unsigned __int128 duration =
+            (bits_picoseconds + bitrate - 1) / bitrate;
+        if (duration > std::numeric_limits<simtime_picosec>::max()) {
+            throw std::overflow_error(
+                "motivation background queue drain time overflow");
+        }
+        return static_cast<simtime_picosec>(duration);
+    };
 
+    bool found_host_queue = false;
     for (PacketSink* element : route) {
         if (const auto* queue = dynamic_cast<const BaseQueue*>(element)) {
-            if (queue->bitrate() == 0 || queue->maxsize() < 0) {
+            if (!found_host_queue) {
+                if (dynamic_cast<const FairPriorityQueue*>(queue) == nullptr) {
+                    throw std::invalid_argument(
+                        "motivation background route must start with FairPriorityQueue");
+                }
+                if (!policy.source_endpoint_isolated) {
+                    throw std::invalid_argument(
+                        "motivation background FairPriorityQueue source is not isolated");
+                }
+                if (spec.rate > queue->bitrate()) {
+                    throw std::invalid_argument(
+                        "motivation background rate exceeds host queue bitrate");
+                }
+                add_duration(serialization_duration(
+                    kMotivationBackgroundPacketBytes, queue->bitrate()));
+                found_host_queue = true;
+                continue;
+            }
+
+            if (dynamic_cast<const FairPriorityQueue*>(queue) != nullptr) {
+                throw std::invalid_argument(
+                    "motivation background route contains a second FairPriorityQueue");
+            }
+            if (dynamic_cast<const ECNQueue*>(queue) == nullptr ||
+                !policy.pause_free_ecn_path) {
+                throw std::invalid_argument(
+                    "motivation background route queue class has no proven drain bound: " +
+                    queue->queueName());
+            }
+            if (queue->maxsize() < 0) {
                 throw std::invalid_argument(
                     "motivation background route has an unbounded queue: " +
                     queue->queueName());
@@ -290,17 +338,9 @@ simtime_picosec motivationBackgroundRouteDrainBound(const route_t& route) {
                 throw std::overflow_error(
                     "motivation background queue drain byte bound overflow");
             }
-            const unsigned __int128 bits_picoseconds =
-                static_cast<unsigned __int128>(queued_bytes +
-                                               kMotivationBackgroundPacketBytes) *
-                8 * UINT64_C(1000000000000);
-            const unsigned __int128 duration =
-                (bits_picoseconds + queue->bitrate() - 1) / queue->bitrate();
-            if (duration > std::numeric_limits<simtime_picosec>::max()) {
-                throw std::overflow_error(
-                    "motivation background queue drain time overflow");
-            }
-            add_duration(static_cast<simtime_picosec>(duration));
+            add_duration(serialization_duration(
+                queued_bytes + kMotivationBackgroundPacketBytes,
+                queue->bitrate()));
             continue;
         }
         if (auto* pipe = dynamic_cast<Pipe*>(element)) {
@@ -309,6 +349,10 @@ simtime_picosec motivationBackgroundRouteDrainBound(const route_t& route) {
         }
         throw std::invalid_argument(
             "motivation background route contains an element without a drain bound");
+    }
+    if (!found_host_queue) {
+        throw std::invalid_argument(
+            "motivation background route has no FairPriorityQueue host queue");
     }
     return bound;
 }
