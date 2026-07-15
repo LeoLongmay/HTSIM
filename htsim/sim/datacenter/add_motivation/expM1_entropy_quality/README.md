@@ -86,7 +86,8 @@ flow entropy/path coverage, unmatched matching, and loss/freezing gates. Gray pe
 pass the fixed future-high, entropy-direction, and deduplicated-path-direction rules. Any failed
 condition produces `accepted=0`; control failures use `control_`-prefixed predicate names.
 Formal analysis first treats `configs/formal.csv` as a locked input. Its header and ten rows must
-describe exactly one stable gray cell and one stable symmetric control at every required seed.
+describe exactly one stable gray cell and one stable symmetric control at every required seed; the
+two cells must have exactly the same `offered_load`, including every seed-level pairing.
 Formal manifests and generated summary rows must match each locked row exactly in arm, scenario ID,
 degraded-link count, capacity, offered load, and seed. Missing, duplicate, extra, stale, mixed-cell,
 or mismatched inputs produce an invalid `formal_result.csv`; no persistence rows are pooled and the

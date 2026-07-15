@@ -1088,6 +1088,7 @@ def _normalize_formal_config(rows: Iterable[dict]) -> list[dict]:
             f"formal config must contain exactly {2 * len(FORMAL_SEEDS)} rows"
         )
     expected_seeds = set(FORMAL_SEEDS)
+    arm_loads = {}
     for arm in ("symmetric", "gray"):
         arm_rows = [row for row in normalized if row["arm"] == arm]
         seeds = [row["seed"] for row in arm_rows]
@@ -1106,6 +1107,11 @@ def _normalize_formal_config(rows: Iterable[dict]) -> list[dict]:
         }
         if len(cells) != 1:
             raise ValueError(f"formal config has inconsistent {arm} scenario/config")
+        arm_loads[arm] = arm_rows[0]["offered_load"]
+    if arm_loads["symmetric"] != arm_loads["gray"]:
+        raise ValueError(
+            "formal config symmetric and gray offered_load must match exactly"
+        )
     return normalized
 
 
@@ -1133,6 +1139,7 @@ def _formal_binding(
     except ValueError as exc:
         return {
             "formal_config_valid": False,
+            "formal_load_matched_controls": False,
             "formal_rows_match_locked_config": False,
             "formal_seed_coverage": False,
         }, [str(exc)], []
@@ -1181,6 +1188,7 @@ def _formal_binding(
     matched = not reasons and len(actual) == len(expected)
     return {
         "formal_config_valid": True,
+        "formal_load_matched_controls": True,
         "formal_rows_match_locked_config": matched,
         "formal_seed_coverage": matched,
     }, reasons, config
@@ -1487,6 +1495,7 @@ def analyze_phase(
         except ValueError as exc:
             invalid = _invalid_formal_result({
                 "formal_config_valid": False,
+                "formal_load_matched_controls": False,
                 "formal_rows_match_locked_config": False,
                 "formal_seed_coverage": False,
             }, [str(exc)])

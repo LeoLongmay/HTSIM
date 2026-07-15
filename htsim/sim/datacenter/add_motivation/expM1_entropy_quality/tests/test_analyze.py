@@ -475,6 +475,31 @@ class FormalPredicateTests(unittest.TestCase):
         self.assertIn("formal_rows_match_locked_config", result["failed_predicates"])
         self.assertIn("config mismatch", result["invalid_reason"])
 
+    def test_formal_control_must_be_load_matched_to_gray_cell(self):
+        summaries, next_rows, group_rows = self.evidence()
+        config = self.formal_config()
+        for row in config:
+            if row["degraded_links"] == 0:
+                row["scenario_id"] = "symmetric_l03"
+                row["offered_load"] = 0.3
+        for row in summaries:
+            if row["arm"] == "symmetric":
+                row["scenario_id"] = "symmetric_l03"
+                row["run_id"] = f"formal_symmetric_l03_s{row['seed']}"
+                row["offered_load"] = 0.3
+
+        with mock.patch.object(
+            analyze, "risk_ratio_cluster_bootstrap"
+        ) as bootstrap:
+            result = analyze._formal_result(
+                summaries, next_rows, group_rows, config
+            )
+
+        self.assertEqual(result["accepted"], 0)
+        self.assertIn("formal_load_matched_controls", result["failed_predicates"])
+        self.assertIn("offered_load must match", result["invalid_reason"])
+        bootstrap.assert_not_called()
+
 
 class FixedThresholdCliTests(unittest.TestCase):
     def test_evidence_threshold_override_flags_are_rejected(self):
