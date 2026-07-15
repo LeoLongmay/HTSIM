@@ -55,7 +55,7 @@ Raw Task 7 run outputs and aggregate tables stay below the requested phase direc
 | --- | --- |
 | `data/calibration/summary.csv` | One row per calibration run, including phi, persistence, coverage, token, completion, goodput, and P99 FCT values. |
 | `data/calibration/calibration_selection.csv` | Eligibility and failed predicates for every gray cell; identifies the selected cell or records `no_qualifying_cell`. |
-| `configs/formal.csv` | Atomic calibration-only selection output: one symmetric and one gray row for each seed `13,14,15,16,17`. |
+| `configs/formal.csv` | Atomic calibration-only selection output with the exact header `scenario_id,degraded_links,degraded_capacity_gbps,offered_load,seed`: one stable symmetric and one stable gray configuration, each expanded to seeds `13,14,15,16,17`. |
 | `data/formal/summary.csv` | One row per formal run with the same metric schema. |
 | `data/formal/ecdf.csv` | One genuine ECN-unmarked ACK residual per row for panel 1. |
 | `data/formal/next_use.csv` | Current/next ACK identity, residual, interval ps/epochs, match status, and explicit unmatched reason. |
@@ -64,7 +64,7 @@ Raw Task 7 run outputs and aggregate tables stay below the requested phase direc
 | `data/formal/tokens.csv` | Shadow exposure and rejected-token future-high aggregate denominators/rates for panel 3. |
 | `data/formal/coverage.csv` | Per-flow distinct entropy and resolved physical-path coverage. |
 | `data/formal/group_direction.csv` | Entropy-group and deduplicated physical-path-group persistence checks. |
-| `data/formal/formal_result.csv` | `accepted`, every fixed evidence constant/rule, RR point status, finite/infinite/undefined bootstrap counts and reasons, bounds, arm-specific predicates, and explicit `failed_predicates`. |
+| `data/formal/formal_result.csv` | `accepted`, every fixed evidence constant/rule, RR point status, finite/infinite/undefined bootstrap counts and reasons, bounds, arm-specific predicates, explicit `failed_predicates`, and `invalid_reason` for locked-config/input failures. |
 | `figs/m1_entropy_quality.{png,pdf}` | Three-panel formal figure rendered from aggregate CSVs only. |
 
 `phi` is `P(residual >= 14 us | genuine ACK, ECN=0)`. A next-use match is the next genuine ACK with
@@ -85,6 +85,12 @@ load-matched symmetric control must independently pass completion, nonzero unmar
 flow entropy/path coverage, unmatched matching, and loss/freezing gates. Gray persistence must also
 pass the fixed future-high, entropy-direction, and deduplicated-path-direction rules. Any failed
 condition produces `accepted=0`; control failures use `control_`-prefixed predicate names.
+Formal analysis first treats `configs/formal.csv` as a locked input. Its header and ten rows must
+describe exactly one stable gray cell and one stable symmetric control at every required seed.
+Formal manifests and generated summary rows must match each locked row exactly in arm, scenario ID,
+degraded-link count, capacity, offered load, and seed. Missing, duplicate, extra, stale, mixed-cell,
+or mismatched inputs produce an invalid `formal_result.csv`; no persistence rows are pooled and the
+bootstrap is not run for invalid bindings. Formal analysis never modifies `configs/formal.csv`.
 
 ## Selection And Negative Results
 
@@ -118,5 +124,9 @@ Each analyzed manifest, six trace leaves, and simulator `.dat` leaf must be a re
 file resolving inside the requested M1 phase directory and must match the manifest's exact recorded
 output path. Trace run ID, every ACK seed, and every ACK experiment label are bound to the manifest;
 manifest phase, scenario naming, and degraded-capacity config determine aggregate labels and cannot
-be overwritten by trace rows. Plotting similarly rejects negative residuals, values outside `[0,1]`,
-or confidence intervals that do not contain their estimate.
+be overwritten by trace rows. Plotting accepts aggregate CSVs only when each is a regular
+non-symlink file resolving under the M1 experiment directory. The figure directory and PNG/PDF
+leaves must also remain there and must not be symlinks; existing regular figures are replaced
+atomically. Plotting also rejects negative residuals, values outside `[0,1]`, or confidence
+intervals that do not contain their estimate. Self-test fixtures are project-local and are removed
+after rendering.

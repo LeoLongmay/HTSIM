@@ -8,6 +8,7 @@ import csv
 import math
 import os
 import shutil
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -38,7 +39,20 @@ ARM_COLORS = {"symmetric": plot_style.COLORS["ops"], "gray": plot_style.COLORS["
 
 def _read_csv(path: Path, required: set[str]) -> list[dict]:
     try:
-        stream = path.open("r", newline="", encoding="ascii")
+        mode = os.lstat(path).st_mode
+    except OSError as exc:
+        raise ValueError(f"aggregate CSV is missing: {path}: {exc}") from exc
+    if stat.S_ISLNK(mode):
+        raise ValueError(f"aggregate CSV must not be a symlink: {path}")
+    if not stat.S_ISREG(mode):
+        raise ValueError(f"aggregate CSV must be a regular file: {path}")
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(HERE)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"aggregate CSV must resolve under {HERE}: {path}") from exc
+    try:
+        stream = resolved.open("r", newline="", encoding="ascii")
     except OSError as exc:
         raise ValueError(f"cannot read aggregate CSV {path}: {exc}") from exc
     with stream:
@@ -48,6 +62,69 @@ def _read_csv(path: Path, required: set[str]) -> list[dict]:
         if missing:
             raise ValueError(f"aggregate CSV {path} is missing columns: {missing}")
         return list(reader)
+
+
+def _prepare_figure_directory(path: Path) -> Path:
+    path = Path(path)
+    if path.exists() or path.is_symlink():
+        mode = os.lstat(path).st_mode
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"figure directory must not be a symlink: {path}")
+        if not stat.S_ISDIR(mode):
+            raise ValueError(f"figure directory must be a directory: {path}")
+        resolved = path.resolve(strict=True)
+    else:
+        try:
+            parent = path.parent.resolve(strict=True)
+            parent.relative_to(HERE)
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"figure directory must resolve under {HERE}: {path}") from exc
+        path.mkdir()
+        resolved = path.resolve(strict=True)
+    try:
+        resolved.relative_to(HERE)
+    except ValueError as exc:
+        raise ValueError(f"figure directory must resolve under {HERE}: {path}") from exc
+    return resolved
+
+
+def _validate_figure_output(path: Path) -> None:
+    if path.exists() or path.is_symlink():
+        mode = os.lstat(path).st_mode
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"figure output must not be a symlink: {path}")
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"figure output must be a regular file: {path}")
+        try:
+            path.resolve(strict=True).relative_to(HERE)
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"figure output must resolve under {HERE}: {path}") from exc
+
+
+def _atomic_save(fig, figure_dir: Path) -> tuple[Path, Path]:
+    directory = _prepare_figure_directory(figure_dir)
+    outputs = tuple(directory / f"{FIGURE_STEM}.{ext}" for ext in ("png", "pdf"))
+    for output in outputs:
+        _validate_figure_output(output)
+
+    temporaries = []
+    try:
+        for output in outputs:
+            with tempfile.NamedTemporaryFile(
+                dir=directory, prefix=f".{output.name}.", suffix=".tmp", delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+            temporaries.append(temporary)
+            fig.savefig(temporary, format=output.suffix[1:], bbox_inches="tight", pad_inches=0.04)
+            with temporary.open("rb") as stream:
+                os.fsync(stream.fileno())
+        for temporary, output in zip(temporaries, outputs):
+            _validate_figure_output(output)
+            os.replace(temporary, output)
+        return outputs
+    finally:
+        for temporary in temporaries:
+            temporary.unlink(missing_ok=True)
 
 
 def _number(row: dict, key: str, source: str) -> float:
@@ -215,9 +292,10 @@ def render(data_dir: Path = FORMAL_DATA, figure_dir: Path = FIGS) -> tuple[Path,
         axis.text(-0.14, 1.04, f"({label})", transform=axis.transAxes,
                   fontweight="bold", va="bottom")
     fig.tight_layout(w_pad=1.2)
-    plot_style.save(fig, FIGURE_STEM, str(figure_dir))
-    plt.close(fig)
-    return figure_dir / f"{FIGURE_STEM}.png", figure_dir / f"{FIGURE_STEM}.pdf"
+    try:
+        return _atomic_save(fig, figure_dir)
+    finally:
+        plt.close(fig)
 
 
 def _write_fixture(directory: Path) -> None:

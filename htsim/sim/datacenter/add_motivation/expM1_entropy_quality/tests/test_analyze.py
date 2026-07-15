@@ -313,9 +313,31 @@ class RiskRatioBootstrapTests(unittest.TestCase):
 
 class FormalPredicateTests(unittest.TestCase):
     @staticmethod
+    def formal_config():
+        rows = []
+        for seed in analyze.FORMAL_SEEDS:
+            rows.extend([
+                {
+                    "scenario_id": "symmetric_l05", "degraded_links": 0,
+                    "degraded_capacity_gbps": 100.0, "offered_load": 0.5,
+                    "seed": seed,
+                },
+                {
+                    "scenario_id": "gray_c50_d2_l05", "degraded_links": 2,
+                    "degraded_capacity_gbps": 50.0, "offered_load": 0.5,
+                    "seed": seed,
+                },
+            ])
+        return rows
+
+    @staticmethod
     def summary(seed, arm):
+        scenario_id = "gray_c50_d2_l05" if arm == "gray" else "symmetric_l05"
         return {
-            "run_id": f"formal_{arm}_s{seed}", "seed": seed, "arm": arm,
+            "run_id": f"formal_{scenario_id}_s{seed}", "seed": seed, "arm": arm,
+            "scenario_id": scenario_id,
+            "degraded_links": 2 if arm == "gray" else 0,
+            "degraded_capacity_gbps": 50.0 if arm == "gray" else 100.0,
             "offered_load": 0.5, "unmarked_high_ratio": 0.4 if arm == "gray" else 0.1,
             "unmarked_count": 10, "coverage_adequate": 1,
             "unmatched_next_use_rate": 0.1, "aux_valid": 1,
@@ -334,7 +356,7 @@ class FormalPredicateTests(unittest.TestCase):
             ])
             for flow_id, low_future_high in ((1, False), (2, True)):
                 common = {
-                    "run_id": f"formal_gray_s{seed}", "seed": seed,
+                    "run_id": f"formal_gray_c50_d2_l05_s{seed}", "seed": seed,
                     "arm": "gray", "flow_id": flow_id, "matched": True,
                 }
                 next_rows.extend([
@@ -352,7 +374,7 @@ class FormalPredicateTests(unittest.TestCase):
         return summaries, next_rows, group_rows
 
     def test_missing_formal_evidence_is_rejected_with_explicit_predicates(self):
-        result = analyze._formal_result([], [], [])
+        result = analyze._formal_result([], [], [], self.formal_config())
 
         self.assertEqual(result["accepted"], 0)
         self.assertIn("formal_seed_coverage", result["failed_predicates"])
@@ -373,7 +395,9 @@ class FormalPredicateTests(unittest.TestCase):
         with mock.patch.object(
             analyze, "cluster_bootstrap", return_value=(1.5, 2.5)
         ):
-            result = analyze._formal_result(summaries, next_rows, group_rows)
+            result = analyze._formal_result(
+                summaries, next_rows, group_rows, self.formal_config()
+            )
 
         self.assertEqual(result["accepted"], 0)
         failed = set(result["failed_predicates"].split(";"))
@@ -387,7 +411,9 @@ class FormalPredicateTests(unittest.TestCase):
 
     def test_formal_result_emits_complete_fixed_evidence_contract(self):
         summaries, next_rows, group_rows = self.evidence()
-        result = analyze._formal_result(summaries, next_rows, group_rows)
+        result = analyze._formal_result(
+            summaries, next_rows, group_rows, self.formal_config()
+        )
 
         self.assertEqual(result["accepted"], 1)
         self.assertEqual(result["residual_threshold_ps"], 14_000_000)
@@ -413,6 +439,42 @@ class FormalPredicateTests(unittest.TestCase):
         self.assertEqual(result["loss_freezing_max_high_retransmitted_count"], 0)
         self.assertIn("retransmitted", result["loss_freezing_criterion"])
 
+    def test_mixed_formal_cell_is_rejected_without_pooled_bootstrap(self):
+        summaries, next_rows, group_rows = self.evidence()
+        gray = next(
+            row for row in summaries if row["arm"] == "gray" and row["seed"] == 17
+        )
+        gray["scenario_id"] = "gray_stale_cell"
+
+        with mock.patch.object(
+            analyze, "risk_ratio_cluster_bootstrap"
+        ) as bootstrap:
+            result = analyze._formal_result(
+                summaries, next_rows, group_rows, self.formal_config()
+            )
+
+        self.assertEqual(result["accepted"], 0)
+        self.assertIn("formal_rows_match_locked_config", result["failed_predicates"])
+        self.assertIn("formal_seed_coverage", result["failed_predicates"])
+        self.assertIn("formal config mismatch", result["invalid_reason"])
+        bootstrap.assert_not_called()
+
+    def test_formal_config_mismatch_is_rejected_explicitly(self):
+        summaries, next_rows, group_rows = self.evidence()
+        control = next(
+            row for row in summaries
+            if row["arm"] == "symmetric" and row["seed"] == 14
+        )
+        control["degraded_capacity_gbps"] = 99.0
+
+        result = analyze._formal_result(
+            summaries, next_rows, group_rows, self.formal_config()
+        )
+
+        self.assertEqual(result["accepted"], 0)
+        self.assertIn("formal_rows_match_locked_config", result["failed_predicates"])
+        self.assertIn("config mismatch", result["invalid_reason"])
+
 
 class FixedThresholdCliTests(unittest.TestCase):
     def test_evidence_threshold_override_flags_are_rejected(self):
@@ -430,6 +492,26 @@ class FixedThresholdCliTests(unittest.TestCase):
 
 
 class InputBindingTests(unittest.TestCase):
+    def test_formal_config_requires_exact_header_and_locked_seed_expansion(self):
+        data_root = analyze.HERE / "data"
+        data_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".m1_config_test_", dir=data_root) as directory:
+            path = Path(directory) / "formal.csv"
+            analyze._atomic_csv(
+                path, list(analyze.FORMAL_CONFIG_FIELDS),
+                FormalPredicateTests.formal_config(),
+            )
+            loaded = analyze.load_formal_config(path)
+            self.assertEqual(len(loaded), 10)
+            self.assertEqual({row["arm"] for row in loaded}, {"symmetric", "gray"})
+
+            path.write_text(
+                "seed,scenario_id,degraded_links,degraded_capacity_gbps,offered_load\n",
+                encoding="ascii",
+            )
+            with self.assertRaisesRegex(ValueError, "header must be exactly"):
+                analyze.load_formal_config(path)
+
     def test_trace_bundle_identity_seed_and_scenario_are_bound_to_manifest(self):
         manifest = {
             "run_id": "formal_gray_s13", "seed": 13,
@@ -480,8 +562,14 @@ class InputBindingTests(unittest.TestCase):
 
 
 class PlotValidationTests(unittest.TestCase):
+    @staticmethod
+    def _temporary_directory():
+        root = make_figs.HERE / "data"
+        root.mkdir(parents=True, exist_ok=True)
+        return tempfile.TemporaryDirectory(prefix=".m1_plot_test_", dir=root)
+
     def _assert_fixture_rejected(self, filename, old, new, reason):
-        with tempfile.TemporaryDirectory() as directory:
+        with self._temporary_directory() as directory:
             data_dir = Path(directory)
             make_figs._write_fixture(data_dir)
             path = data_dir / filename
@@ -508,6 +596,44 @@ class PlotValidationTests(unittest.TestCase):
             "conditioning.csv", "0.18,0.12,0.25", "0.18,0.19,0.25",
             "CI.*estimate",
         )
+
+    def test_rejects_symlinked_aggregate_csv(self):
+        with self._temporary_directory() as directory:
+            data_dir = Path(directory)
+            make_figs._write_fixture(data_dir)
+            original = data_dir / "ecdf.csv"
+            target = data_dir / "ecdf-target.csv"
+            original.rename(target)
+            os.symlink(target, original)
+
+            with self.assertRaisesRegex(ValueError, "aggregate CSV.*symlink"):
+                make_figs.render(data_dir, data_dir / "figs")
+
+    def test_rejects_symlinked_figure_directory(self):
+        with self._temporary_directory() as directory:
+            data_dir = Path(directory)
+            make_figs._write_fixture(data_dir)
+            target = data_dir / "actual-figs"
+            target.mkdir()
+            figure_dir = data_dir / "figs"
+            os.symlink(target, figure_dir)
+
+            with self.assertRaisesRegex(ValueError, "figure directory.*symlink"):
+                make_figs.render(data_dir, figure_dir)
+
+    def test_rejects_symlinked_figure_output(self):
+        with self._temporary_directory() as directory:
+            data_dir = Path(directory)
+            make_figs._write_fixture(data_dir)
+            figure_dir = data_dir / "figs"
+            figure_dir.mkdir()
+            target = data_dir / "target.png"
+            target.write_bytes(b"unchanged")
+            os.symlink(target, figure_dir / "m1_entropy_quality.png")
+
+            with self.assertRaisesRegex(ValueError, "figure output.*symlink"):
+                make_figs.render(data_dir, figure_dir)
+            self.assertEqual(target.read_bytes(), b"unchanged")
 
 
 if __name__ == "__main__":

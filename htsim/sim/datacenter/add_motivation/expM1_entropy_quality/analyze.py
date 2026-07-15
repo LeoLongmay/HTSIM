@@ -62,6 +62,9 @@ MAX_HIGH_RETRANSMITTED_COUNT = 0
 UINT64_MAX = 2**64 - 1
 TRACE_SUFFIXES = ("ack", "token", "epoch", "background", "pathmap", "linkmap")
 RR_BOOTSTRAP_MIN_VALID_FRACTION = 0.95
+FORMAL_CONFIG_FIELDS = (
+    "scenario_id", "degraded_links", "degraded_capacity_gbps", "offered_load", "seed",
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1035,6 +1038,154 @@ def _write_table(path: Path, rows: list[dict], fallback_fields: list[str]) -> No
     _atomic_csv(path, fields, rows)
 
 
+def _validated_project_input(path: Path, label: str) -> Path:
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError as exc:
+        raise ValueError(f"{label} is missing: {path}: {exc}") from exc
+    if stat.S_ISLNK(mode):
+        raise ValueError(f"{label} must not be a symlink: {path}")
+    if not stat.S_ISREG(mode):
+        raise ValueError(f"{label} must be a regular file: {path}")
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(HERE)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{label} must resolve under {HERE}: {path}") from exc
+    return resolved
+
+
+def _normalize_formal_config(rows: Iterable[dict]) -> list[dict]:
+    normalized = []
+    for index, row in enumerate(rows, start=2):
+        scenario_id = row.get("scenario_id")
+        links = _as_int(row, "degraded_links")
+        capacity = _as_float(row, "degraded_capacity_gbps")
+        load = _as_float(row, "offered_load")
+        seed = _as_int(row, "seed")
+        if (
+            not isinstance(scenario_id, str) or not scenario_id
+            or links is None or links < 0 or capacity is None or capacity <= 0
+            or load is None or load <= 0 or seed is None
+        ):
+            raise ValueError(f"formal config row {index} has invalid typed values")
+        arm = "symmetric" if links == 0 else "gray"
+        if not scenario_id.startswith(f"{arm}_"):
+            raise ValueError(
+                f"formal config row {index} scenario_id disagrees with arm {arm}"
+            )
+        normalized.append({
+            "scenario_id": scenario_id,
+            "degraded_links": links,
+            "degraded_capacity_gbps": capacity,
+            "offered_load": load,
+            "seed": seed,
+            "arm": arm,
+        })
+
+    if len(normalized) != 2 * len(FORMAL_SEEDS):
+        raise ValueError(
+            f"formal config must contain exactly {2 * len(FORMAL_SEEDS)} rows"
+        )
+    expected_seeds = set(FORMAL_SEEDS)
+    for arm in ("symmetric", "gray"):
+        arm_rows = [row for row in normalized if row["arm"] == arm]
+        seeds = [row["seed"] for row in arm_rows]
+        if len(seeds) != len(set(seeds)):
+            raise ValueError(f"formal config has duplicate {arm} seed rows")
+        if set(seeds) != expected_seeds:
+            raise ValueError(
+                f"formal config {arm} seeds must be exactly {list(FORMAL_SEEDS)}"
+            )
+        cells = {
+            (
+                row["scenario_id"], row["degraded_links"],
+                row["degraded_capacity_gbps"], row["offered_load"],
+            )
+            for row in arm_rows
+        }
+        if len(cells) != 1:
+            raise ValueError(f"formal config has inconsistent {arm} scenario/config")
+    return normalized
+
+
+def load_formal_config(path: Path | str = FORMAL_CONFIG) -> list[dict]:
+    source = _validated_project_input(Path(path), "formal config")
+    try:
+        with source.open("r", newline="", encoding="ascii") as stream:
+            reader = csv.DictReader(stream)
+            if tuple(reader.fieldnames or ()) != FORMAL_CONFIG_FIELDS:
+                raise ValueError(
+                    "formal config header must be exactly "
+                    + ",".join(FORMAL_CONFIG_FIELDS)
+                )
+            rows = list(reader)
+    except (OSError, UnicodeError, csv.Error) as exc:
+        raise ValueError(f"cannot parse formal config {source}: {exc}") from exc
+    return _normalize_formal_config(rows)
+
+
+def _formal_binding(
+    summaries: Iterable[dict], config_rows: Iterable[dict],
+) -> tuple[dict[str, bool], list[str], list[dict]]:
+    try:
+        config = _normalize_formal_config(config_rows)
+    except ValueError as exc:
+        return {
+            "formal_config_valid": False,
+            "formal_rows_match_locked_config": False,
+            "formal_seed_coverage": False,
+        }, [str(exc)], []
+
+    expected = {(row["arm"], row["seed"]): row for row in config}
+    actual = defaultdict(list)
+    reasons = []
+    for row in summaries:
+        arm = row.get("arm")
+        seed = _as_int(row, "seed")
+        key = (arm, seed)
+        actual[key].append(row)
+        if key not in expected:
+            reasons.append(f"unexpected formal row arm={arm!r} seed={seed!r}")
+
+    for key, locked in expected.items():
+        matches = actual.get(key, [])
+        arm, seed = key
+        if not matches:
+            reasons.append(f"missing formal row arm={arm} seed={seed}")
+            continue
+        if len(matches) != 1:
+            reasons.append(f"duplicate formal row arm={arm} seed={seed}")
+            continue
+        row = matches[0]
+        mismatches = []
+        for field in (
+            "scenario_id", "degraded_links", "degraded_capacity_gbps", "offered_load"
+        ):
+            expected_value = locked[field]
+            actual_value = (
+                _as_int(row, field) if field == "degraded_links"
+                else _as_float(row, field)
+                if field in ("degraded_capacity_gbps", "offered_load")
+                else row.get(field)
+            )
+            if actual_value != expected_value:
+                mismatches.append(
+                    f"{field}={actual_value!r} expected {expected_value!r}"
+                )
+        if mismatches:
+            reasons.append(
+                f"formal config mismatch arm={arm} seed={seed}: " + ", ".join(mismatches)
+            )
+
+    matched = not reasons and len(actual) == len(expected)
+    return {
+        "formal_config_valid": True,
+        "formal_rows_match_locked_config": matched,
+        "formal_seed_coverage": matched,
+    }, reasons, config
+
+
 def _conditioning_table(next_rows: list[dict]) -> list[dict]:
     output = []
     for arm in ("symmetric", "gray"):
@@ -1095,28 +1246,106 @@ def _token_aggregate(token_rows: list[dict]) -> list[dict]:
     return output
 
 
+def _formal_threshold_fields() -> dict:
+    return {
+        "residual_threshold_ps": PRIMARY_THRESHOLD_PS,
+        "residual_threshold_rule": ">=",
+        "completion_rate_threshold": MIN_COMPLETION_RATE,
+        "flow_coverage_fraction_threshold": MIN_COVERED_FLOW_FRACTION,
+        "entropy_coverage_count_threshold": MIN_ENTROPY_COVERAGE,
+        "physical_path_coverage_count_threshold": MIN_PATH_COVERAGE,
+        "min_future_high_threshold": MIN_FUTURE_HIGH,
+        "max_unmatched_rate_threshold": MAX_UNMATCHED_RATE,
+        "bootstrap_samples": BOOTSTRAP_SAMPLES,
+        "bootstrap_seed": BOOTSTRAP_SEED,
+        "bootstrap_confidence_level": BOOTSTRAP_CONFIDENCE_LEVEL,
+        "bootstrap_lower_percentile": BOOTSTRAP_LOWER_PERCENTILE,
+        "bootstrap_upper_percentile": BOOTSTRAP_UPPER_PERCENTILE,
+        "bootstrap_cluster_unit": "run_id,flow_id",
+        "risk_ratio_ci_lower_bound_threshold": RISK_RATIO_CI_LOWER_BOUND,
+        "risk_ratio_ci_lower_bound_rule": ">1",
+        "min_future_high_contributing_flow_clusters": (
+            MIN_FUTURE_HIGH_CONTRIBUTING_FLOW_CLUSTERS
+        ),
+        "required_formal_seeds": ";".join(str(seed) for seed in FORMAL_SEEDS),
+        "required_formal_seed_count": len(FORMAL_SEEDS),
+        "evidence_required_for_arms": "gray;load-matched symmetric control",
+        "phi_control_rule": "gray>load-matched symmetric in every formal seed",
+        "loss_freezing_max_high_retransmitted_count": MAX_HIGH_RETRANSMITTED_COUNT,
+        "loss_freezing_criterion": (
+            "valid auxiliary completion>=0.99 and zero retransmitted genuine "
+            "ECN-unmarked high-residual ACKs"
+        ),
+    }
+
+
+def _invalid_formal_result(binding_predicates: dict, reasons: Iterable[str]) -> dict:
+    evidence_predicates = {
+        "gray_phi_above_control_every_seed": False,
+        "gray_completion_adequate": False,
+        "control_completion_adequate": False,
+        "gray_nonzero_unmarked_denominator": False,
+        "control_nonzero_unmarked_denominator": False,
+        "gray_flow_coverage_adequate": False,
+        "control_flow_coverage_adequate": False,
+        "gray_matching_adequate": False,
+        "control_matching_adequate": False,
+        "gray_no_hard_loss_or_freezing_explanation": False,
+        "control_no_hard_loss_or_freezing_explanation": False,
+        "risk_ratio_defined": False,
+        "risk_ratio_bootstrap_validity_adequate": False,
+        "risk_ratio_bootstrap_lower_above_1": False,
+        "future_high_probability_nontrivial": False,
+        "entropy_persistence_positive": False,
+        "deduplicated_path_persistence_positive": False,
+    }
+    predicates = {**binding_predicates, **evidence_predicates}
+    return {
+        "accepted": 0,
+        "failed_predicates": ";".join(
+            name for name, passed in predicates.items() if not passed
+        ),
+        "invalid_reason": "; ".join(reasons),
+        "risk_ratio": "",
+        "risk_ratio_ci_low": "",
+        "risk_ratio_ci_high": "",
+        "risk_ratio_status": "not_computed_invalid_binding",
+        "risk_ratio_bootstrap_valid_replicates": 0,
+        "risk_ratio_bootstrap_finite_replicates": 0,
+        "risk_ratio_bootstrap_infinite_replicates": 0,
+        "risk_ratio_bootstrap_undefined_replicates": 0,
+        "risk_ratio_bootstrap_undefined_reasons": "{}",
+        "risk_ratio_bootstrap_valid_fraction": 0.0,
+        "risk_ratio_bootstrap_min_valid_fraction": RR_BOOTSTRAP_MIN_VALID_FRACTION,
+        "risk_ratio_bootstrap_min_valid_replicates": math.ceil(
+            BOOTSTRAP_SAMPLES * RR_BOOTSTRAP_MIN_VALID_FRACTION
+        ),
+        "future_high_given_current_high": "",
+        **_formal_threshold_fields(),
+        "predicates_json": json.dumps(predicates, sort_keys=True),
+    }
+
+
 def _formal_result(
     summaries: list[dict], next_rows: list[dict], group_rows: list[dict],
+    config_rows: Iterable[dict],
 ) -> dict:
-    gray = [row for row in summaries if row["arm"] == "gray"]
-    symmetric = [row for row in summaries if row["arm"] == "symmetric"]
-    controls_by_key = defaultdict(list)
-    for row in symmetric:
-        controls_by_key[(row["seed"], row["offered_load"])].append(row)
-    paired_controls = [
-        controls_by_key[(row["seed"], row["offered_load"])][0]
-        for row in gray
-        if len(controls_by_key[(row["seed"], row["offered_load"])]) == 1
-    ]
-    predicates = {}
-    predicates["formal_seed_coverage"] = (
-        len(gray) == len(FORMAL_SEEDS)
-        and len(symmetric) == len(FORMAL_SEEDS)
-        and {row["seed"] for row in gray} == set(FORMAL_SEEDS)
-        and {row["seed"] for row in symmetric} == set(FORMAL_SEEDS)
-        and len({row["offered_load"] for row in gray}) == 1
-        and len(paired_controls) == len(gray)
+    binding_predicates, binding_reasons, _config = _formal_binding(
+        summaries, config_rows
     )
+    if binding_reasons:
+        return _invalid_formal_result(binding_predicates, binding_reasons)
+
+    gray = sorted(
+        (row for row in summaries if row["arm"] == "gray"), key=lambda row: row["seed"]
+    )
+    symmetric = sorted(
+        (row for row in summaries if row["arm"] == "symmetric"),
+        key=lambda row: row["seed"],
+    )
+    controls_by_seed = {row["seed"]: row for row in symmetric}
+    paired_controls = [controls_by_seed[row["seed"]] for row in gray]
+    predicates = dict(binding_predicates)
     predicates["gray_phi_above_control_every_seed"] = predicates["formal_seed_coverage"] and all(
         _finite(row["unmarked_high_ratio"])
         and _finite(control["unmarked_high_ratio"])
@@ -1212,6 +1441,7 @@ def _formal_result(
     return {
         "accepted": int(not failed),
         "failed_predicates": ";".join(failed),
+        "invalid_reason": "",
         "risk_ratio": _csv_value(risk),
         "risk_ratio_ci_low": _csv_value(risk_low),
         "risk_ratio_ci_high": _csv_value(risk_high),
@@ -1229,34 +1459,7 @@ def _formal_result(
             risk_bootstrap.minimum_valid_replicates
         ),
         "future_high_given_current_high": _csv_value(high_probability),
-        "residual_threshold_ps": PRIMARY_THRESHOLD_PS,
-        "residual_threshold_rule": ">=",
-        "completion_rate_threshold": MIN_COMPLETION_RATE,
-        "flow_coverage_fraction_threshold": MIN_COVERED_FLOW_FRACTION,
-        "entropy_coverage_count_threshold": MIN_ENTROPY_COVERAGE,
-        "physical_path_coverage_count_threshold": MIN_PATH_COVERAGE,
-        "min_future_high_threshold": MIN_FUTURE_HIGH,
-        "max_unmatched_rate_threshold": MAX_UNMATCHED_RATE,
-        "bootstrap_samples": BOOTSTRAP_SAMPLES,
-        "bootstrap_seed": BOOTSTRAP_SEED,
-        "bootstrap_confidence_level": BOOTSTRAP_CONFIDENCE_LEVEL,
-        "bootstrap_lower_percentile": BOOTSTRAP_LOWER_PERCENTILE,
-        "bootstrap_upper_percentile": BOOTSTRAP_UPPER_PERCENTILE,
-        "bootstrap_cluster_unit": "run_id,flow_id",
-        "risk_ratio_ci_lower_bound_threshold": RISK_RATIO_CI_LOWER_BOUND,
-        "risk_ratio_ci_lower_bound_rule": ">1",
-        "min_future_high_contributing_flow_clusters": (
-            MIN_FUTURE_HIGH_CONTRIBUTING_FLOW_CLUSTERS
-        ),
-        "required_formal_seeds": ";".join(str(seed) for seed in FORMAL_SEEDS),
-        "required_formal_seed_count": len(FORMAL_SEEDS),
-        "evidence_required_for_arms": "gray;load-matched symmetric control",
-        "phi_control_rule": "gray>load-matched symmetric in every formal seed",
-        "loss_freezing_max_high_retransmitted_count": MAX_HIGH_RETRANSMITTED_COUNT,
-        "loss_freezing_criterion": (
-            "valid auxiliary completion>=0.99 and zero retransmitted genuine "
-            "ECN-unmarked high-residual ACKs"
-        ),
+        **_formal_threshold_fields(),
         "predicates_json": json.dumps(predicates, sort_keys=True),
     }
 
@@ -1277,20 +1480,46 @@ def analyze_phase(
     manifests = sorted(phase_dir.glob("*.manifest.json"))
     if not manifests:
         raise ValueError(f"no manifests found in requested phase directory: {phase_dir}")
+    formal_config = None
+    if phase == "formal":
+        try:
+            formal_config = load_formal_config(FORMAL_CONFIG)
+        except ValueError as exc:
+            invalid = _invalid_formal_result({
+                "formal_config_valid": False,
+                "formal_rows_match_locked_config": False,
+                "formal_seed_coverage": False,
+            }, [str(exc)])
+            _write_table(phase_dir / "formal_result.csv", [invalid], list(invalid))
+            raise
+
+    run_inputs = []
+    for manifest_path in manifests:
+        _validated_regular_input(manifest_path, phase_dir, "manifest")
+        manifest = _read_manifest(manifest_path)
+        metadata = _manifest_metadata(manifest_path, phase, manifest)
+        prefix, simulation_path = _validate_run_inputs(
+            manifest_path, manifest, phase_dir, metadata["run_id"]
+        )
+        run_inputs.append((manifest, metadata, prefix, simulation_path))
+
+    if phase == "formal":
+        binding, reasons, _normalized = _formal_binding(
+            [metadata for _manifest, metadata, _prefix, _simulation in run_inputs],
+            formal_config,
+        )
+        if reasons:
+            invalid = _invalid_formal_result(binding, reasons)
+            _write_table(phase_dir / "formal_result.csv", [invalid], list(invalid))
+            raise ValueError("formal manifests do not match configs/formal.csv: " + "; ".join(reasons))
+
     summary_rows = []
     residual_rows = []
     next_rows = []
     token_rows = []
     coverage_rows = []
     group_rows = []
-    for manifest_path in manifests:
-        _validated_regular_input(manifest_path, phase_dir, "manifest")
-        manifest = _read_manifest(manifest_path)
-        metadata = _manifest_metadata(manifest_path, phase, manifest)
-        run_id = metadata["run_id"]
-        prefix, simulation_path = _validate_run_inputs(
-            manifest_path, manifest, phase_dir, run_id
-        )
+    for manifest, metadata, prefix, simulation_path in run_inputs:
         trace = load_trace(prefix)
         _validate_bundle_binding(trace, manifest)
         analysis = analyze_bundle(
@@ -1317,7 +1546,7 @@ def analyze_phase(
 
     formal = None
     if phase == "formal":
-        formal = _formal_result(summary_rows, next_rows, group_rows)
+        formal = _formal_result(summary_rows, next_rows, group_rows, formal_config)
         _write_table(phase_dir / "formal_result.csv", [formal], list(formal))
     return summary_rows, formal
 
