@@ -6,6 +6,7 @@ from pathlib import Path
 from htsim.sim.datacenter.add_motivation.common.trace_schema import (
     TraceValidationError,
     load_trace,
+    load_trace_compact,
 )
 
 
@@ -114,6 +115,108 @@ def write_trace(directory, rows=None, headers=None):
 
 
 class TraceSchemaTests(unittest.TestCase):
+    def test_compact_loader_preserves_all_values_events_and_source_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory)
+            with Path(f"{prefix}.ack.csv").open("a", encoding="utf-8") as stream:
+                stream.write("\n")
+            default = load_trace(prefix)
+            compact = load_trace_compact(prefix)
+
+            self.assertEqual(compact.run_id, default.run_id)
+            for kind, fields in HEADERS.items():
+                default_rows = getattr(default, kind)
+                compact_rows = getattr(compact, kind)
+                self.assertEqual(len(compact_rows), len(default_rows))
+                for default_row, compact_row in zip(default_rows, compact_rows):
+                    self.assertEqual(
+                        [compact_row[field] for field in fields],
+                        [default_row[field] for field in fields],
+                    )
+                    self.assertEqual(compact_row.source_path, default_row.source_path)
+            self.assertEqual(
+                [(event.event_seq, event.kind) for event in compact.events],
+                [(event.event_seq, event.kind) for event in default.events],
+            )
+
+    def test_compact_rows_are_non_dict_fixed_slot_read_only_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = load_trace_compact(write_trace(directory))
+
+        row = bundle.ack[0]
+        self.assertNotIsInstance(row, dict)
+        self.assertEqual(type(row).__slots__, ("_values", "_schema"))
+        self.assertFalse(hasattr(row, "__dict__"))
+        self.assertEqual(row["event_seq"], 0)
+        self.assertEqual(row.get("event_seq"), 0)
+        self.assertIsNone(row.get("absent"))
+        self.assertEqual(row.get("absent", 17), 17)
+        with self.assertRaises(KeyError):
+            _ = row["absent"]
+
+    def test_compact_and_default_report_identical_validation_errors(self):
+        cases = []
+
+        rows = valid_rows()
+        rows["ack"][0]["schema_version"] = "1"
+        cases.append(("schema", rows, HEADERS))
+
+        rows = valid_rows()
+        rows["ack"] = []
+        headers = dict(HEADERS)
+        headers["ack"] = HEADERS["ack"][:-1]
+        cases.append(("header", rows, headers))
+
+        rows = valid_rows()
+        rows["ack"][0]["qdelay_ps"] = "invalid"
+        cases.append(("typed_value", rows, HEADERS))
+
+        rows = valid_rows()
+        earlier = dict(rows["ack"][0])
+        earlier["event_seq"] = "3"
+        rows["ack"] = [earlier, rows["ack"][0]]
+        cases.append(("within_file_sequence", rows, HEADERS))
+
+        rows = valid_rows()
+        rows["token"][0]["event_seq"] = "0"
+        cases.append(("duplicate_sequence", rows, HEADERS))
+
+        rows = valid_rows()
+        rows["token"][0]["time_ps"] = "99"
+        cases.append(("global_time", rows, HEADERS))
+
+        rows = valid_rows()
+        rows["linkmap"][0]["run_id"] = "other"
+        cases.append(("run_id", rows, HEADERS))
+
+        rows = valid_rows()
+        rows["token"][0]["related_ack_event_seq"] = "99"
+        cases.append(("ack_token_reference", rows, HEADERS))
+
+        rows = valid_rows()
+        rows["token"][0]["entropy"] = "2"
+        cases.append(("ack_token_entropy", rows, HEADERS))
+
+        rows = valid_rows()
+        rows["ack"][0]["ecn"] = "1"
+        cases.append(("ack_token_ecn", rows, HEADERS))
+
+        rows = valid_rows()
+        later_ack = dict(rows["ack"][0])
+        later_ack.update({"event_seq": "3", "time_ps": "120", "acked_psn": "11"})
+        rows["ack"].append(later_ack)
+        cases.append(("epoch_close", rows, HEADERS))
+
+        for name, rows, headers in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                prefix = write_trace(directory, rows, headers)
+                messages = []
+                for loader in (load_trace, load_trace_compact):
+                    with self.assertRaises(TraceValidationError) as raised:
+                        loader(prefix)
+                    messages.append(str(raised.exception))
+                self.assertEqual(messages[1], messages[0])
+
     def test_loads_all_six_v2_files_with_explicit_types(self):
         with tempfile.TemporaryDirectory() as directory:
             bundle = load_trace(write_trace(directory))

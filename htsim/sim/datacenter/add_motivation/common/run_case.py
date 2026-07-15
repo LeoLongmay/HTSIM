@@ -29,7 +29,7 @@ MTU_BYTES = 4150
 QUEUE_PACKETS = 211
 QUEUE_BYTES = MTU_BYTES * QUEUE_PACKETS
 NORMAL_CAPACITY_GBPS = 100.0
-VALID_PHASES = {"calibration", "smoke", "formal"}
+VALID_PHASES = {"calibration", "smoke", "coarse", "confirmation", "formal"}
 VALID_CCS = {
     "constant",
     "dctcp",
@@ -43,6 +43,15 @@ VALID_CCS = {
 }
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 TRACE_SUFFIXES = ("ack", "token", "epoch", "background", "pathmap", "linkmap")
+M2_EXPERIMENT = "M2_redistribution_progress"
+ANALYSIS_CONFIG_FIELDS = (
+    "cell_id",
+    "scenario",
+    "foreground_flows",
+    "hot_path_groups",
+    "background_utilization",
+    "seed",
+)
 
 
 def validate_identifier(value, field):
@@ -143,9 +152,47 @@ def _number_arg(value):
     return format(value, "g")
 
 
+def _analysis_config(value, seed):
+    if not isinstance(value, dict):
+        raise TypeError("analysis_config must be a dictionary")
+    if set(value) != set(ANALYSIS_CONFIG_FIELDS):
+        missing = [field for field in ANALYSIS_CONFIG_FIELDS if field not in value]
+        extra = sorted(set(value) - set(ANALYSIS_CONFIG_FIELDS))
+        raise ValueError(
+            f"analysis_config must contain exactly {list(ANALYSIS_CONFIG_FIELDS)}; "
+            f"missing={missing}, extra={extra}"
+        )
+    if not isinstance(value["cell_id"], str) or not value["cell_id"]:
+        raise ValueError("analysis_config cell_id must be a nonempty string")
+    if value["scenario"] not in ("", "recoverable", "persistent"):
+        raise ValueError(
+            "analysis_config scenario must be empty, recoverable, or persistent"
+        )
+    for field in ("foreground_flows", "hot_path_groups"):
+        if type(value[field]) is not int or value[field] <= 0:
+            raise ValueError(f"analysis_config {field} must be a positive integer")
+    utilization = value["background_utilization"]
+    if isinstance(utilization, bool) or not isinstance(utilization, (int, float)):
+        raise TypeError("analysis_config background_utilization must be numeric")
+    utilization = float(utilization)
+    if not math.isfinite(utilization) or not 0 < utilization < 1:
+        raise ValueError("analysis_config background_utilization must be in (0, 1)")
+    if type(value["seed"]) is not int or value["seed"] != seed:
+        raise ValueError("analysis_config seed must equal run seed")
+    return {
+        "cell_id": value["cell_id"],
+        "scenario": value["scenario"],
+        "foreground_flows": value["foreground_flows"],
+        "hot_path_groups": value["hot_path_groups"],
+        "background_utilization": utilization,
+        "seed": value["seed"],
+    }
+
+
 def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
              out_dir, trace_prefix, degraded_links=0,
-             degraded_capacity_gbps=100.0, background_config=None):
+             degraded_capacity_gbps=100.0, background_config=None,
+             analysis_config=None):
     experiment = validate_identifier(experiment, "experiment")
     run_id = validate_identifier(run_id, "run_id")
     if phase not in VALID_PHASES:
@@ -154,6 +201,11 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         raise ValueError(f"cc must be one of {sorted(VALID_CCS)}")
     if type(seed) is not int or seed < 0 or seed > 2**31 - 1:
         raise ValueError("seed must be an integer in [0, 2147483647]")
+    if experiment == M2_EXPERIMENT and analysis_config is None:
+        raise ValueError("M2 runs require analysis_config")
+    normalized_analysis_config = (
+        _analysis_config(analysis_config, seed) if analysis_config is not None else None
+    )
     if type(degraded_links) is not int or degraded_links < 0 or degraded_links > 2**32 - 1:
         raise ValueError("degraded_links must be an integer in [0, 4294967295]")
     if isinstance(degraded_capacity_gbps, bool) or not isinstance(
@@ -226,6 +278,16 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         "-prism_t_spray", "14",
         "-prism_kappa", "1",
         "-prism_n_min", "3",
+        *(
+            [
+                "-prism_smooth_beta", "1",
+                "-prism_hysteresis", "0",
+                "-prism_engage_spread", "0",
+                "-prism_engage_mult", "0",
+            ]
+            if cc == "prism"
+            else []
+        ),
         "-degraded_links", str(degraded_links),
         "-degraded_capacity_gbps", _number_arg(degraded_capacity_gbps),
         "-seed", str(seed),
@@ -298,6 +360,17 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         },
         "output_filenames": output_filenames,
     }
+    if normalized_analysis_config is not None:
+        manifest["analysis_config"] = normalized_analysis_config
+    if cc == "prism":
+        manifest["config"].update(
+            {
+                "prism_smooth_beta": 1,
+                "prism_hysteresis": 0,
+                "prism_engage_spread": 0,
+                "prism_engage_mult": 0,
+            }
+        )
     if background_value is not None:
         manifest["config"].update(
             {
@@ -366,7 +439,33 @@ def main(argv=None):
     parser.add_argument("--degraded-links", type=int, default=0)
     parser.add_argument("--degraded-capacity-gbps", type=float, default=NORMAL_CAPACITY_GBPS)
     parser.add_argument("--background-config", type=Path)
+    parser.add_argument("--m2-cell-id")
+    parser.add_argument("--m2-scenario")
+    parser.add_argument("--m2-foreground-flows", type=int)
+    parser.add_argument("--m2-hot-path-groups", type=int)
+    parser.add_argument("--m2-background-utilization", type=float)
     args = parser.parse_args(argv)
+    m2_values = (
+        args.m2_cell_id,
+        args.m2_scenario,
+        args.m2_foreground_flows,
+        args.m2_hot_path_groups,
+        args.m2_background_utilization,
+    )
+    if any(value is not None for value in m2_values) and not all(
+        value is not None for value in m2_values
+    ):
+        parser.error("M2 analysis arguments must be provided together")
+    analysis_config = None
+    if all(value is not None for value in m2_values):
+        analysis_config = {
+            "cell_id": args.m2_cell_id,
+            "scenario": args.m2_scenario,
+            "foreground_flows": args.m2_foreground_flows,
+            "hot_path_groups": args.m2_hot_path_groups,
+            "background_utilization": args.m2_background_utilization,
+            "seed": args.seed,
+        }
     manifest = run_case(
         experiment=args.experiment,
         phase=args.phase,
@@ -380,6 +479,7 @@ def main(argv=None):
         degraded_links=args.degraded_links,
         degraded_capacity_gbps=args.degraded_capacity_gbps,
         background_config=args.background_config,
+        analysis_config=analysis_config,
     )
     print(manifest)
 

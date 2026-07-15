@@ -175,6 +175,7 @@ public:
         uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void motivationSetPathResolver(MotivationPathResolver resolver,
                                    uint32_t path_entropy_size);
+    bool motivationResolvePath(uint32_t entropy);
 
     // Functions from UecTransportConnection
     virtual void continueConnection() override;
@@ -306,9 +307,10 @@ public:
     };
     static std::map<std::string, uint64_t> _motivation_physical_path_ids;
     static std::map<std::string, uint64_t> _motivation_queue_ids;
+    MotivationPathResolver _motivation_path_resolver;
+    uint32_t _motivation_path_entropy_size = 0;
     std::vector<MotivationResolvedPath> _motivation_paths;
-    void motivationResolveAndLogPaths(MotivationPathResolver resolver,
-                                      uint32_t path_entropy_size);
+    std::vector<bool> _motivation_path_attempted;
     uint64_t motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
                               simtime_picosec qdelay, bool genuine,
                               const UecMpSelection& selection,

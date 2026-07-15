@@ -97,9 +97,18 @@ void emitsStablePathAndDeduplicatedLinkMetadata() {
             return false;
         },
         3);
+    assert(resolver_calls == 0);
+    assert(source.motivationResolvePath(0));
+    assert(source.motivationResolvePath(1));
+    assert(!source.motivationResolvePath(2));
+    assert(resolver_calls == 3);
+
+    assert(source.motivationResolvePath(0));
+    assert(source.motivationResolvePath(1));
+    assert(!source.motivationResolvePath(2));
+    assert(resolver_calls == 3);
     UecSrc::motivationTrace().close();
 
-    assert(resolver_calls == 3);
     const auto paths = dataRows(".pathmap.csv");
     const auto links = dataRows(".linkmap.csv");
     assert(paths.size() == 3);
@@ -146,6 +155,7 @@ void emitsStablePathAndDeduplicatedLinkMetadata() {
             return false;
         },
         2);
+    assert(!source.motivationResolvePath(0));
     assert(resolver_calls == 0);
     removeTraceFiles();
 }

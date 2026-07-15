@@ -1,0 +1,25 @@
+# Local build/test and interpreter caches.
+.test-bin/
+**/__pycache__/
+**/.cache/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.matplotlib-cache/
+**/.mplconfig/
+**/*.pyc
+
+# Motivation run inputs and raw simulator outputs.
+**/data/**/*.dat
+**/data/**/*.stdout
+**/data/**/*.cm
+**/data/**/*.background-config.csv
+**/data/**/*.ack.csv
+**/data/**/*.token.csv
+**/data/**/*.epoch.csv
+**/data/**/*.background.csv
+**/data/**/*.pathmap.csv
+**/data/**/*.linkmap.csv
+
+!README.md
+!expM1_entropy_quality/README.md
+!expM2_redistribution_progress/README.md

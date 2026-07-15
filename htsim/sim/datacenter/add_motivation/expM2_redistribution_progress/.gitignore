@@ -1,0 +1,30 @@
+# The repository root ignores CSV and figure extensions globally. Keep locked
+# configs, formal aggregate evidence, and the real formal figure.
+!README.md
+!configs/
+!configs/*.csv
+!data/
+!data/formal/
+!data/formal/summary.csv
+!data/formal/rounds.csv
+!data/formal/epochs.csv
+!data/formal/formal_result.csv
+!data/preflight/
+!data/preflight/preflight.json
+!data/coarse/
+!data/coarse/summary.csv
+!data/coarse/rounds.csv
+!data/coarse/epochs.csv
+!data/coarse/confirmation_selection.csv
+!data/coarse/calibration_diagnostics.csv
+!data/confirmation/
+!data/confirmation/summary.csv
+!data/confirmation/rounds.csv
+!data/confirmation/epochs.csv
+!data/confirmation/confirmation_diagnostics.csv
+!figs/
+!figs/*.png
+!figs/*.pdf
+!figs/calibration/
+!figs/calibration/*.png
+!figs/calibration/*.pdf

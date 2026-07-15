@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import dataclasses
+import heapq
 import math
 from pathlib import Path
 from typing import Callable
@@ -22,11 +23,46 @@ class _TraceRow(dict):
         self.source_path = source_path
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _CompactSchema:
+    names: tuple[str, ...]
+    indices: dict[str, int]
+    source_path: Path
+
+
+class _CompactTraceRow:
+    """Read-only dict-like row backed by a tuple and a shared file schema."""
+
+    __slots__ = ("_values", "_schema")
+
+    def __init__(self, values: tuple[object, ...], schema: _CompactSchema):
+        self._values = values
+        self._schema = schema
+
+    @property
+    def source_path(self) -> Path:
+        return self._schema.source_path
+
+    def __getitem__(self, key: str) -> object:
+        return self._values[self._schema.indices[key]]
+
+    def get(self, key: str, default: object = None) -> object:
+        index = self._schema.indices.get(key)
+        return default if index is None else self._values[index]
+
+
 @dataclasses.dataclass(frozen=True)
 class EventRef:
     event_seq: int
     kind: str
     row: dict
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _CompactEventRef:
+    event_seq: int
+    kind: str
+    row: _CompactTraceRow
 
 
 @dataclasses.dataclass(frozen=True)
@@ -200,12 +236,115 @@ def _load_file(prefix: Path, kind: str) -> tuple[dict, ...]:
     return tuple(parsed_rows)
 
 
-def load_trace(prefix: Path | str) -> TraceBundle:
-    """Load and validate the six CSV files emitted for one trace prefix."""
+def _load_file_compact(prefix: Path, kind: str) -> tuple[_CompactTraceRow, ...]:
+    path = Path(f"{prefix}.{kind}.csv")
+    schema = _SCHEMAS[kind]
+    expected_header = [name for name, _ in schema]
+    compact_schema = _CompactSchema(
+        tuple(expected_header),
+        {name: index for index, name in enumerate(expected_header)},
+        path,
+    )
+    text_cache: dict[str, str] = {}
+    try:
+        stream = path.open("r", newline="", encoding="utf-8")
+    except OSError as exc:
+        raise _error(path, "file", str(exc)) from exc
 
-    trace_prefix = Path(prefix)
-    loaded = {kind: _load_file(trace_prefix, kind) for kind in _SCHEMAS}
+    with stream:
+        reader = csv.reader(stream)
+        try:
+            header = next(reader)
+        except StopIteration:
+            header = None
+        if header != expected_header:
+            raise _error(
+                path,
+                "header",
+                f"expected {expected_header!r}, got {header!r}",
+            )
 
+        parsed_rows = []
+        previous_event_seq = None
+        nonempty_rows = (raw_values for raw_values in reader if raw_values)
+        for line_number, raw_values in enumerate(nonempty_rows, start=2):
+            if len(raw_values) != len(expected_header):
+                raise _error(path, "header", f"row {line_number} has missing or extra columns")
+
+            parsed_values = []
+            for (key, parser), value in zip(schema, raw_values):
+                try:
+                    parsed = parser(value)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise _error(
+                        path,
+                        key,
+                        f"row {line_number} has invalid value {value!r}",
+                    ) from exc
+                if parser is _S:
+                    parsed = text_cache.setdefault(parsed, parsed)
+                parsed_values.append(parsed)
+
+            row = _CompactTraceRow(tuple(parsed_values), compact_schema)
+            if row["schema_version"] != SCHEMA_VERSION:
+                raise _error(
+                    path,
+                    "schema_version",
+                    f"expected {SCHEMA_VERSION}, got {row['schema_version']}",
+                )
+
+            if kind in _EVENT_KINDS:
+                event_seq = row["event_seq"]
+                if previous_event_seq is not None and event_seq <= previous_event_seq:
+                    raise _error(
+                        path,
+                        "event_seq",
+                        f"row {line_number} value {event_seq} is not strictly increasing",
+                    )
+                previous_event_seq = event_seq
+
+            parsed_rows.append(row)
+
+    return tuple(parsed_rows)
+
+
+def _compact_events(loaded: dict[str, tuple]) -> tuple[_CompactEventRef, ...]:
+    def event_stream(kind: str):
+        return (
+            _CompactEventRef(row["event_seq"], kind, row)
+            for row in loaded[kind]
+        )
+
+    streams = (event_stream(kind) for kind in _EVENT_KINDS)
+    events = tuple(heapq.merge(*streams, key=lambda event: event.event_seq))
+    previous = None
+    for event in events:
+        if previous is not None and event.event_seq == previous.event_seq:
+            raise _error(
+                event.row.source_path,
+                "event_seq",
+                f"duplicate {event.event_seq}; first seen in {previous.row.source_path}",
+            )
+        previous = event
+    return events
+
+
+def _find_ack_by_event_seq(rows: tuple, event_seq: int):
+    low = 0
+    high = len(rows)
+    while low < high:
+        middle = (low + high) // 2
+        candidate = rows[middle]["event_seq"]
+        if candidate < event_seq:
+            low = middle + 1
+        else:
+            high = middle
+    if low < len(rows) and rows[low]["event_seq"] == event_seq:
+        return rows[low]
+    return None
+
+
+def _build_bundle(trace_prefix: Path, loaded: dict[str, tuple], *, compact: bool) -> TraceBundle:
     run_id = None
     for kind, rows in loaded.items():
         path = Path(f"{trace_prefix}.{kind}.csv")
@@ -219,20 +358,24 @@ def load_trace(prefix: Path | str) -> TraceBundle:
                     f"expected {run_id!r}, got {row['run_id']!r}",
                 )
 
-    events = []
-    sequence_sources: dict[int, Path] = {}
-    for kind in _EVENT_KINDS:
-        for row in loaded[kind]:
-            event_seq = row["event_seq"]
-            if event_seq in sequence_sources:
-                raise _error(
-                    row.source_path,
-                    "event_seq",
-                    f"duplicate {event_seq}; first seen in {sequence_sources[event_seq]}",
-                )
-            sequence_sources[event_seq] = row.source_path
-            events.append(EventRef(event_seq, kind, row))
-    events.sort(key=lambda event: event.event_seq)
+    if compact:
+        events = _compact_events(loaded)
+    else:
+        event_list = []
+        sequence_sources: dict[int, Path] = {}
+        for kind in _EVENT_KINDS:
+            for row in loaded[kind]:
+                event_seq = row["event_seq"]
+                if event_seq in sequence_sources:
+                    raise _error(
+                        row.source_path,
+                        "event_seq",
+                        f"duplicate {event_seq}; first seen in {sequence_sources[event_seq]}",
+                    )
+                sequence_sources[event_seq] = row.source_path
+                event_list.append(EventRef(event_seq, kind, row))
+        event_list.sort(key=lambda event: event.event_seq)
+        events = tuple(event_list)
 
     previous_time = None
     previous_event_seq = None
@@ -249,13 +392,18 @@ def load_trace(prefix: Path | str) -> TraceBundle:
         previous_time = effective_time
         previous_event_seq = event.event_seq
 
-    ack_by_event_seq = {row["event_seq"]: row for row in loaded["ack"]}
+    ack_by_event_seq = None if compact else {
+        row["event_seq"]: row for row in loaded["ack"]
+    }
     enqueued_ack_event_seqs = set()
     for token in loaded["token"]:
         if token["operation"] != "enqueue_good_ack":
             continue
         related_event_seq = token["related_ack_event_seq"]
-        ack = ack_by_event_seq.get(related_event_seq)
+        ack = (
+            _find_ack_by_event_seq(loaded["ack"], related_event_seq)
+            if compact else ack_by_event_seq.get(related_event_seq)
+        )
         if ack is None:
             raise _error(
                 token.source_path,
@@ -319,5 +467,21 @@ def load_trace(prefix: Path | str) -> TraceBundle:
         pathmap=loaded["pathmap"],
         linkmap=loaded["linkmap"],
         background=loaded["background"],
-        events=tuple(events),
+        events=events,
     )
+
+
+def load_trace(prefix: Path | str) -> TraceBundle:
+    """Load and validate the six CSV files emitted for one trace prefix."""
+
+    trace_prefix = Path(prefix)
+    loaded = {kind: _load_file(trace_prefix, kind) for kind in _SCHEMAS}
+    return _build_bundle(trace_prefix, loaded, compact=False)
+
+
+def load_trace_compact(prefix: Path | str) -> TraceBundle:
+    """Load an equivalent trace using compact read-only rows for M2 analysis."""
+
+    trace_prefix = Path(prefix)
+    loaded = {kind: _load_file_compact(trace_prefix, kind) for kind in _SCHEMAS}
+    return _build_bundle(trace_prefix, loaded, compact=True)

@@ -146,6 +146,11 @@ class RunCaseTest(unittest.TestCase):
         self.assertNotIn("-queue_type", argv)
         self.assertNotIn("-host_queue_type", argv)
         self.assertNotIn("-motivation_background_config", argv)
+        for flag in (
+            "-prism_smooth_beta", "-prism_hysteresis",
+            "-prism_engage_spread", "-prism_engage_mult",
+        ):
+            self.assertNotIn(flag, argv)
 
         manifest = json.loads(manifest_path.read_text(encoding="ascii"))
         self.assertEqual(manifest_path, self.root / "output" / "m1_smoke_s13.manifest.json")
@@ -175,6 +180,8 @@ class RunCaseTest(unittest.TestCase):
         self.assertNotIn("host_queue_type", manifest["config"])
         self.assertNotIn("background_config_sha256", manifest)
         self.assertNotIn("background_safety_contract", manifest)
+        self.assertNotIn("analysis_config", manifest)
+        self.assertNotIn("prism_smooth_beta", manifest["config"])
         self.assertEqual(
             set(manifest["output_filenames"]),
             {
@@ -187,6 +194,117 @@ class RunCaseTest(unittest.TestCase):
                 "pathmap",
                 "linkmap",
                 "manifest",
+            },
+        )
+
+    def test_m2_phases_round_trip_analysis_config(self):
+        module = load_run_case_module()
+        self.assertTrue({"coarse", "confirmation"}.issubset(module.VALID_PHASES))
+        for phase, scenario in (("coarse", ""), ("confirmation", "recoverable")):
+            with self.subTest(phase=phase):
+                run_id = f"m2_{phase}_s101"
+                config = {
+                    "cell_id": "coarse-f8-h2-u50",
+                    "scenario": scenario,
+                    "foreground_flows": 8,
+                    "hot_path_groups": 2,
+                    "background_utilization": 0.5,
+                    "seed": 101,
+                }
+                with mock.patch.object(
+                    module.subprocess, "run", side_effect=self.completed
+                ):
+                    manifest_path = self.invoke(
+                        module,
+                        experiment="M2_redistribution_progress",
+                        phase=phase,
+                        run_id=run_id,
+                        seed=101,
+                        out_dir=self.root / phase,
+                        trace_prefix=self.root / phase / run_id,
+                        analysis_config=config,
+                    )
+                manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+                self.assertEqual(manifest["phase"], phase)
+                self.assertEqual(manifest["analysis_config"], config)
+
+    def test_prism_has_explicit_stability_parameters_and_manifest_config(self):
+        module = load_run_case_module()
+        with mock.patch.object(module.subprocess, "run", side_effect=self.completed) as run:
+            manifest_path = self.invoke(module, cc="prism")
+
+        argv = run.call_args_list[-1].args[0]
+        expected = {
+            "-prism_smooth_beta": "1",
+            "-prism_hysteresis": "0",
+            "-prism_engage_spread": "0",
+            "-prism_engage_mult": "0",
+        }
+        for flag, value in expected.items():
+            self.assertEqual(argv.count(flag), 1)
+            self.assertEqual(argv[argv.index(flag) + 1], value)
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+        self.assertEqual(
+            {key: manifest["config"][key.removeprefix("-")] for key in expected},
+            {key: int(value) for key, value in expected.items()},
+        )
+
+    def test_m2_rejects_missing_fields_and_seed_mismatch_before_running(self):
+        module = load_run_case_module()
+        valid = {
+            "cell_id": "coarse-f8-h2-u50",
+            "scenario": "",
+            "foreground_flows": 8,
+            "hot_path_groups": 2,
+            "background_utilization": 0.5,
+            "seed": 101,
+        }
+        invalid = [None, {key: value for key, value in valid.items() if key != "cell_id"}]
+        invalid.append({**valid, "seed": 102})
+        for config in invalid:
+            with self.subTest(config=config):
+                with mock.patch.object(module.subprocess, "run") as run:
+                    with self.assertRaises((TypeError, ValueError)):
+                        self.invoke(
+                            module,
+                            experiment="M2_redistribution_progress",
+                            phase="coarse",
+                            seed=101,
+                            analysis_config=config,
+                        )
+                    run.assert_not_called()
+
+    def test_cli_accepts_empty_m2_scenario_and_builds_complete_config(self):
+        module = load_run_case_module()
+        argv = [
+            "--experiment", "M2_redistribution_progress",
+            "--phase", "coarse",
+            "--run-id", "m2_coarse_s101",
+            "--cc", "prism",
+            "--seed", "101",
+            "--topology", str(TOPOLOGY),
+            "--traffic", str(self.traffic),
+            "--out-dir", str(self.root / "output"),
+            "--trace-prefix", str(self.root / "output" / "m2_coarse_s101"),
+            "--m2-cell-id", "coarse-f8-h2-u50",
+            "--m2-scenario", "",
+            "--m2-foreground-flows", "8",
+            "--m2-hot-path-groups", "2",
+            "--m2-background-utilization", "0.5",
+        ]
+        with mock.patch.object(
+            module, "run_case", return_value=Path("manifest.json")
+        ) as run:
+            module.main(argv)
+        self.assertEqual(
+            run.call_args.kwargs["analysis_config"],
+            {
+                "cell_id": "coarse-f8-h2-u50",
+                "scenario": "",
+                "foreground_flows": 8,
+                "hot_path_groups": 2,
+                "background_utilization": 0.5,
+                "seed": 101,
             },
         )
 

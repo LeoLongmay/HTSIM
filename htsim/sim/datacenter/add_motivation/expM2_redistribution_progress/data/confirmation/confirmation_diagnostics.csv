@@ -1,0 +1,4 @@
+cell_id,scenario,seed,completed_rounds,valid_completed_rounds,completion_rate,median_delta_S,literal_no_progress_rate,low_floor_fraction,L_foreground_gbps,C_healthy_gbps,C_effective_residual_gbps,outcome_pass,capacity_pass
+coarse-f16-h6-u25,persistent,101,546,546,0.913043478,-0.00246296012,0.510989011,1,1327.9367,1000,1450,1,1
+coarse-f16-h6-u25,persistent,102,593,593,0.864431487,0.00131951688,0.489038786,1,1329.95398,1000,1450,0,1
+coarse-f16-h6-u25,persistent,103,423,423,0.872164948,0.00187453181,0.496453901,1,1293.5094,1000,1450,0,1
