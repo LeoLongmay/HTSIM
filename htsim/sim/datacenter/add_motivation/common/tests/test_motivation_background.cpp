@@ -94,7 +94,7 @@ void testConfigParsing() {
                 "2,17,1,2,0.000000001,200000000,1200000000\n"
                 "3,18,2,1,25.0000000000,200000000,1200000000\n"
                 "4,19,3,0,25.,200000000,1200000000\n"
-                "5,20,4,0,18446744073.709551615,200000000,1200000000\n");
+                "5,20,4,0,9007199.254740992,200000000,1200000000\n");
     const std::vector<MotivationBackgroundSpec> exact_rates =
         loadMotivationBackgroundConfig(kConfig);
     assert(exact_rates.size() == 5);
@@ -102,7 +102,7 @@ void testConfigParsing() {
     assert(exact_rates[1].rate == UINT64_C(1));
     assert(exact_rates[2].rate == UINT64_C(25000000000));
     assert(exact_rates[3].rate == UINT64_C(25000000000));
-    assert(exact_rates[4].rate == UINT64_MAX);
+    assert(exact_rates[4].rate == (UINT64_C(1) << 53));
 
     expectInvalid(std::string(kHeader) +
                   "\n0,16,0,3,25,200000000,1200000000\n"
@@ -133,6 +133,7 @@ void testConfigParsing() {
                              ".",
                              "1.2.3",
                              "0.0000000015",
+                             "9007199.254740993",
                              "18446744073.709551616",
                              "18446744074"}) {
         expectInvalid(std::string(kHeader) + "\n0,16,0,3," + rate +

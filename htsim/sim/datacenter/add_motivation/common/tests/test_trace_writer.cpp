@@ -94,6 +94,9 @@ int main() {
                           "q1|q2"});
     writer.logBackground({writer.nextEventSeq(), 1450, 10, "start", 4, 5, 6, 0.123046875, 0,
                           "q3"});
+    constexpr linkspeed_bps kMaximumExactTraceRate = UINT64_C(1) << 53;
+    writer.logBackground({writer.nextEventSeq(), 1500, 11, "start", 7, 8, 9,
+                          speedAsGbps(kMaximumExactTraceRate), 0, "q4"});
     writer.close();
 
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 1) ==
@@ -133,6 +136,10 @@ int main() {
            "2,run,6,1400,9,finish,1,2,3,25,6000,q1|q2");
     assert(lineAt(std::string(kPrefix) + ".background.csv", 4) ==
            "2,run,7,1450,10,start,4,5,6,0.123046875,0,q3");
+    const std::string boundary_row = lineAt(std::string(kPrefix) + ".background.csv", 5);
+    assert(boundary_row ==
+           "2,run,8,1500,11,start,7,8,9,9007199.2547409926,0,q4");
+    assert(speedFromGbps(std::stod("9007199.2547409926")) == kMaximumExactTraceRate);
 
     removeTraceFiles(kPrefix);
 }

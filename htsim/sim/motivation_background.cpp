@@ -19,6 +19,8 @@ namespace {
 constexpr const char* kConfigHeader =
     "background_id,src,dst,path_index,rate_gbps,start_ps,stop_ps";
 constexpr uint64_t kPacketBitsPicoseconds = UINT64_C(1500) * 8 * UINT64_C(1000000000000);
+// MotivationBackgroundRecord stores Gbps as double, whose exact integer range ends at 2^53.
+constexpr linkspeed_bps kMaximumExactTraceRate = UINT64_C(1) << 53;
 
 class MotivationBackgroundPacket final : public CbrPacket {
 public:
@@ -134,6 +136,10 @@ linkspeed_bps parseRate(const std::string& field, size_t line_number) {
     const linkspeed_bps rate = whole_bps + fractional_bps;
     if (rate == 0) {
         throw std::invalid_argument("rate_gbps must represent at least one bps on line " +
+                                    std::to_string(line_number));
+    }
+    if (rate > kMaximumExactTraceRate) {
+        throw std::invalid_argument("rate_gbps exceeds exact trace maximum of 2^53 bps on line " +
                                     std::to_string(line_number));
     }
     return rate;
