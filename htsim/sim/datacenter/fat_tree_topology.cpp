@@ -913,7 +913,7 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
 
                 if (_cfg->_tiers == 2 && (agg - agg_min) < _cfg->_num_failed_links){
                     queues_nup_nlp[agg][tor][b] = alloc_queue(queueLogger, _cfg->_downlink_speeds[AGG_TIER],_cfg->_queue_down[AGG_TIER], DOWNLINK, AGG_TIER,false,true);
-                    cout << "Failure: US" + ntoa(agg) + "->LS_" + ntoa(tor) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[AGG_TIER] * _cfg->_failed_link_ratio) << endl;
+                    cout << "Degraded: US" + ntoa(agg) + "->LS_" + ntoa(tor) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[AGG_TIER] * _cfg->_failed_link_ratio) << endl;
                 }
                 else
                     queues_nup_nlp[agg][tor][b] = alloc_queue((QueueLogger*)queueLogger, (const mem_b)_cfg->_queue_down[AGG_TIER], DOWNLINK, AGG_TIER);
@@ -935,7 +935,7 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
 
                 if (_cfg->_tiers == 2 && (agg - agg_min) < _cfg->_num_failed_links){
                     queues_nlp_nup[tor][agg][b] = alloc_queue(queueLogger, _cfg->_downlink_speeds[AGG_TIER], _cfg->_queue_up[TOR_TIER], UPLINK, TOR_TIER, true, true);
-                    cout << "Failure: LS" + ntoa(tor) + "->US" + ntoa(agg) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[AGG_TIER] * _cfg->_failed_link_ratio) << endl;
+                    cout << "Degraded: LS" + ntoa(tor) + "->US" + ntoa(agg) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[AGG_TIER] * _cfg->_failed_link_ratio) << endl;
                 }
                 else 
                     queues_nlp_nup[tor][agg][b] = alloc_queue(queueLogger, _cfg->_queue_up[TOR_TIER], UPLINK, TOR_TIER, true);
@@ -1012,7 +1012,7 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
         
                     if ((l+agg*_cfg->_agg_switches_per_pod)<_cfg->_num_failed_links){
                         queues_nc_nup[core][agg][b] = alloc_queue(queueLogger, _cfg->_downlink_speeds[CORE_TIER], _cfg->_queue_down[CORE_TIER], DOWNLINK, CORE_TIER, false,true);
-                        cout << "Adding link failure for agg_sw " << ntoa(agg) << " l " << ntoa(l) << " b " << ntoa(b) << endl;
+                        cout << "Degraded: CS" + ntoa(core) + "->US" + ntoa(agg) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[CORE_TIER] * _cfg->_failed_link_ratio) << endl;
                     } else {
                         queues_nc_nup[core][agg][b] = alloc_queue(queueLogger, _cfg->_queue_down[CORE_TIER], DOWNLINK, CORE_TIER);
                     }

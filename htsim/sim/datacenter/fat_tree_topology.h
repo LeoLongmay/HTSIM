@@ -15,6 +15,7 @@
 #include <ostream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 
 //#define N K*K*K/4
 
@@ -68,6 +69,12 @@ public:
 
     void set_failed_links(int num_failed_links) {
         _num_failed_links = num_failed_links;
+    }
+
+    void set_degraded_link_ratio(double ratio) {
+        if (!(ratio > 0.0 && ratio <= 1.0))
+            throw std::invalid_argument("degraded link ratio must be in (0,1]");
+        _failed_link_ratio = ratio;
     }
 
     void set_tiers(uint32_t tiers) { if(tiers!=0) _tiers = tiers;}

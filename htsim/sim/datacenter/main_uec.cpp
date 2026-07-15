@@ -111,6 +111,9 @@ int main(int argc, char **argv) {
     uint32_t ecn_high = 0;
     uint32_t queue_size_bdp_factor = 0;
     uint32_t topo_num_failed = 0;
+    double degraded_link_ratio = 0.25;
+    double degraded_capacity_gbps = 0;
+    bool degraded_capacity_set = false;
 
     bool receiver_driven = false;
     bool sender_driven = true;
@@ -550,8 +553,17 @@ int main(int argc, char **argv) {
             cout << "logtime "<< log_us << " us" << endl;
             i++;
         } else if (!strcmp(argv[i],"-failed")){
-            // number of failed links (failed to 25% linkspeed)
+            // Compatibility alias: number of links degraded to 25% linkspeed.
             topo_num_failed = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"-degraded_links")){
+            topo_num_failed = atoi(argv[i+1]);
+            cout << "degraded_links " << topo_num_failed << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-degraded_capacity_gbps")){
+            degraded_capacity_gbps = atof(argv[i+1]);
+            degraded_capacity_set = true;
+            cout << "degraded_capacity_gbps " << degraded_capacity_gbps << endl;
             i++;
         } else if (!strcmp(argv[i],"-linkspeed")){
             // linkspeed specified is in Mbps
@@ -682,6 +694,16 @@ int main(int argc, char **argv) {
     assert(trimsize >= 64 && trimsize <= (uint32_t)packet_size);
 
     cout << "Packet size (MTU) is " << packet_size << endl;
+
+    if (degraded_capacity_set) {
+        const double normal_rate_gbps = speedAsGbps(linkspeed);
+        if (!isfinite(degraded_capacity_gbps) || degraded_capacity_gbps <= 0 ||
+            degraded_capacity_gbps > normal_rate_gbps) {
+            cerr << "degraded_capacity_gbps must be in (0," << normal_rate_gbps << "]" << endl;
+            return 1;
+        }
+        degraded_link_ratio = degraded_capacity_gbps / normal_rate_gbps;
+    }
 
     if (motivation_run_id.find_first_of(",\r\n") != std::string::npos ||
         motivation_scenario.find_first_of(",\r\n") != std::string::npos) {
@@ -859,9 +881,8 @@ int main(int argc, char **argv) {
     }
     topo_cfg->set_queue_sizes(queuesize);
 
-    if (topo_num_failed > 0) {
-        topo_cfg->set_failed_links(topo_num_failed);
-    }
+    topo_cfg->set_failed_links(topo_num_failed);
+    topo_cfg->set_degraded_link_ratio(degraded_link_ratio);
 
     if (topo_cfg->get_oversubscription_ratio() > 1 && !UecSrc::_sender_based_cc && !force_disable_oversubscribed_cc) {
         UecSink::_oversubscribed_cc = true;
