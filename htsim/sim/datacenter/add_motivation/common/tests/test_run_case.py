@@ -231,7 +231,7 @@ class RunCaseTest(unittest.TestCase):
                 "rate_lte_host_queue_bitrate": True,
                 "source_distinct_from_all_foreground_endpoints": True,
                 "source_unique_across_background_streams": True,
-                "stop_plus_route_drain_bound_lte_simulation_end": True,
+                "stop_plus_route_drain_bound_lt_simulation_end": True,
             },
         )
 

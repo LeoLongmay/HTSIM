@@ -159,13 +159,23 @@ fi
 grep -q 'background route queue class has no proven drain bound' \
     "$TMP/composite.stdout"
 
-CUTOFF="$TMP/cutoff.csv"
-printf '%s\n%s\n' "$HEADER" '0,16,0,3,25,1900000000,1999000000' >"$CUTOFF"
-if "${BASE[@]}" -o "$TMP/cutoff.dat" \
-    -motivation_trace_prefix "$TMP/cutoff-trace" \
-    -motivation_background_config "$CUTOFF" \
-    >"$TMP/cutoff.stdout" 2>&1; then
-    echo "unsafe background drain cutoff unexpectedly succeeded" >&2
+# Under BASE, this route's conservative drain bound is exactly 33,280,000 ps.
+EQUAL_DEADLINE="$TMP/equal-deadline.csv"
+printf '%s\n%s\n' "$HEADER" \
+    '0,16,0,3,25,1900000000,1966720000' >"$EQUAL_DEADLINE"
+if "${BASE[@]}" -o "$TMP/equal-deadline.dat" \
+    -motivation_trace_prefix "$TMP/equal-deadline-trace" \
+    -motivation_background_config "$EQUAL_DEADLINE" \
+    >"$TMP/equal-deadline.stdout" 2>&1; then
+    echo "background drain deadline equal to simulation end unexpectedly succeeded" >&2
     exit 1
 fi
-grep -q 'cannot drain before simulation end for ID 0' "$TMP/cutoff.stdout"
+grep -q 'cannot drain before simulation end for ID 0' "$TMP/equal-deadline.stdout"
+
+MARGIN_DEADLINE="$TMP/margin-deadline.csv"
+printf '%s\n%s\n' "$HEADER" \
+    '0,16,0,3,25,1900000000,1966719999' >"$MARGIN_DEADLINE"
+"${BASE[@]}" -o "$TMP/margin-deadline.dat" \
+    -motivation_trace_prefix "$TMP/margin-deadline-trace" \
+    -motivation_background_config "$MARGIN_DEADLINE" \
+    >"$TMP/margin-deadline.stdout" 2>&1

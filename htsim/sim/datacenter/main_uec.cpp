@@ -1516,7 +1516,8 @@ int main(int argc, char **argv) {
                         "motivation background drain deadline overflow for ID " +
                         to_string(spec.background_id));
                 }
-                if (spec.stop_ps + drain_bound > simulation_end_ps) {
+                if (spec.stop_ps >= simulation_end_ps ||
+                    drain_bound >= simulation_end_ps - spec.stop_ps) {
                     throw invalid_argument(
                         "motivation background cannot drain before simulation end for ID " +
                         to_string(spec.background_id));

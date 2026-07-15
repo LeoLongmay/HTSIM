@@ -311,7 +311,7 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
             "source_distinct_from_all_foreground_endpoints": True,
             "source_unique_across_background_streams": True,
             "rate_lte_host_queue_bitrate": True,
-            "stop_plus_route_drain_bound_lte_simulation_end": True,
+            "stop_plus_route_drain_bound_lt_simulation_end": True,
         }
 
     temp_name = None
