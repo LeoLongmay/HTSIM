@@ -1,0 +1,306 @@
+// -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
+#include "motivation_background.h"
+
+#include <cerrno>
+#include <charconv>
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <limits>
+#include <sstream>
+#include <stdexcept>
+#include <unordered_set>
+#include <utility>
+
+#include "cbrpacket.h"
+#include "queue.h"
+
+namespace {
+
+constexpr const char* kConfigHeader =
+    "background_id,src,dst,path_index,rate_gbps,start_ps,stop_ps";
+constexpr uint64_t kPacketBitsPicoseconds = UINT64_C(1500) * 8 * UINT64_C(1000000000000);
+
+class MotivationBackgroundPacket final : public CbrPacket {
+public:
+    static MotivationBackgroundPacket* newpkt(PacketFlow& flow, route_t& route,
+                                              packetid_t id, uint32_t size) {
+        MotivationBackgroundPacket* packet = _packetdb.allocPacket();
+        packet->set_route(flow, route, size, id);
+        return packet;
+    }
+
+    PktPriority priority() const override { return Packet::PRIO_LO; }
+    void free() override { _packetdb.freePacket(this); }
+
+private:
+    static PacketDB<MotivationBackgroundPacket> _packetdb;
+};
+
+PacketDB<MotivationBackgroundPacket> MotivationBackgroundPacket::_packetdb;
+
+std::vector<std::string> splitFields(const std::string& line) {
+    std::vector<std::string> fields;
+    size_t begin = 0;
+    while (true) {
+        const size_t comma = line.find(',', begin);
+        fields.push_back(line.substr(begin, comma - begin));
+        if (comma == std::string::npos) {
+            break;
+        }
+        begin = comma + 1;
+    }
+    return fields;
+}
+
+void validateFieldWhitespace(const std::string& field, size_t line_number) {
+    if (field.empty() || std::isspace(static_cast<unsigned char>(field.front())) ||
+        std::isspace(static_cast<unsigned char>(field.back()))) {
+        throw std::invalid_argument("invalid motivation background field on line " +
+                                    std::to_string(line_number));
+    }
+}
+
+template <typename Integer>
+Integer parseInteger(const std::string& field, const char* name, size_t line_number) {
+    Integer value = 0;
+    const char* begin = field.data();
+    const char* end = begin + field.size();
+    const auto result = std::from_chars(begin, end, value, 10);
+    if (result.ec != std::errc() || result.ptr != end) {
+        throw std::invalid_argument("invalid " + std::string(name) + " on line " +
+                                    std::to_string(line_number));
+    }
+    return value;
+}
+
+linkspeed_bps parseRate(const std::string& field, size_t line_number) {
+    char* end = nullptr;
+    errno = 0;
+    const double rate_gbps = std::strtod(field.c_str(), &end);
+    if (end == field.c_str() || end != field.c_str() + field.size() || errno == ERANGE ||
+        !std::isfinite(rate_gbps) || rate_gbps <= 0) {
+        throw std::invalid_argument("invalid rate_gbps on line " +
+                                    std::to_string(line_number));
+    }
+
+    const long double rate_bps = static_cast<long double>(rate_gbps) * 1000000000.0L;
+    if (rate_bps > static_cast<long double>(std::numeric_limits<linkspeed_bps>::max())) {
+        throw std::invalid_argument("overflowing rate_gbps on line " +
+                                    std::to_string(line_number));
+    }
+    const linkspeed_bps rate = static_cast<linkspeed_bps>(rate_bps);
+    if (rate == 0) {
+        throw std::invalid_argument("rate_gbps is too small on line " +
+                                    std::to_string(line_number));
+    }
+    return rate;
+}
+
+std::string csvField(const std::string& value) {
+    if (value.find_first_of(",\"\r\n") == std::string::npos) {
+        return value;
+    }
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (char character : value) {
+        if (character == '"') {
+            escaped.push_back('"');
+        }
+        escaped.push_back(character);
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
+}  // namespace
+
+std::vector<MotivationBackgroundSpec> loadMotivationBackgroundConfig(
+    const std::string& path) {
+    if (path.empty()) {
+        return {};
+    }
+
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        throw std::runtime_error("failed to open motivation background config: " + path);
+    }
+
+    std::string line;
+    if (!std::getline(input, line) || line != kConfigHeader) {
+        throw std::invalid_argument("motivation background config header mismatch");
+    }
+
+    std::vector<MotivationBackgroundSpec> specs;
+    std::unordered_set<uint32_t> background_ids;
+    size_t line_number = 1;
+    while (std::getline(input, line)) {
+        ++line_number;
+        const std::vector<std::string> fields = splitFields(line);
+        if (fields.size() != 7) {
+            throw std::invalid_argument("motivation background field count mismatch on line " +
+                                        std::to_string(line_number));
+        }
+        for (const std::string& field : fields) {
+            validateFieldWhitespace(field, line_number);
+        }
+
+        MotivationBackgroundSpec spec{
+            parseInteger<uint32_t>(fields[0], "background_id", line_number),
+            parseInteger<uint32_t>(fields[1], "src", line_number),
+            parseInteger<uint32_t>(fields[2], "dst", line_number),
+            parseInteger<uint32_t>(fields[3], "path_index", line_number),
+            parseRate(fields[4], line_number),
+            parseInteger<simtime_picosec>(fields[5], "start_ps", line_number),
+            parseInteger<simtime_picosec>(fields[6], "stop_ps", line_number)};
+        if (!background_ids.insert(spec.background_id).second) {
+            throw std::invalid_argument("duplicate motivation background ID on line " +
+                                        std::to_string(line_number));
+        }
+        if (spec.src == spec.dst) {
+            throw std::invalid_argument("motivation background src equals dst on line " +
+                                        std::to_string(line_number));
+        }
+        if (spec.start_ps >= spec.stop_ps) {
+            throw std::invalid_argument("motivation background start must precede stop on line " +
+                                        std::to_string(line_number));
+        }
+        specs.push_back(spec);
+    }
+    return specs;
+}
+
+std::string motivationBackgroundQueueFingerprint(const route_t& route) {
+    std::ostringstream fingerprint;
+    bool first = true;
+    for (PacketSink* element : route) {
+        const BaseQueue* queue = dynamic_cast<const BaseQueue*>(element);
+        if (queue == nullptr) {
+            continue;
+        }
+        if (!first) {
+            fingerprint << '|';
+        }
+        fingerprint << queue->queueName();
+        first = false;
+    }
+    return fingerprint.str();
+}
+
+void MotivationBackgroundSink::receivePacket(Packet& packet) {
+    const uint64_t packet_bytes = packet.size();
+    if (packet_bytes > std::numeric_limits<uint64_t>::max() - _delivered_bytes) {
+        packet.free();
+        throw std::overflow_error("motivation background delivered-byte counter overflow");
+    }
+    _delivered_bytes += packet_bytes;
+    packet.free();
+}
+
+MotivationBackgroundSource::MotivationBackgroundSource(
+    EventList& eventlist, const MotivationBackgroundSpec& spec,
+    MotivationTraceWriter& trace_writer, std::string queue_fingerprint)
+    : EventSource(eventlist, "motivation_background_source"),
+      _spec(spec),
+      _trace_writer(trace_writer),
+      _queue_fingerprint(std::move(queue_fingerprint)),
+      _flow(nullptr),
+      _period(0) {
+    if (_spec.rate == 0) {
+        throw std::invalid_argument("motivation background rate must be positive");
+    }
+    if (_spec.src == _spec.dst) {
+        throw std::invalid_argument("motivation background src must differ from dst");
+    }
+    if (_spec.start_ps >= _spec.stop_ps) {
+        throw std::invalid_argument("motivation background start must precede stop");
+    }
+
+    _period = kPacketBitsPicoseconds / _spec.rate;
+    if (kPacketBitsPicoseconds % _spec.rate != 0) {
+        ++_period;
+    }
+    if (_period == 0) {
+        throw std::overflow_error("motivation background packet period is zero");
+    }
+}
+
+void MotivationBackgroundSource::connect(route_t& route, MotivationBackgroundSink& sink) {
+    if (_route != nullptr || _sink != nullptr) {
+        throw std::logic_error("motivation background source already connected");
+    }
+    if (route.size() == 0 || route.at(route.size() - 1) != &sink) {
+        throw std::invalid_argument("motivation background route must end at its sink");
+    }
+    if (_spec.start_ps < eventlist().now()) {
+        throw std::invalid_argument("motivation background start is in the past");
+    }
+    _route = &route;
+    _sink = &sink;
+    eventlist().sourceIsPending(*this, _spec.start_ps);
+    eventlist().sourceIsPending(*this, _spec.stop_ps);
+}
+
+void MotivationBackgroundSource::doNextEvent() {
+    const simtime_picosec now = eventlist().now();
+    if (now == _spec.stop_ps) {
+        if (_finished || !_started) {
+            throw std::logic_error("invalid motivation background finish event");
+        }
+        _finished = true;
+        log("finish", _sink->deliveredBytes());
+        return;
+    }
+    if (now < _spec.start_ps || now >= _spec.stop_ps || _finished) {
+        throw std::logic_error("invalid motivation background packet event");
+    }
+    if (!_started) {
+        if (now != _spec.start_ps) {
+            throw std::logic_error("motivation background missed start event");
+        }
+        _started = true;
+        log("start", 0);
+    }
+
+    sendPacket();
+    const simtime_picosec remaining = _spec.stop_ps - now;
+    if (_period < remaining) {
+        eventlist().sourceIsPending(*this, now + _period);
+    }
+}
+
+void MotivationBackgroundSource::log(const char* operation, uint64_t delivered_bytes) {
+    _trace_writer.logBackground({_trace_writer.nextEventSeq(),
+                                 eventlist().now(),
+                                 _spec.background_id,
+                                 operation,
+                                 _spec.src,
+                                 _spec.dst,
+                                 _spec.path_index,
+                                 speedAsGbps(_spec.rate),
+                                 delivered_bytes,
+                                 csvField(_queue_fingerprint)});
+}
+
+void MotivationBackgroundSource::sendPacket() {
+    if (_route == nullptr || _sink == nullptr) {
+        throw std::logic_error("motivation background source is not connected");
+    }
+    if (_sent_bytes > std::numeric_limits<uint64_t>::max() - kPacketBytes) {
+        throw std::overflow_error("motivation background sent-byte counter overflow");
+    }
+    if (_next_packet_id > std::numeric_limits<packetid_t>::max()) {
+        throw std::overflow_error("motivation background packet ID overflow");
+    }
+
+    CbrPacket* packet = MotivationBackgroundPacket::newpkt(
+        _flow, *_route, static_cast<packetid_t>(_next_packet_id), kPacketBytes);
+    ++_next_packet_id;
+    _sent_bytes += kPacketBytes;
+    packet->set_src(_spec.src);
+    packet->set_dst(_spec.dst);
+    packet->set_pathid(_spec.path_index);
+    packet->sendOn();
+}

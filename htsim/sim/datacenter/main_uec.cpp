@@ -23,6 +23,7 @@
 #include "uec_base.h"
 #include "uec.h"
 #include "uec_mp.h"
+#include "motivation_background.h"
 #include "motivation_trace.h"
 #include "uec_pdcses.h"
 #include "compositequeue.h"
@@ -178,6 +179,8 @@ int main(int argc, char **argv) {
     std::string motivation_run_id;
     std::string motivation_scenario;
     int64_t motivation_flow_id = -1;
+    std::string motivation_background_config;
+    bool motivation_background_config_set = false;
 
     while (i<argc) {
         if (!strcmp(argv[i],"-o")) {
@@ -302,6 +305,22 @@ int main(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"-motivation_scenario")) {
             motivation_scenario = argv[i+1];
+            i++;
+        } else if (!strcmp(argv[i], "-motivation_background_config")) {
+            if (i + 1 >= argc) {
+                cerr << "missing operand for -motivation_background_config" << endl;
+                return 1;
+            }
+            if (motivation_background_config_set) {
+                cerr << "duplicate -motivation_background_config" << endl;
+                return 1;
+            }
+            motivation_background_config = argv[i + 1];
+            if (motivation_background_config.empty()) {
+                cerr << "empty -motivation_background_config" << endl;
+                return 1;
+            }
+            motivation_background_config_set = true;
             i++;
         } else if (!strcmp(argv[i],"-mnscc_h")) {
             UecSrc::_mnscc_h = atoi(argv[i+1]);
@@ -769,6 +788,10 @@ int main(int argc, char **argv) {
     if (motivation_run_id.find_first_of(",\r\n") != std::string::npos ||
         motivation_scenario.find_first_of(",\r\n") != std::string::npos) {
         cerr << "Motivation run ID and scenario must not contain commas or newlines" << endl;
+        return 1;
+    }
+    if (motivation_background_config_set && motivation_prefix.empty()) {
+        cerr << "-motivation_background_config requires -motivation_trace_prefix" << endl;
         return 1;
     }
     try {
@@ -1396,6 +1419,72 @@ int main(int argc, char **argv) {
                 Trigger* trig = conns->getTrigger(crt->recv_done_trigger, eventlist);
                 msg->setTrigger(UecMsg::MsgStatus::RecvdLast, trig);
             }
+        }
+    }
+
+    vector<unique_ptr<Route>> motivation_background_routes;
+    vector<unique_ptr<MotivationBackgroundSink>> motivation_background_sinks;
+    vector<unique_ptr<MotivationBackgroundSource>> motivation_background_sources;
+    if (motivation_background_config_set) {
+        try {
+            const vector<MotivationBackgroundSpec> background_specs =
+                loadMotivationBackgroundConfig(motivation_background_config);
+            motivation_background_routes.reserve(background_specs.size());
+            motivation_background_sinks.reserve(background_specs.size());
+            motivation_background_sources.reserve(background_specs.size());
+
+            for (const MotivationBackgroundSpec& spec : background_specs) {
+                if (end_time > 0 && spec.stop_ps >= timeFromMs((double)end_time)) {
+                    throw invalid_argument(
+                        "motivation background stop must precede simulation end for ID " +
+                        to_string(spec.background_id));
+                }
+                if (spec.src >= no_of_nodes || spec.dst >= no_of_nodes) {
+                    throw invalid_argument("motivation background endpoint is outside topology for ID " +
+                                           to_string(spec.background_id));
+                }
+
+                unique_ptr<vector<const Route*>> paths(
+                    topo[0]->get_bidir_paths(spec.src, spec.dst, false));
+                if (!paths) {
+                    throw runtime_error("failed to enumerate motivation background paths for ID " +
+                                        to_string(spec.background_id));
+                }
+                vector<unique_ptr<const Route>> path_owners;
+                path_owners.reserve(paths->size());
+                for (const Route* path : *paths) {
+                    path_owners.emplace_back(path);
+                }
+                if (spec.path_index >= paths->size() || paths->at(spec.path_index) == nullptr) {
+                    throw invalid_argument("motivation background path_index is invalid for ID " +
+                                           to_string(spec.background_id));
+                }
+
+                const Route& selected_path = *paths->at(spec.path_index);
+                const string queue_fingerprint =
+                    motivationBackgroundQueueFingerprint(selected_path);
+                if (queue_fingerprint.empty()) {
+                    throw runtime_error("motivation background path has no queues for ID " +
+                                        to_string(spec.background_id));
+                }
+
+                auto sink = make_unique<MotivationBackgroundSink>();
+                auto route = make_unique<Route>(selected_path.size() + 1);
+                for (PacketSink* element : selected_path) {
+                    route->push_back(element);
+                }
+                route->push_back(sink.get());
+                auto source = make_unique<MotivationBackgroundSource>(
+                    eventlist, spec, UecSrc::motivationTrace(), queue_fingerprint);
+                source->connect(*route, *sink);
+
+                motivation_background_routes.push_back(move(route));
+                motivation_background_sinks.push_back(move(sink));
+                motivation_background_sources.push_back(move(source));
+            }
+        } catch (const exception& error) {
+            cerr << error.what() << endl;
+            return 1;
         }
     }
 
