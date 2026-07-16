@@ -195,6 +195,14 @@ if ( ENABLE_TESTS )
             $<TARGET_FILE:htsim_uec>)
     set_tests_properties(motivation_background_cli
         PROPERTIES LABELS "motivation;integration" TIMEOUT 120)
+
+    add_test(
+        NAME prism_coordination_cli
+        COMMAND bash
+            ${CMAKE_CURRENT_SOURCE_DIR}/datacenter/add_motivation/common/tests/test_prism_coordination_cli.sh
+            $<TARGET_FILE:htsim_uec>)
+    set_tests_properties(prism_coordination_cli
+        PROPERTIES LABELS "motivation;integration" TIMEOUT 120)
 endif()
 
 # Always print ENABLE_TESTS status, so folks don't miss it.

@@ -21,6 +21,7 @@
 #include "oversubscribed_cc.h"
 #include "uec_mp.h"
 #include "motivation_epoch.h"
+#include "prism_coordination.h"
 #include "atlahs_event.h"
 #include "atlahs_htsim_api.h"
 
@@ -261,6 +262,7 @@ public:
    private:
     static MotivationTraceWriter _motivation_trace_writer;
     unique_ptr<UecMultipath> _mp;
+    PrismResidualCoordinator _prism_coordinator;
     MotivationEpochObserver _motivation_epoch_observer;
     MotivationAckSelectionState _motivation_ack_selection_state;
     optional<MotivationEpochResult> _motivation_pending_epoch;
@@ -442,6 +444,7 @@ public:
     // Motivation-only REPS admission gate. Disabled unless explicitly requested.
     static bool            _motivation_residual_recycle;
     static simtime_picosec _motivation_residual_threshold;
+    static PrismCoordinationMode _prism_coordination_mode;
     static bool            _prism_oracle_validation;
     static std::string     _prism_oracle_log_path;
     static std::string     _prism_oracle_run_id;

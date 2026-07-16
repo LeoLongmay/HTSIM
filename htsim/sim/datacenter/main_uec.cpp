@@ -185,6 +185,8 @@ int main(int argc, char **argv) {
     bool motivation_residual_recycle = false;
     bool motivation_residual_threshold_set = false;
     double motivation_residual_threshold_us = 10.0;
+    bool prism_coordination_mode_set = false;
+    PrismCoordinationMode prism_coordination_mode = PrismCoordinationMode::DISABLED;
     vector<MotivationBackgroundSpec> motivation_background_specs;
 
     while (i<argc) {
@@ -310,6 +312,29 @@ int main(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"-motivation_scenario")) {
             motivation_scenario = argv[i+1];
+            i++;
+        } else if (!strcmp(argv[i], "-prism_coordination_mode")) {
+            if (prism_coordination_mode_set) {
+                cerr << "duplicate -prism_coordination_mode" << endl;
+                return 1;
+            }
+            if (i + 1 >= argc) {
+                cerr << "-prism_coordination_mode requires a value" << endl;
+                return 1;
+            }
+            prism_coordination_mode_set = true;
+            if (!strcmp(argv[i + 1], "disabled")) {
+                prism_coordination_mode = PrismCoordinationMode::DISABLED;
+            } else if (!strcmp(argv[i + 1], "original_prism")) {
+                prism_coordination_mode = PrismCoordinationMode::ORIGINAL_PRISM;
+            } else if (!strcmp(argv[i + 1], "prism_recycle")) {
+                prism_coordination_mode = PrismCoordinationMode::PRISM_RECYCLE;
+            } else if (!strcmp(argv[i + 1], "full_prism")) {
+                prism_coordination_mode = PrismCoordinationMode::FULL_PRISM;
+            } else {
+                cerr << "invalid -prism_coordination_mode value " << argv[i + 1] << endl;
+                return 1;
+            }
             i++;
         } else if (!strcmp(argv[i], "-motivation_residual_recycle")) {
             if (motivation_residual_recycle) {
@@ -823,6 +848,22 @@ int main(int argc, char **argv) {
         cerr << "-motivation_background_config requires -motivation_trace_prefix" << endl;
         return 1;
     }
+    if (prism_coordination_mode != PrismCoordinationMode::DISABLED &&
+        UecSrc::_sender_cc_algo != UecSrc::PRISM) {
+        cerr << "-prism_coordination_mode requires -sender_cc_algo prism" << endl;
+        return 1;
+    }
+    if (prism_coordination_mode != PrismCoordinationMode::DISABLED &&
+        load_balancing_algo != REPS_ACTUAL) {
+        cerr << "-prism_coordination_mode requires -load_balancing_algo reps_actual" << endl;
+        return 1;
+    }
+    if (prism_coordination_mode != PrismCoordinationMode::DISABLED &&
+        motivation_residual_recycle) {
+        cerr << "-prism_coordination_mode is mutually exclusive with "
+                "-motivation_residual_recycle" << endl;
+        return 1;
+    }
     if (motivation_residual_recycle &&
         (load_balancing_algo != REPS && load_balancing_algo != REPS_LEGACY)) {
         cerr << "-motivation_residual_recycle requires -load_balancing_algo reps" << endl;
@@ -834,6 +875,7 @@ int main(int argc, char **argv) {
     }
     UecSrc::_motivation_residual_recycle = motivation_residual_recycle;
     UecSrc::_motivation_residual_threshold = timeFromUs(motivation_residual_threshold_us);
+    UecSrc::_prism_coordination_mode = prism_coordination_mode;
     try {
         if (motivation_background_config_set) {
             motivation_background_specs =

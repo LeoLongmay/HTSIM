@@ -122,6 +122,7 @@ UecSrc::Sender_CC UecSrc::_sender_cc_algo = UecSrc::NSCC;
 
 bool UecSrc::_motivation_residual_recycle = false;
 simtime_picosec UecSrc::_motivation_residual_threshold = timeFromUs(10u);
+PrismCoordinationMode UecSrc::_prism_coordination_mode = PrismCoordinationMode::DISABLED;
 
 /* 
     The following variable values are not default values, there are initializer values. The actual
@@ -622,6 +623,7 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                bool rts)
         : EventSource(eventList, "uecSrc"), 
           _mp(move(mp)),
+          _prism_coordinator(_prism_coordination_mode, _motivation_residual_threshold),
           _motivation_epoch_observer(_prism_kappa, _prism_n_min, _prism_smooth_beta,
                                      _prism_hysteresis),
           _nic(nic), 
@@ -1500,6 +1502,13 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     _mp->processEv(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN :
                    (reject_high_residual ? UecMultipath::PATH_GOOD_HIGH_RESIDUAL
                                          : UecMultipath::PATH_GOOD));
+    if (_prism_coordination_mode != PrismCoordinationMode::DISABLED &&
+        !pkt.ecn_echo()) {
+        const UecMpAdmission admission = _mp->lastAdmission();
+        _prism_coordinator.observeAck(_prism_epoch_id, admission.cache_slot,
+                                      admission.cache_generation, delay, pkt.ecn_echo(),
+                                      _prism_genuine_sample && admission.written);
+    }
 
     if(_flow.flow_id() == _debug_flowid ){
         cout <<  timeAsUs(eventlist().now()) << " flowid " << _flow.flow_id() << " track_avg_rtt " << timeAsUs(get_avg_delay())
@@ -2187,6 +2196,11 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             simtime_picosec t_spray = _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
             int observed_region = prism::decide_region(_prism_floor_s, _prism_spread_s,
                                                        _target_Qdelay, t_spray);
+            if (_prism_coordination_mode != PrismCoordinationMode::DISABLED) {
+                _prism_coordinator.closeEpoch(
+                    {_prism_epoch_id, c_cc, c_spray, prism::INCREASE,
+                     _mp->isFrozen(), _mp->cacheSlots()});
+            }
             prismOracleLog(c_cc, c_spray, _prism_floor_s, _prism_spread_s,
                            observed_region, t_spray);
             prismEpochLog(c_cc, c_spray, -1, false);
@@ -2247,7 +2261,24 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             ? prism::decide_region_hyst(f_cc, f_spray, _target_Qdelay, t_spray,
                                         _prism_hysteresis, (prism::Region)_prism_region)
             : prism::decide_region(f_cc, f_spray, _target_Qdelay, t_spray);
-        if (region == prism::DECREASE && f_cc > _target_Qdelay
+        PrismCoordinationResult coordination_result;
+        if (_prism_coordination_mode != PrismCoordinationMode::DISABLED) {
+            coordination_result = _prism_coordinator.closeEpoch(
+                {_prism_epoch_id, f_cc, f_spray, static_cast<prism::Region>(region),
+                 _mp->isFrozen(), _mp->cacheSlots()});
+        }
+        for (const PrismCoordinationSlotAction& slot_action :
+             coordination_result.slot_actions) {
+            if (slot_action.action == PrismCoordinationAction::INVALIDATE) {
+                _mp->invalidateCacheSlot(slot_action.slot, slot_action.generation);
+            }
+        }
+        if (coordination_result.handoff) {
+            const mem_b before = _cwnd;
+            multiplicative_decrease();
+            cut = (_cwnd < before);
+            region = prism::DECREASE;
+        } else if (region == prism::DECREASE && f_cc > _target_Qdelay
                 && eventlist().now() - _last_dec_time > _base_rtt) {
             mem_b before = _cwnd;
             _cwnd = (mem_b)(_cwnd * prism::md_factor(f_cc, _target_Qdelay, _gamma));
