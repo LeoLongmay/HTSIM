@@ -164,6 +164,12 @@ if ( ENABLE_TESTS )
     add_test(NAME motivation_background COMMAND test_motivation_background)
     set_tests_properties(motivation_background PROPERTIES LABELS "motivation" TIMEOUT 60)
 
+    add_executable(test_trace_writer
+        datacenter/add_motivation/common/tests/test_trace_writer.cpp)
+    target_link_libraries(test_trace_writer PRIVATE htsim)
+    add_test(NAME trace_writer COMMAND test_trace_writer)
+    set_tests_properties(trace_writer PROPERTIES LABELS "motivation" TIMEOUT 60)
+
     add_executable(test_reps_slot_cache
         datacenter/add_motivation/common/tests/test_reps_slot_cache.cpp)
     target_link_libraries(test_reps_slot_cache PRIVATE htsim)

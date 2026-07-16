@@ -184,6 +184,24 @@ void late_observation_from_an_older_epoch_is_pending() {
     assert(!result.handoff);
 }
 
+void coordination_results_preserve_trace_values() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10);
+    const auto slots = four_slots();
+
+    coordinator.observeAck(1, 0, 1, 2, false, true);
+    coordinator.observeAck(1, 1, 1, 3, false, true);
+    coordinator.observeAck(1, 2, 1, 4, false, true);
+    coordinator.observeAck(1, 3, 1, 12, false, true);
+    const auto result = coordinator.closeEpoch(hold_epoch(1, 2, 16, slots));
+
+    assert(result.round_id == 1);
+    assert(result.spread_ref_ps == 16);
+    assert(result.slot_actions[0].residual_ps == 0);
+    assert(result.slot_actions[0].reason == "residual_below_threshold");
+    assert(result.slot_actions[3].residual_ps == 10);
+    assert(result.slot_actions[3].reason == "residual_threshold");
+}
+
 }  // namespace
 
 int main() {
@@ -194,4 +212,5 @@ int main() {
     prism_recycle_never_handoffs();
     non_hold_clears_and_frozen_hold_pauses_ordinary_refresh_state();
     late_observation_from_an_older_epoch_is_pending();
+    coordination_results_preserve_trace_values();
 }

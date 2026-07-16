@@ -61,6 +61,17 @@ const char* motivationRegionName(prism::Region region) {
     return "unknown";
 }
 
+const char* motivationCoordinationActionName(PrismCoordinationAction action) {
+    switch (action) {
+    case PrismCoordinationAction::RETAIN: return "retain";
+    case PrismCoordinationAction::INVALIDATE: return "invalidate";
+    case PrismCoordinationAction::PENDING: return "pending";
+    case PrismCoordinationAction::ROUND_COMPLETE_PROGRESS: return "round_complete_progress";
+    case PrismCoordinationAction::ROUND_COMPLETE_HANDOFF: return "round_complete_handoff";
+    }
+    return "unknown";
+}
+
 string motivationCsvField(const string& value) {
     if (value.find_first_of(",\"\r\n") == string::npos) {
         return value;
@@ -2272,6 +2283,17 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             if (slot_action.action == PrismCoordinationAction::INVALIDATE) {
                 _mp->invalidateCacheSlot(slot_action.slot, slot_action.generation);
             }
+            if (_motivation_trace_writer.enabledFor(flowId())) {
+                _motivation_trace_writer.logCoordination({
+                    _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                    _prism_epoch_id, coordination_result.round_id, slot_action.slot,
+                    slot_action.generation, f_cc, f_spray, coordination_result.spread_ref_ps,
+                    slot_action.residual_ps, motivationCoordinationActionName(slot_action.action),
+                    slot_action.reason, coordination_result.round_complete,
+                    false, false,
+                    static_cast<uint64_t>(_cwnd),
+                    motivationRegionName(static_cast<prism::Region>(region))});
+            }
         }
         if (coordination_result.handoff) {
             const mem_b before = _cwnd;
@@ -2285,6 +2307,25 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             _cwnd = max(_cwnd, _min_cwnd);
             _last_dec_time = eventlist().now();
             cut = (_cwnd < before);
+        }
+        if (_motivation_trace_writer.enabledFor(flowId())) {
+            for (PrismCoordinationAction action : coordination_result.actions) {
+                if (action != PrismCoordinationAction::ROUND_COMPLETE_PROGRESS &&
+                    action != PrismCoordinationAction::ROUND_COMPLETE_HANDOFF) {
+                    continue;
+                }
+                _motivation_trace_writer.logCoordination({
+                    _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                    _prism_epoch_id, coordination_result.round_id, UINT32_MAX, UINT64_MAX,
+                    f_cc, f_spray, coordination_result.spread_ref_ps, 0,
+                    motivationCoordinationActionName(action),
+                    action == PrismCoordinationAction::ROUND_COMPLETE_PROGRESS
+                        ? "spread_reduced"
+                        : "spread_not_reduced",
+                    true, coordination_result.progress, coordination_result.handoff,
+                    static_cast<uint64_t>(_cwnd),
+                    motivationRegionName(static_cast<prism::Region>(region))});
+            }
         }
         _prism_region = region;
         _prism_ccc = f_cc;

@@ -14,16 +14,22 @@ OUT="$TMP/coord-cli.dat"
 
 "$BIN" -topo "$TOPO" -tm "$TM" -nodes 128 -sender_cc_algo prism -sender_cc_only \
     -load_balancing_algo reps_actual -paths 8 -disable_trim \
+    -degraded_links 8 -degraded_capacity_gbps 1 \
     -prism_coordination_mode full_prism -motivation_trace_prefix "$PREFIX" \
     -motivation_run_id coord_cli -motivation_scenario coord_cli -end 2 -o "$OUT" \
     >"$TMP/accepted.stdout" 2>&1
 
-for suffix in ack token epoch background pathmap linkmap; do
+for suffix in ack token epoch background pathmap linkmap coordination; do
     if [[ ! -s "$PREFIX.$suffix.csv" ]]; then
         echo "accepted coordination mode did not emit $suffix trace" >&2
         exit 1
     fi
 done
+
+if ! awk 'END { exit NR > 1 ? 0 : 1 }' "$PREFIX.coordination.csv"; then
+    echo "accepted coordination mode emitted only a coordination header" >&2
+    exit 1
+fi
 
 if "$BIN" -topo "$TOPO" -tm "$TM" -nodes 128 -sender_cc_algo prism -sender_cc_only \
     -load_balancing_algo reps_legacy -paths 8 -disable_trim \

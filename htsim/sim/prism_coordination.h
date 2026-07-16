@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "config.h"
@@ -27,9 +28,13 @@ struct PrismCoordinationSlotAction {
     uint16_t slot;
     uint64_t generation;
     PrismCoordinationAction action;
+    simtime_picosec residual_ps;
+    std::string reason;
 };
 
 struct PrismCoordinationResult {
+    uint64_t round_id = 0;
+    simtime_picosec spread_ref_ps = 0;
     std::vector<PrismCoordinationAction> actions;
     std::vector<PrismCoordinationSlotAction> slot_actions;
     std::vector<uint16_t> retained_slots;
@@ -76,11 +81,13 @@ private:
     bool enabled() const;
     void resetRound();
     void addSlotAction(PrismCoordinationResult& result, const UecMpCacheSlot& slot,
-                       PrismCoordinationAction action) const;
+                       PrismCoordinationAction action, simtime_picosec residual_ps,
+                       const char* reason) const;
 
     PrismCoordinationMode _mode;
     simtime_picosec _threshold;
     bool _round_active = false;
+    uint64_t _round_id = 0;
     simtime_picosec _spread_ref = 0;
     std::set<SlotGeneration> _completed;
     std::map<ObservationKey, Observation> _observations;

@@ -38,9 +38,12 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
 
     if (!_round_active) {
         _round_active = true;
+        ++_round_id;
         _spread_ref = epoch.spread;
         _completed.clear();
     }
+    result.round_id = _round_id;
+    result.spread_ref_ps = _spread_ref;
 
     std::vector<UecMpCacheSlot> slots = epoch.slots;
     std::sort(slots.begin(), slots.end(), [](const UecMpCacheSlot& lhs, const UecMpCacheSlot& rhs) {
@@ -64,23 +67,38 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
     for (const UecMpCacheSlot& slot : slots) {
         const SlotGeneration key{slot.slot, slot.generation};
         const auto observation = _observations.find({epoch.epoch_id, key});
-        if (!slot.valid || !slot.ack_validated || observation == _observations.end()) {
+        if (!slot.valid || !slot.ack_validated) {
             _completed.erase(key);
-            addSlotAction(result, slot, PrismCoordinationAction::PENDING);
+            addSlotAction(result, slot, PrismCoordinationAction::PENDING, 0,
+                          "slot_not_refreshable");
+            continue;
+        }
+        if (observation == _observations.end()) {
+            _completed.erase(key);
+            addSlotAction(result, slot, PrismCoordinationAction::PENDING, 0,
+                          "missing_epoch_observation");
             continue;
         }
 
         const simtime_picosec residual = observation->second.qdelay > epoch.floor
                                              ? observation->second.qdelay - epoch.floor
                                              : 0;
-        if (observation->second.ecn || residual >= _threshold) {
+        if (observation->second.ecn) {
             _completed.erase(key);
-            addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE);
+            addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
+                          "ecn_marked");
+            continue;
+        }
+        if (residual >= _threshold) {
+            _completed.erase(key);
+            addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
+                          "residual_threshold");
             continue;
         }
 
         _completed.insert(key);
-        addSlotAction(result, slot, PrismCoordinationAction::RETAIN);
+        addSlotAction(result, slot, PrismCoordinationAction::RETAIN, residual,
+                      "residual_below_threshold");
     }
 
     _observations.clear();
@@ -105,6 +123,7 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
 
     _spread_ref = epoch.spread;
     _completed.clear();
+    ++_round_id;
     return result;
 }
 
@@ -121,9 +140,11 @@ void PrismResidualCoordinator::resetRound() {
 
 void PrismResidualCoordinator::addSlotAction(PrismCoordinationResult& result,
                                               const UecMpCacheSlot& slot,
-                                              PrismCoordinationAction action) const {
+                                              PrismCoordinationAction action,
+                                              simtime_picosec residual_ps,
+                                              const char* reason) const {
     result.actions.push_back(action);
-    result.slot_actions.push_back({slot.slot, slot.generation, action});
+    result.slot_actions.push_back({slot.slot, slot.generation, action, residual_ps, reason});
     switch (action) {
     case PrismCoordinationAction::RETAIN:
         result.retained_slots.push_back(slot.slot);

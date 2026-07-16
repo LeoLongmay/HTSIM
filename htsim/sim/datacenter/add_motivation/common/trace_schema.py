@@ -200,6 +200,10 @@ def _validate_coordination_row(path: Path, row: dict) -> None:
         raise _error(path, "refresh_complete", "invalidate action cannot mark refresh complete")
     if row["handoff"] and row["action"] != "round_complete_handoff":
         raise _error(path, "action", "handoff requires round_complete_handoff action")
+    if row["action"] == "round_complete_handoff" and not row["handoff"]:
+        raise _error(path, "handoff", "round_complete_handoff action requires handoff")
+    if row["action"] == "round_complete_progress" and not row["progress"]:
+        raise _error(path, "progress", "round_complete_progress action requires progress")
 
 
 def _load_file(prefix: Path, kind: str) -> tuple[dict, ...]:
