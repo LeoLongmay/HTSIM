@@ -15,6 +15,8 @@ CircularBufferREPS<T>::CircularBufferREPS(uint16_t bufferSize) : max_size(buffer
     for (int i = 0; i < max_size; i++) {
         buffer[i].isValid = false;
         buffer[i].usable_lifetime = 0;
+        buffer[i].generation = 0;
+        buffer[i].ack_validated = false;
     }
 }
 
@@ -22,13 +24,16 @@ CircularBufferREPS<T>::CircularBufferREPS(uint16_t bufferSize) : max_size(buffer
 template <typename T> CircularBufferREPS<T>::~CircularBufferREPS() { delete[] buffer; }
 
 // Adds an element to the buffer
-template <typename T> void CircularBufferREPS<T>::add(T element) {
+template <typename T> typename CircularBufferREPS<T>::Admission CircularBufferREPS<T>::add(T element) {
+    const uint16_t slot = head;
     if (!buffer[head].isValid) {
         number_fresh_entropies++;
     }
     buffer[head].value = element;
     buffer[head].isValid = true;
     buffer[head].usable_lifetime = repsMaxLifetimeEntropy;
+    buffer[head].generation++;
+    buffer[head].ack_validated = true;
     head = (head + 1) % max_size;
 
     if (number_fresh_entropies > max_size) {
@@ -38,6 +43,7 @@ template <typename T> void CircularBufferREPS<T>::add(T element) {
     if (count > max_size) {
         count = max_size;
     }
+    return {slot, buffer[slot].generation, element, true};
 }
 
 // Removes an element from the buffer, taking the earliest fresh element (FIFO order if valid)
@@ -77,9 +83,45 @@ template <typename T> T CircularBufferREPS<T>::remove_earliest_fresh() {
     return element;
 }
 
+// Removes an element from the buffer, taking the earliest fresh element (FIFO order if valid)
+template <typename T> typename CircularBufferREPS<T>::Selection CircularBufferREPS<T>::remove_earliest_fresh_with_slot() {
+    if (count == 0 || number_fresh_entropies == 0) {
+        throw std::underflow_error("Buffer is empty or no fresh entropies");
+        exit(EXIT_FAILURE);
+    }
+
+    uint16_t offset = head;
+    for (uint16_t scanned = 0; scanned < max_size; ++scanned) {
+        const uint16_t candidate = (head + scanned) % max_size;
+        if (buffer[candidate].isValid) {
+            offset = candidate;
+            break;
+        }
+    }
+    Selection selection = {offset, buffer[offset].generation, buffer[offset].value};
+
+    if (compressed_acks_reuse) {
+        buffer[offset].usable_lifetime--;
+        if (buffer[offset].usable_lifetime <= 0) {
+            buffer[offset].isValid = false;
+            number_fresh_entropies--;
+        }
+    } else {
+        buffer[offset].isValid = false;
+        number_fresh_entropies--;
+    }
+
+    return selection;
+}
+
 
 // Removes an element from the buffer
 template <typename T> T CircularBufferREPS<T>::remove_frozen() {
+    return remove_frozen_with_slot().value;
+}
+
+// Removes an element from the frozen buffer.
+template <typename T> typename CircularBufferREPS<T>::Selection CircularBufferREPS<T>::remove_frozen_with_slot() {
     if (count == 0) {
         throw std::underflow_error("Buffer is empty");
     }
@@ -89,7 +131,9 @@ template <typename T> T CircularBufferREPS<T>::remove_frozen() {
 
     bool old_validity = buffer[head_frozen_mode].isValid;
 
-    T element = buffer[head_frozen_mode].value;
+    Selection selection = {static_cast<uint16_t>(head_frozen_mode),
+                           buffer[head_frozen_mode].generation,
+                           buffer[head_frozen_mode].value};
 
     if (compressed_acks_reuse) {
         buffer[head_frozen_mode].usable_lifetime--;
@@ -108,7 +152,7 @@ template <typename T> T CircularBufferREPS<T>::remove_frozen() {
 
     head_frozen_mode = (head_frozen_mode + 1) % getSize();
 
-    return element;
+    return selection;
 }
 
 // Removes an element from the buffer
@@ -128,6 +172,7 @@ template <typename T> void CircularBufferREPS<T>::resetBuffer() {
         buffer[i].value = 0;
         buffer[i].isValid = false;
         buffer[i].usable_lifetime = 0;
+        buffer[i].ack_validated = false;
     }
     head = 0;
     tail = 0;
@@ -158,6 +203,26 @@ template <typename T> uint16_t CircularBufferREPS<T>::numValid() const {
         }
     }
     return num_valid;
+}
+
+template <typename T> std::vector<typename CircularBufferREPS<T>::SlotSnapshot> CircularBufferREPS<T>::cacheSlots() const {
+    std::vector<SlotSnapshot> snapshots;
+    snapshots.reserve(max_size);
+    for (uint16_t slot = 0; slot < max_size; ++slot) {
+        const Element& element = buffer[slot];
+        snapshots.push_back({slot, element.generation, element.value, element.isValid, element.ack_validated});
+    }
+    return snapshots;
+}
+
+template <typename T> bool CircularBufferREPS<T>::invalidateCacheSlot(uint16_t slot, uint64_t generation) {
+    if (slot >= max_size || !buffer[slot].isValid || buffer[slot].generation != generation) {
+        return false;
+    }
+    buffer[slot].isValid = false;
+    buffer[slot].ack_validated = false;
+    number_fresh_entropies--;
+    return true;
 }
 
 // Prints the elements of the buffer

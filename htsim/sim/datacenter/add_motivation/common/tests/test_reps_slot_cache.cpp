@@ -1,0 +1,80 @@
+#include "uec_mp.h"
+
+#include <cassert>
+
+namespace {
+
+void fill_cache(UecMpReps& reps) {
+    for (uint32_t entropy = 0; entropy < 8; ++entropy) {
+        reps.processEv(entropy, UecMultipath::PATH_GOOD);
+    }
+}
+
+void cache_slots_are_visible_invalidatable_and_selected_by_slot() {
+    UecMpReps reps(16, false, true);
+    fill_cache(reps);
+
+    const auto slots = reps.cacheSlots();
+    assert(slots.size() == 8);
+    assert(slots[3].valid);
+    const uint64_t generation = slots[3].generation;
+
+    assert(reps.invalidateCacheSlot(3, generation));
+    assert(!reps.cacheSlots()[3].valid);
+    assert(!reps.invalidateCacheSlot(3, generation));
+
+    (void)reps.nextEntropy(0, 8);
+    const UecMpSelection selection = reps.lastSelection();
+    assert(selection.source == UecMpSelection::RECYCLED);
+    assert(selection.cache_slot == 0);
+    assert(selection.cache_generation == slots[0].generation);
+}
+
+void good_ack_admission_identifies_the_physical_slot_written() {
+    UecMpReps reps(16, false, true);
+    reps.processEv(7, UecMultipath::PATH_GOOD);
+
+    const UecMpAdmission first = reps.lastAdmission();
+    assert(first.written);
+    assert(first.entropy == 7);
+    const auto first_slots = reps.cacheSlots();
+    assert(first.cache_slot < first_slots.size());
+    assert(first_slots[first.cache_slot].generation == first.cache_generation);
+    assert(first_slots[first.cache_slot].entropy == first.entropy);
+    assert(first_slots[first.cache_slot].valid);
+    assert(first_slots[first.cache_slot].ack_validated);
+
+    assert(reps.invalidateCacheSlot(first.cache_slot, first.cache_generation));
+    for (uint32_t entropy = 8; entropy < 16; ++entropy) {
+        reps.processEv(entropy, UecMultipath::PATH_GOOD);
+    }
+
+    const UecMpAdmission replacement = reps.lastAdmission();
+    assert(replacement.cache_slot == first.cache_slot);
+    assert(replacement.cache_generation > first.cache_generation);
+}
+
+void stale_generation_cannot_invalidate_a_replacement() {
+    UecMpReps reps(16, false, true);
+    reps.processEv(3, UecMultipath::PATH_GOOD);
+    const UecMpAdmission original = reps.lastAdmission();
+    assert(reps.invalidateCacheSlot(original.cache_slot, original.cache_generation));
+
+    for (uint32_t entropy = 4; entropy < 12; ++entropy) {
+        reps.processEv(entropy, UecMultipath::PATH_GOOD);
+    }
+
+    const UecMpAdmission replacement = reps.lastAdmission();
+    assert(replacement.cache_slot == original.cache_slot);
+    assert(replacement.cache_generation > original.cache_generation);
+    assert(!reps.invalidateCacheSlot(original.cache_slot, original.cache_generation));
+    assert(reps.cacheSlots()[replacement.cache_slot].valid);
+}
+
+}  // namespace
+
+int main() {
+    cache_slots_are_visible_invalidatable_and_selected_by_slot();
+    good_ack_admission_identifies_the_physical_slot_written();
+    stale_generation_cannot_invalidate_a_replacement();
+}

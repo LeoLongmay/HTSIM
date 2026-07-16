@@ -184,7 +184,8 @@ void UecMpReps::processEv(uint32_t path_id, PathFeedback feedback) {
     if ((feedback == PATH_GOOD) && !circular_buffer_reps->isFrozenMode()) {
         const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
         const bool overwrites_circular_slot = circular_buffer_reps->isFull();
-        circular_buffer_reps->add(path_id);
+        const auto admission = circular_buffer_reps->add(path_id);
+        _last_admission = {admission.slot, admission.generation, path_id, admission.written};
         if (_token_observer) {
             _token_observer({overwrites_circular_slot ? UecMpTokenEvent::OVERWRITE_GOOD_ACK
                                                       : UecMpTokenEvent::ENQUEUE_GOOD_ACK,
@@ -197,7 +198,8 @@ void UecMpReps::processEv(uint32_t path_id, PathFeedback feedback) {
     } else if (circular_buffer_reps->isFrozenMode() && (feedback == PATH_GOOD)) {
         const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
         const bool overwrites_circular_slot = circular_buffer_reps->isFull();
-        circular_buffer_reps->add(path_id);
+        const auto admission = circular_buffer_reps->add(path_id);
+        _last_admission = {admission.slot, admission.generation, path_id, admission.written};
         if (_token_observer) {
             _token_observer({overwrites_circular_slot ? UecMpTokenEvent::OVERWRITE_GOOD_ACK
                                                       : UecMpTokenEvent::ENQUEUE_GOOD_ACK,
@@ -239,8 +241,10 @@ uint32_t UecMpReps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
             return _crt_path;
         } else {
             const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
-            _crt_path = circular_buffer_reps->remove_frozen();
-            _last_selection = {_crt_path, UecMpSelection::RECYCLED, UecMpSelection::NO_TOKEN};
+            const auto selection = circular_buffer_reps->remove_frozen_with_slot();
+            _crt_path = selection.value;
+            _last_selection = {_crt_path, UecMpSelection::RECYCLED, UecMpSelection::NO_TOKEN,
+                               selection.slot, selection.generation};
             if (_token_observer) {
                 _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
                                  UecMpSelection::NO_TOKEN,
@@ -265,8 +269,10 @@ uint32_t UecMpReps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
             return _crt_path;
         } else {
             const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
-            _crt_path = circular_buffer_reps->remove_earliest_fresh();
-            _last_selection = {_crt_path, UecMpSelection::RECYCLED, UecMpSelection::NO_TOKEN};
+            const auto selection = circular_buffer_reps->remove_earliest_fresh_with_slot();
+            _crt_path = selection.value;
+            _last_selection = {_crt_path, UecMpSelection::RECYCLED, UecMpSelection::NO_TOKEN,
+                               selection.slot, selection.generation};
             if (_token_observer) {
                 _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
                                  UecMpSelection::NO_TOKEN,
@@ -277,6 +283,28 @@ uint32_t UecMpReps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
             return _crt_path;
         }
     }
+}
+
+vector<UecMpCacheSlot> UecMpReps::cacheSlots() const {
+    const auto snapshots = circular_buffer_reps->cacheSlots();
+    vector<UecMpCacheSlot> slots;
+    slots.reserve(snapshots.size());
+    for (const auto& snapshot : snapshots) {
+        slots.push_back({snapshot.slot,
+                         snapshot.generation,
+                         static_cast<uint32_t>(snapshot.value),
+                         snapshot.valid,
+                         snapshot.ack_validated});
+    }
+    return slots;
+}
+
+bool UecMpReps::invalidateCacheSlot(uint16_t slot, uint64_t generation) {
+    return circular_buffer_reps->invalidateCacheSlot(slot, generation);
+}
+
+bool UecMpReps::isFrozen() const {
+    return circular_buffer_reps->isFrozenMode();
 }
 
 

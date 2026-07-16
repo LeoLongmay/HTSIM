@@ -15,12 +15,29 @@
 #include "eventlist.h"
 #include "buffer_reps.h"
 
+struct UecMpCacheSlot {
+    uint16_t slot = UINT16_MAX;
+    uint64_t generation = 0;
+    uint32_t entropy = 0;
+    bool valid = false;
+    bool ack_validated = false;
+};
+
+struct UecMpAdmission {
+    uint16_t cache_slot = UINT16_MAX;
+    uint64_t cache_generation = 0;
+    uint32_t entropy = 0;
+    bool written = false;
+};
+
 struct UecMpSelection {
     enum Source : uint8_t { UNKNOWN, RECYCLED, FIRST_WINDOW, RANDOM_EMPTY };
     static constexpr uint64_t NO_TOKEN = UINT64_MAX;
     uint32_t entropy = 0;
     Source source = UNKNOWN;
     uint64_t token_id = NO_TOKEN;
+    uint16_t cache_slot = UINT16_MAX;
+    uint64_t cache_generation = 0;
 };
 
 struct UecMpTokenEvent {
@@ -60,6 +77,10 @@ public:
     virtual uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) = 0;
     using TokenObserver = std::function<void(const UecMpTokenEvent&)>;
     virtual UecMpSelection lastSelection() const { return {}; }
+    virtual std::vector<UecMpCacheSlot> cacheSlots() const { return {}; }
+    virtual bool invalidateCacheSlot(uint16_t, uint64_t) { return false; }
+    virtual UecMpAdmission lastAdmission() const { return {}; }
+    virtual bool isFrozen() const { return false; }
     virtual void setTokenObserver(TokenObserver) {}
     virtual void setFeedbackTraceContext(uint64_t) {}
 protected:
@@ -124,6 +145,10 @@ public:
     void processEv(uint32_t path_id, PathFeedback feedback) override;
     uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) override;
     UecMpSelection lastSelection() const override { return _last_selection; }
+    std::vector<UecMpCacheSlot> cacheSlots() const override;
+    bool invalidateCacheSlot(uint16_t slot, uint64_t generation) override;
+    UecMpAdmission lastAdmission() const override { return _last_admission; }
+    bool isFrozen() const override;
     void setTokenObserver(TokenObserver observer) override { _token_observer = observer; }
     void setFeedbackTraceContext(uint64_t feedback_event_seq) override {
         _feedback_event_seq = feedback_event_seq;
@@ -136,6 +161,7 @@ private:
     bool _is_trimming_enabled = true;  // whether to trim the circular buffer
     uint64_t _feedback_event_seq = UecMpTokenEvent::NO_EVENT;
     UecMpSelection _last_selection;
+    UecMpAdmission _last_admission;
     TokenObserver _token_observer;
 };
 

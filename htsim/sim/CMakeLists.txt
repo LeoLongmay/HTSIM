@@ -163,6 +163,18 @@ if ( ENABLE_TESTS )
     add_test(NAME motivation_background COMMAND test_motivation_background)
     set_tests_properties(motivation_background PROPERTIES LABELS "motivation" TIMEOUT 60)
 
+    add_executable(test_reps_slot_cache
+        datacenter/add_motivation/common/tests/test_reps_slot_cache.cpp)
+    target_link_libraries(test_reps_slot_cache PRIVATE htsim)
+    add_test(NAME reps_slot_cache COMMAND test_reps_slot_cache)
+    set_tests_properties(reps_slot_cache PROPERTIES LABELS "motivation" TIMEOUT 60)
+
+    add_executable(test_legacy_reps_trace
+        datacenter/add_motivation/common/tests/test_legacy_reps_trace.cpp)
+    target_link_libraries(test_legacy_reps_trace PRIVATE htsim)
+    add_test(NAME legacy_reps_trace COMMAND test_legacy_reps_trace)
+    set_tests_properties(legacy_reps_trace PROPERTIES LABELS "motivation" TIMEOUT 60)
+
     add_test(
         NAME motivation_background_cli
         COMMAND bash
