@@ -94,6 +94,7 @@ set(SOURCE_FILES
     oversubscribed_cc.cpp
     pciemodel.cpp
     pipe.cpp
+    prism_coordination.cpp
     priopullqueue.cpp
     prioqueue.cpp
     qcn.cpp
@@ -168,6 +169,18 @@ if ( ENABLE_TESTS )
     target_link_libraries(test_reps_slot_cache PRIVATE htsim)
     add_test(NAME reps_slot_cache COMMAND test_reps_slot_cache)
     set_tests_properties(reps_slot_cache PROPERTIES LABELS "motivation" TIMEOUT 60)
+
+    add_executable(test_prism_coordination
+        datacenter/add_motivation/common/tests/test_prism_coordination.cpp)
+    target_link_libraries(test_prism_coordination PRIVATE htsim)
+    add_test(NAME prism_coordination COMMAND test_prism_coordination)
+    set_tests_properties(prism_coordination PROPERTIES LABELS "motivation" TIMEOUT 60)
+
+    add_executable(test_prism_decompose
+        datacenter/prism_eval/common/tests/test_prism_decompose.cpp)
+    target_link_libraries(test_prism_decompose PRIVATE htsim)
+    add_test(NAME prism_decompose COMMAND test_prism_decompose)
+    set_tests_properties(prism_decompose PROPERTIES LABELS "prism" TIMEOUT 60)
 
     add_executable(test_legacy_reps_trace
         datacenter/add_motivation/common/tests/test_legacy_reps_trace.cpp)
