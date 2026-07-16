@@ -6,12 +6,13 @@ PrismResidualCoordinator::PrismResidualCoordinator(PrismCoordinationMode mode,
                                                    simtime_picosec threshold)
     : _mode(mode), _threshold(threshold) {}
 
-void PrismResidualCoordinator::observeAck(uint16_t slot, uint64_t generation,
-                                          simtime_picosec qdelay, bool ecn, bool genuine) {
+void PrismResidualCoordinator::observeAck(uint64_t epoch_id, uint16_t slot,
+                                          uint64_t generation, simtime_picosec qdelay,
+                                          bool ecn, bool genuine) {
     if (!genuine) {
         return;
     }
-    _observations[{slot, generation}] = {qdelay, ecn};
+    _observations[{epoch_id, {slot, generation}}] = {qdelay, ecn};
 }
 
 PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordinationEpoch& epoch) {
@@ -62,7 +63,7 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
 
     for (const UecMpCacheSlot& slot : slots) {
         const SlotGeneration key{slot.slot, slot.generation};
-        const auto observation = _observations.find(key);
+        const auto observation = _observations.find({epoch.epoch_id, key});
         if (!slot.valid || !slot.ack_validated || observation == _observations.end()) {
             _completed.erase(key);
             addSlotAction(result, slot, PrismCoordinationAction::PENDING);

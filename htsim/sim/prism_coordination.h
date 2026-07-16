@@ -44,8 +44,8 @@ class PrismResidualCoordinator {
 public:
     PrismResidualCoordinator(PrismCoordinationMode mode, simtime_picosec threshold);
 
-    void observeAck(uint16_t slot, uint64_t generation, simtime_picosec qdelay,
-                    bool ecn, bool genuine);
+    void observeAck(uint64_t epoch_id, uint16_t slot, uint64_t generation,
+                    simtime_picosec qdelay, bool ecn, bool genuine);
     PrismCoordinationResult closeEpoch(const PrismCoordinationEpoch& epoch);
 
 private:
@@ -63,6 +63,16 @@ private:
         bool ecn;
     };
 
+    struct ObservationKey {
+        uint64_t epoch_id;
+        SlotGeneration slot_generation;
+
+        bool operator<(const ObservationKey& other) const {
+            return epoch_id != other.epoch_id ? epoch_id < other.epoch_id
+                                               : slot_generation < other.slot_generation;
+        }
+    };
+
     bool enabled() const;
     void resetRound();
     void addSlotAction(PrismCoordinationResult& result, const UecMpCacheSlot& slot,
@@ -73,7 +83,7 @@ private:
     bool _round_active = false;
     simtime_picosec _spread_ref = 0;
     std::set<SlotGeneration> _completed;
-    std::map<SlotGeneration, Observation> _observations;
+    std::map<ObservationKey, Observation> _observations;
 };
 
 #endif  // PRISM_COORDINATION_H
