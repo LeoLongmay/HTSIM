@@ -71,10 +71,23 @@ void stale_generation_cannot_invalidate_a_replacement() {
     assert(reps.cacheSlots()[replacement.cache_slot].valid);
 }
 
+void non_good_feedback_clears_last_admission() {
+    UecMpReps reps(16, false, true);
+    reps.processEv(7, UecMultipath::PATH_GOOD);
+    assert(reps.lastAdmission().written);
+
+    reps.processEv(7, UecMultipath::PATH_ECN);
+    assert(!reps.lastAdmission().written);
+
+    reps.processEv(7, UecMultipath::PATH_TIMEOUT);
+    assert(!reps.lastAdmission().written);
+}
+
 }  // namespace
 
 int main() {
     cache_slots_are_visible_invalidatable_and_selected_by_slot();
     good_ack_admission_identifies_the_physical_slot_written();
     stale_generation_cannot_invalidate_a_replacement();
+    non_good_feedback_clears_last_admission();
 }

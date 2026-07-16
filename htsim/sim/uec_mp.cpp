@@ -164,6 +164,7 @@ UecMpReps::UecMpReps(uint16_t no_of_paths, bool debug, bool is_trimming_enabled)
 }
 
 void UecMpReps::processEv(uint32_t path_id, PathFeedback feedback) {
+    _last_admission = {};
 
     if ((feedback == PATH_TIMEOUT) && !circular_buffer_reps->isFrozenMode() && circular_buffer_reps->explore_counter == 0) {
         if (_is_trimming_enabled) { // If we have trimming enabled
