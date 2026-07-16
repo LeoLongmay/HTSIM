@@ -182,29 +182,99 @@ void UecMpReps::processEv(uint32_t path_id, PathFeedback feedback) {
     }
 
     if ((feedback == PATH_GOOD) && !circular_buffer_reps->isFrozenMode()) {
+        const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
+        const bool overwrites_circular_slot = circular_buffer_reps->isFull();
         circular_buffer_reps->add(path_id);
+        if (_token_observer) {
+            _token_observer({overwrites_circular_slot ? UecMpTokenEvent::OVERWRITE_GOOD_ACK
+                                                      : UecMpTokenEvent::ENQUEUE_GOOD_ACK,
+                             UecMpSelection::NO_TOKEN,
+                             path_id,
+                             fresh_before,
+                             circular_buffer_reps->getNumberFreshEntropies(),
+                             _feedback_event_seq});
+        }
     } else if (circular_buffer_reps->isFrozenMode() && (feedback == PATH_GOOD)) {
+        const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
+        const bool overwrites_circular_slot = circular_buffer_reps->isFull();
         circular_buffer_reps->add(path_id);
+        if (_token_observer) {
+            _token_observer({overwrites_circular_slot ? UecMpTokenEvent::OVERWRITE_GOOD_ACK
+                                                      : UecMpTokenEvent::ENQUEUE_GOOD_ACK,
+                             UecMpSelection::NO_TOKEN,
+                             path_id,
+                             fresh_before,
+                             circular_buffer_reps->getNumberFreshEntropies(),
+                             _feedback_event_seq});
+        }
     }
 }
 
 uint32_t UecMpReps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
     if (circular_buffer_reps->explore_counter > 0) {
         circular_buffer_reps->explore_counter--;
-        return rand() % _no_of_paths;
+        _crt_path = rand() % _no_of_paths;
+        _last_selection = {_crt_path, UecMpSelection::RANDOM_EMPTY, UecMpSelection::NO_TOKEN};
+        if (_token_observer) {
+            _token_observer({UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                             UecMpSelection::NO_TOKEN,
+                             _crt_path,
+                             circular_buffer_reps->getNumberFreshEntropies(),
+                             circular_buffer_reps->getNumberFreshEntropies()});
+        }
+        return _crt_path;
     }
 
     if (circular_buffer_reps->isFrozenMode()) {
         if (circular_buffer_reps->isEmpty()) {
-            return rand() % _no_of_paths;
+            _crt_path = rand() % _no_of_paths;
+            _last_selection = {_crt_path, UecMpSelection::RANDOM_EMPTY, UecMpSelection::NO_TOKEN};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 0,
+                                 0});
+            }
+            return _crt_path;
         } else {
-            return circular_buffer_reps->remove_frozen();
+            const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
+            _crt_path = circular_buffer_reps->remove_frozen();
+            _last_selection = {_crt_path, UecMpSelection::RECYCLED, UecMpSelection::NO_TOKEN};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 fresh_before,
+                                 circular_buffer_reps->getNumberFreshEntropies()});
+            }
+            return _crt_path;
         }
     } else {
         if (circular_buffer_reps->isEmpty() || circular_buffer_reps->getNumberFreshEntropies() == 0) {
-            return _crt_path = rand() % _no_of_paths;
+            _crt_path = rand() % _no_of_paths;
+            _last_selection = {_crt_path, UecMpSelection::RANDOM_EMPTY, UecMpSelection::NO_TOKEN};
+            if (_token_observer) {
+                const uint32_t fresh = circular_buffer_reps->getNumberFreshEntropies();
+                _token_observer({UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 fresh,
+                                 fresh});
+            }
+            return _crt_path;
         } else {
-            return circular_buffer_reps->remove_earliest_fresh();
+            const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
+            _crt_path = circular_buffer_reps->remove_earliest_fresh();
+            _last_selection = {_crt_path, UecMpSelection::RECYCLED, UecMpSelection::NO_TOKEN};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 fresh_before,
+                                 circular_buffer_reps->getNumberFreshEntropies()});
+            }
+            return _crt_path;
         }
     }
 }
@@ -223,6 +293,18 @@ UecMpRepsLegacy::UecMpRepsLegacy(uint16_t no_of_paths, bool debug)
 }
 
 void UecMpRepsLegacy::processEv(uint32_t path_id, PathFeedback feedback) {
+    if (feedback == PATH_GOOD_HIGH_RESIDUAL) {
+        uint32_t queue_depth = _next_tokens.size();
+        if (_token_observer) {
+            _token_observer({UecMpTokenEvent::REJECT_HIGH_RESIDUAL,
+                             UecMpSelection::NO_TOKEN,
+                             path_id,
+                             queue_depth,
+                             queue_depth,
+                             _feedback_event_seq});
+        }
+        return;
+    }
     if (feedback == PATH_GOOD){
         uint32_t queue_depth_before = _next_tokens.size();
         _next_tokens.push_back({path_id, _next_token_id++});

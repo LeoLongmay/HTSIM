@@ -28,6 +28,10 @@ std::pair<const char*, const char*> tokenOperation(UecMpTokenEvent::Operation op
     switch (operation) {
     case UecMpTokenEvent::ENQUEUE_GOOD_ACK:
         return {"enqueue_good_ack", "good_ack"};
+    case UecMpTokenEvent::OVERWRITE_GOOD_ACK:
+        return {"overwrite_good_ack", "buffer_full"};
+    case UecMpTokenEvent::REJECT_HIGH_RESIDUAL:
+        return {"reject_high_residual", "residual_threshold"};
     case UecMpTokenEvent::DEQUEUE_RECYCLE:
         return {"dequeue_recycle", "recycle"};
     case UecMpTokenEvent::SELECT_FIRST_WINDOW:

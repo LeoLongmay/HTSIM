@@ -19,8 +19,9 @@ bash htsim/sim/datacenter/add_motivation/expM1_entropy_quality/repro.sh smoke
 bash htsim/sim/datacenter/add_motivation/expM1_entropy_quality/calibrate.sh
 
 # Analyze calibration only and atomically lock the qualifying formal pair.
-python3 htsim/sim/datacenter/add_motivation/expM1_entropy_quality/analyze.py \
-  --calibration --select-formal
+# The runner uses one bounded-memory child process per real trace and resumes from
+# a project-local checkpoint if interrupted.
+python3 htsim/sim/datacenter/add_motivation/expM1_entropy_quality/calibration_runner.py
 
 # Run exactly the selected symmetric/gray pair at seeds 13 through 17.
 bash htsim/sim/datacenter/add_motivation/expM1_entropy_quality/repro.sh full
@@ -30,7 +31,14 @@ python3 htsim/sim/datacenter/add_motivation/expM1_entropy_quality/analyze.py --f
 
 # Render only from formal aggregate CSVs, never from traces or manifests.
 python3 htsim/sim/datacenter/add_motivation/expM1_entropy_quality/make_figs.py --render
+
+# Remove generated traces, logs, traffic matrices, and aggregate CSVs.
+# The final figure under figs/ is retained.
+bash htsim/sim/datacenter/add_motivation/expM1_entropy_quality/clean_outputs.sh
 ```
+
+All files under `data/` are generated intermediates. The locked configuration,
+run/analyze/plot code, and final figure are retained; a clean rerun recreates the data.
 
 The evidence policy is fixed in code and has no CLI overrides:
 

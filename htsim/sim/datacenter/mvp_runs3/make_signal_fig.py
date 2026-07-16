@@ -28,7 +28,7 @@ SCOPE (honest): this is a SIGNAL-representation result. It shows the two control
 diverge and what the mean conflates. It does NOT claim a controller is "wrong" or measure
 a throughput/latency cost (that needs running both controllers = Evaluation).
 """
-import os, sys, math, collections, statistics as st
+import argparse, os, re, sys, math, collections, statistics as st
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOADS = [4, 8, 16, 32, 64]   # offered load = #senders -> 16 pod0 receivers
@@ -44,6 +44,16 @@ MIN_PATH_SAMPLES = 3         # min ACKs on a (flow,path) in-window to use its me
 # then trims the surrounding whitespace (no large white border).
 FIGSIZE = (6.4, 4.8)
 FRAME = dict(left=0.17, right=0.95, top=0.93, bottom=0.16)
+INPUT_PREFIX = "sigL"
+OUTPUT_SUFFIX = ""
+
+
+def signal_tag(n, seed):
+    return f"{INPUT_PREFIX}_n{n}.s{seed}"
+
+
+def output_stem(stem):
+    return f"{stem}{OUTPUT_SUFFIX}"
 
 
 def parse6(path):
@@ -124,7 +134,7 @@ def across_seeds(n, failed=12):
     """((floor m,std),(avg m,std)) over seeds for load level n."""
     fl, av = [], []
     for s in SEEDS:
-        pt = seed_point(f"sigL_n{n}.s{s}")
+        pt = seed_point(signal_tag(n, s))
         if pt:
             fl.append(pt[0]); av.append(pt[1])
     fm = (st.mean(fl), st.stdev(fl) if len(fl) > 1 else 0.0) if fl else (0.0, 0.0)
@@ -138,9 +148,9 @@ def render_dist():
     import matplotlib.pyplot as plt
     vals = []
     for s in SEEDS:
-        vals += path_means(f"sigL_n{DIST_LOAD}.s{s}")
+        vals += path_means(signal_tag(DIST_LOAD, s))
     floor = min(vals) if vals else 0.0
-    pt = [seed_point(f"sigL_n{DIST_LOAD}.s{s}") for s in SEEDS]
+    pt = [seed_point(signal_tag(DIST_LOAD, s)) for s in SEEDS]
     pt = [p for p in pt if p]
     floor_m = st.mean([p[0] for p in pt]) if pt else floor
     avg_m = st.mean([p[1] for p in pt]) if pt else 0.0
@@ -154,13 +164,13 @@ def render_dist():
         ax.axvline(avg_m, color="tab:blue", lw=2.8,
                    label="avg queuing delay")
         ax.axvline(TARGET_US, color="gray", ls="--", lw=1.8, label="target queuing delay")
-        ax.set_xlabel("Per-path queuing delay (us)")
+        ax.set_xlabel("Per-path queueing delay (us)")
         ax.set_ylabel("Number of paths")
         ax.grid(alpha=0.3)
         plt.subplots_adjust(**FRAME)
-        fig.savefig(os.path.join(HERE, "figS1_path_distribution.png"), dpi=140,
+        fig.savefig(os.path.join(HERE, output_stem("figS1_path_distribution") + ".png"), dpi=140,
                     bbox_inches="tight", pad_inches=0.02)
-        fig.savefig(os.path.join(HERE, "figS1_path_distribution.pdf"),
+        fig.savefig(os.path.join(HERE, output_stem("figS1_path_distribution") + ".pdf"),
                     bbox_inches="tight", pad_inches=0.02)
         plt.close(fig)
     print(f"figS1 (n={DIST_LOAD}, failed=12): floor={floor_m:.2f} avg_delay={avg_m:.2f} "
@@ -176,11 +186,11 @@ def render_cdf():
     import matplotlib.pyplot as plt
     vals = []
     for s in SEEDS:
-        vals += path_means(f"sigL_n{DIST_LOAD}.s{s}")
+        vals += path_means(signal_tag(DIST_LOAD, s))
     vals.sort()
     n = len(vals)
     cdf = [(i + 1) / n for i in range(n)]
-    pt = [seed_point(f"sigL_n{DIST_LOAD}.s{s}") for s in SEEDS]
+    pt = [seed_point(signal_tag(DIST_LOAD, s)) for s in SEEDS]
     pt = [p for p in pt if p]
     floor_m = st.mean([p[0] for p in pt]) if pt else 0.0
     avg_m = st.mean([p[1] for p in pt]) if pt else 0.0
@@ -232,9 +242,9 @@ def render_sweep():
         ax.set_ylim(bottom=0)
         ax.grid(alpha=0.3)
         plt.subplots_adjust(**FRAME)
-        fig.savefig(os.path.join(HERE, "figS2_load_sweep.png"), dpi=140,
+        fig.savefig(os.path.join(HERE, output_stem("figS2_load_sweep") + ".png"), dpi=140,
                     bbox_inches="tight", pad_inches=0.02)
-        fig.savefig(os.path.join(HERE, "figS2_load_sweep.pdf"),
+        fig.savefig(os.path.join(HERE, output_stem("figS2_load_sweep") + ".pdf"),
                     bbox_inches="tight", pad_inches=0.02)
         plt.close(fig)
     print("figS2 floor (min) :", [round(v, 2) for v in fm])
@@ -252,16 +262,16 @@ def render_legend():
     from matplotlib.patches import Patch
     handles = [
         Line2D([], [], color="tab:red", lw=2.8, label=r"$C_{cc}$"),
-        Line2D([], [], color="tab:blue", lw=2.8, label="avg queuing delay"),
-        Line2D([], [], color="gray", ls="--", lw=1.8, label="target queuing delay"),
+        Line2D([], [], color="tab:blue", lw=2.8, label="avg queueing delay"),
+        Line2D([], [], color="gray", ls="--", lw=1.8, label="target queueing delay"),
         Patch(facecolor="tab:orange", alpha=0.25, label=r"$C_{spray}$"),
     ]
     with plt.rc_context({"font.size": 24}):
         figL = plt.figure(figsize=(22, 0.9))
         figL.legend(handles=handles, loc="center", ncol=4, frameon=False)
-        figL.savefig(os.path.join(HERE, "figS_legend.png"), dpi=140,
-                     bbox_inches="tight", pad_inches=0.02)
-        figL.savefig(os.path.join(HERE, "figS_legend.pdf"),
+        figL.savefig(os.path.join(HERE, output_stem("figS_legend") + ".png"), dpi=140,
+                    bbox_inches="tight", pad_inches=0.02)
+        figL.savefig(os.path.join(HERE, output_stem("figS_legend") + ".pdf"),
                      bbox_inches="tight", pad_inches=0.02)
         plt.close(figL)
     print("figS_legend: C_cc | avg queuing delay | target queuing delay | conflated spread C_spray")
@@ -299,7 +309,22 @@ def _selftest():
 
 
 if __name__ == "__main__":
-    if "--selftest" in sys.argv:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--input-prefix", default="sigL")
+    parser.add_argument("--output-suffix", default="")
+    parser.add_argument("--only-dist", action="store_true")
+    args = parser.parse_args()
+    if args.selftest:
         _selftest()
+    elif not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", args.input_prefix):
+        parser.error("--input-prefix must contain only letters, digits, and underscores")
+    elif args.output_suffix and not re.fullmatch(r"_[A-Za-z0-9_]+", args.output_suffix):
+        parser.error("--output-suffix must be empty or begin with '_' and contain only letters, digits, and underscores")
     else:
-        render()
+        INPUT_PREFIX = args.input_prefix
+        OUTPUT_SUFFIX = args.output_suffix
+        if args.only_dist:
+            render_dist()
+        else:
+            render()

@@ -161,6 +161,41 @@ def render_latency():
     ax.set_title("Reaction latency: the bounded cost of O(1) sampling"); ax.legend(fontsize=9); ax.grid(alpha=0.3)
     plt.tight_layout(); plot_style.save(fig, "figO4_latency", FIGS); plt.close(fig)
 
+def render_overhead_table():
+    """figO_overhead_table: per-flow CC-layer overhead summary (state bytes + ns/ACK), read straight
+    from the microbench CSVs so it always tracks the latest bench run. REPS spray excluded (common to
+    all). State widths use a uniform per-sample size across schemes (see overhead_bench.cpp), so the
+    comparison isolates the algorithmic state COUNT (Prism's O(1) scalars vs the O(H) median window)."""
+    import matplotlib.pyplot as plt
+    os.makedirs(FIGS, exist_ok=True)
+    st = read_state(os.path.join(DATA, "bench_state.csv"))
+    cp = read_compute(os.path.join(DATA, "bench_compute.csv"))
+    o1, med = cp["o1"], cp["median"]
+    def med_at(algo, h):
+        return next((ns for hh, ns in med.get(algo, []) if hh == h), float("nan"))
+    cols = [("PRISM", "prism", o1.get("prism")), ("NSCC", "nscc", o1.get("nscc")),
+            ("STrack", "strack", o1.get("strack")), ("Swift", "swift", o1.get("swift")),
+            ("MNSCC@32", "mnscc", med_at("mnscc", 32)), ("MSwift@64", "mswift", med_at("mswift", 64))]
+    headers = [c[0] for c in cols]
+    state_row = [f"{st[c[1]]} B" for c in cols]
+    ns_row = [(f"{c[2]:.2f}" if c[2] < 100 else f"{c[2]:.0f}") for c in cols]
+    plot_style.apply_style(15)
+    fig, ax = plt.subplots(figsize=(11, 2.6)); ax.axis("off")
+    tbl = ax.table(cellText=[state_row, ns_row], rowLabels=["state per flow", "ns per ACK"],
+                   colLabels=headers, cellLoc="center", rowLoc="center", loc="center")
+    tbl.auto_set_font_size(False); tbl.set_fontsize(13); tbl.scale(1, 1.7)
+    for (r, c), cell in tbl.get_celld().items():
+        if r == 0:                       # header row
+            cell.set_facecolor("#e8e8e8"); cell.set_text_props(weight="bold")
+        elif c == 0:                     # PRISM data column
+            cell.set_facecolor("#e6f0e6")
+        if c == -1:                      # row labels
+            cell.set_text_props(weight="bold")
+    ax.set_title("Per-flow overhead, CC layer only (REPS spray is common to all, excluded)", pad=18)
+    fig.text(0.5, 0.01, "MNSCC/MSwift at default windows H=32/64; absolute ns are machine-specific "
+             "(the ratio/scaling is the claim).", ha="center", fontsize=9, color="0.4")
+    plt.tight_layout(); plot_style.save(fig, "figO_overhead_table", FIGS); plt.close(fig)
+
 def print_tables():
     """Complexity + wire table to stdout (the README backbone; sourced from the spec §2)."""
     st = read_state(os.path.join(DATA, "bench_state.csv"))
@@ -185,9 +220,9 @@ def selftest():
     assert abs(c["o1"]["prism"] - 1.5) < 1e-9, c
     assert c["median"]["mnscc"] == [(2, 5.0), (32, 40.0)], c
     with open(os.path.join(d, "s.csv"), "w") as fh:
-        fh.write("algo,bytes\nprism,56\nmnscc,264\n")
+        fh.write("algo,bytes\nprism,32\nmnscc,136\n")
     s = read_state(os.path.join(d, "s.csv"))
-    assert s["prism"] == 56 and s["mnscc"] == 264, s
+    assert s["prism"] == 32 and s["mnscc"] == 136, s
     # figO3/figO4 aggregation on a synthetic PRISM_EPOCH csv (cols: time_ns,flow_id,base_rtt_ns,
     # c_cc_ns,c_spray_ns,region,cwnd_bytes,samples,cut). Two decisions 14000ns apart -> cadence 14us.
     e = os.path.join(d, "epoch_k1_s13.epoch.csv")
@@ -206,6 +241,7 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         selftest()
     elif "--render" in sys.argv:
-        render_state(); render_compute(); render_samples(); render_latency(); print_tables()
+        render_state(); render_compute(); render_samples(); render_latency()
+        render_overhead_table(); print_tables()
     else:
         print("usage: make_figs.py [--selftest | --render]")

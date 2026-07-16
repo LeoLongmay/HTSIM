@@ -17,9 +17,9 @@ typedef uint64_t u64;
 using clk = std::chrono::steady_clock;
 
 // --- representative signal-state groups, mirroring the real UecSrc members (file:line) ---
-struct PrismState  { u64 start,min,max,ccc,cspray; uint32_t samples; int region; bool genuine; };   // uec.h:483-490
-struct MnsccState  { u64 window[32]; uint32_t wcount, whead; };                                      // uec.h:495-498 (MNSCC_MAX_H=32)
-struct MswiftState { u64 window[64]; uint32_t wcount, whead; };                                      // uec.h:502-505 median window (SWIFT_MAX_H=64); overcount is LSwift-base state, excluded for apples-to-apples vs MNSCC
+struct PrismState  { u64 start; uint32_t min,max,ccc,cspray,samples; uint8_t region; bool genuine; }; // PRISM per-flow state mirroring uec.h: start is an absolute timestamp (64-bit); min/max/ccc/cspray are queuing DELAYS (<2^32 ps -> 32-bit); region has 3 states (8-bit). ccc/cspray double as the A1 EWMA floor/spread (folded in-place, no extra state) -> 32 B
+struct MnsccState  { uint32_t window[32]; uint32_t wcount, whead; };                                  // uec.h (MNSCC_MAX_H=32); window holds queuing-delay samples at the SAME 32-bit width as PRISM, for an apples-to-apples per-sample comparison -> 136 B
+struct MswiftState { uint32_t window[64]; uint32_t wcount, whead; };                                  // median window (SWIFT_MAX_H=64), same 32-bit per-sample width; overcount is LSwift-base state, excluded for apples-to-apples vs MNSCC -> 264 B
 struct SwiftState  { u64 last_dec; };                                                                // uec.h:~1699
 struct NsccState   { u64 reuse; };          // NSCC reuses base UecSrc scalars; no signal buffer     // uec.h:1460-1507
 struct RepsElem    { uint16_t value; bool isValid; int usable_lifetime; };                           // buffer_reps.h
@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
 
     // ---- per-ACK signal extraction ----
     // PRISM per-ACK: running min/max update (the only per-ACK work; decompose is per-epoch).
-    PrismState ps{}; ps.min = ~0ULL; ps.max = 0;
+    PrismState ps{}; ps.min = ~0u; ps.max = 0;
     double ns_prism = bench_ns([&](long i){ u64 q=q_of(i); if(q<ps.min)ps.min=q; if(q>ps.max)ps.max=q; ps.samples++; return ps.min^ps.max; }, N);
     // PRISM per-decision: decide_region + md_factor (runs once per epoch, reported separately).
     double ns_prism_dec = bench_ns([&](long i){ u64 cc=q_of(i), sp=q_of(i+1); int r=prism::decide_region(cc,sp,T_CC,T_SPRAY); double m=prism::md_factor(cc,T_CC,0.8); return (u64)r ^ (u64)(m*1e6); }, N);

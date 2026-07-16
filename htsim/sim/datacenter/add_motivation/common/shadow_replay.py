@@ -28,7 +28,9 @@ class LegacyToken:
 class LegacyFifo:
     """Exact reconstruction of one flow's real Legacy REPS FIFO."""
 
-    _NON_MUTATING_OPERATIONS = frozenset({"select_first_window", "select_random_empty"})
+    _NON_MUTATING_OPERATIONS = frozenset({
+        "select_first_window", "select_random_empty", "reject_high_residual", "overwrite_good_ack",
+    })
 
     def __init__(self) -> None:
         self._flow_id: Optional[int] = None

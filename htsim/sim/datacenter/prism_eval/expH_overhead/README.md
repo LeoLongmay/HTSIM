@@ -19,12 +19,12 @@ Wire column: none of these schemes add any extra header fields.
 
 | Arm         | State (B) | State O     | Per-ACK O   | Wire |
 |-------------|----------:|-------------|-------------|------|
-| Prism       |        56 | O(1)        | O(1) min/max | none |
+| Prism       |        32 | O(1)        | O(1) min/max | none |
 | NSCC        |         8 | O(1)        | O(1)        | none |
 | STrack      |         8 | O(1)        | O(1)        | none |
 | Swift       |         8 | O(1)        | O(1)        | none |
-| MNSCC       |       264 | O(1) [32-win] | O(H log H) | none |
-| MSwift      |       520 | O(1) [64-win] | O(H log H) | none |
+| MNSCC       |       136 | O(1) [32-win] | O(H log H) | none |
+| MSwift      |       264 | O(1) [64-win] | O(H log H) | none |
 | REPS (LB)   |        72 | O(8)        | O(1)        | none |
 | BITMAP\*    |    O(#paths) | O(#paths) | O(#paths)  | none |
 
@@ -37,9 +37,11 @@ Its state grows linearly with the number of monitored paths; shown in figO1 (rig
 
 ### figO1 — State footprint
 
-**Reading.** Prism holds 56 B per flow (two uint32 running-min/max accumulators plus scalars).
+**Reading.** Prism holds 32 B per flow (one 8 B epoch timestamp + four 4 B delay scalars — running
+min/max and the EWMA floor/spread — plus a 4 B sample count and 1 B region/flag each).
 NSCC, STrack, and Swift each need 8 B (one or two scalars).  MNSCC carries a 32-sample circular
-buffer (264 B) and MSwift a 64-sample buffer (520 B) — 4.7× and 9.3× more than Prism.  REPS
+buffer (136 B) and MSwift a 64-sample buffer (264 B) — 4.25× and 8.25× more than Prism, at the same
+per-sample width.  REPS
 (the load balancer) holds a per-path bitmask, fixed at 72 B for 8 paths.  The right panel
 shows that Prism and REPS are flat as #paths grows, while a hypothetical per-path design scales
 linearly.

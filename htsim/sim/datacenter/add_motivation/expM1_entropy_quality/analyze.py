@@ -26,7 +26,7 @@ try:
         attach_same_epoch_residuals,
     )
     from htsim.sim.datacenter.add_motivation.common.statistics import cluster_bootstrap
-    from htsim.sim.datacenter.add_motivation.common.trace_schema import load_trace
+    from htsim.sim.datacenter.add_motivation.common.trace_schema import load_trace_compact
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
     from htsim.sim.datacenter.add_motivation.common.residual_join import (
@@ -34,7 +34,7 @@ except ModuleNotFoundError:
         attach_same_epoch_residuals,
     )
     from htsim.sim.datacenter.add_motivation.common.statistics import cluster_bootstrap
-    from htsim.sim.datacenter.add_motivation.common.trace_schema import load_trace
+    from htsim.sim.datacenter.add_motivation.common.trace_schema import load_trace_compact
 
 
 HERE = Path(__file__).resolve().parent
@@ -152,6 +152,44 @@ class RiskRatioBootstrapResult:
 
 def _ratio(numerator: float, denominator: float) -> Optional[float]:
     return numerator / denominator if denominator else None
+
+
+def _without_unclosed_tail_acks(bundle):
+    """Exclude only simulator-end ACKs whose epoch never closed."""
+
+    closed_by_flow = defaultdict(list)
+    for epoch in bundle.epoch:
+        closed_by_flow[epoch["flow_id"]].append(epoch)
+
+    closed_identities = {
+        (epoch["flow_id"], epoch["epoch_id"]) for epoch in bundle.epoch
+    }
+    missing_by_flow = defaultdict(list)
+    for ack in bundle.ack:
+        if (ack["flow_id"], ack["epoch_id"]) not in closed_identities:
+            missing_by_flow[ack["flow_id"]].append(ack)
+
+    excluded = set()
+    for flow_id, missing in missing_by_flow.items():
+        closed = closed_by_flow.get(flow_id, ())
+        missing_epoch_ids = {ack["epoch_id"] for ack in missing}
+        if not closed:
+            is_tail = len(missing_epoch_ids) == 1
+        else:
+            last_closed = max(closed, key=lambda epoch: epoch["epoch_id"])
+            is_tail = (
+                missing_epoch_ids == {last_closed["epoch_id"] + 1}
+                and all(ack["event_seq"] > last_closed["event_seq"] for ack in missing)
+            )
+        if is_tail:
+            excluded.update(ack["event_seq"] for ack in missing)
+
+    if not excluded:
+        return bundle
+    return dataclasses.replace(
+        bundle,
+        ack=tuple(ack for ack in bundle.ack if ack["event_seq"] not in excluded),
+    )
 
 
 def _finite(value) -> bool:
@@ -416,8 +454,6 @@ def _token_rows(bundle, attached: tuple[ResidualAck, ...]) -> list[dict]:
             dequeues[(token["flow_id"], token["token_id"])].append(token)
     selected = defaultdict(list)
     for ack_row in bundle.ack:
-        if "source_token_id" not in ack_row:
-            continue
         token_id = ack_row["source_token_id"]
         if (
             ack_row.get("selection_source") == "recycled"
@@ -493,6 +529,7 @@ def analyze_bundle(
     if auxiliary is None:
         auxiliary = AuxiliaryMetrics(False, None, None, None, 0, 0, "auxiliary_not_requested")
 
+    bundle = _without_unclosed_tail_acks(bundle)
     attached = tuple(attach_same_epoch_residuals(bundle, threshold_ps=threshold_ps))
     unmarked = [item for item in attached if not item.row["ecn"]]
     residual_rows = tuple({
@@ -715,7 +752,9 @@ def _atomic_csv(path: Path, fieldnames: list[str], rows: Iterable[dict]) -> None
             prefix=f".{path.name}.", suffix=".tmp", delete=False,
         ) as stream:
             temporary = Path(stream.name)
-            writer = csv.DictWriter(stream, fieldnames=fieldnames, extrasaction="ignore")
+            writer = csv.DictWriter(
+                stream, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n"
+            )
             writer.writeheader()
             writer.writerows(rows)
             stream.flush()
@@ -1475,6 +1514,7 @@ def _formal_result(
 def analyze_phase(
     phase: str,
     phase_dir: Path,
+    manifest_paths: Optional[Iterable[Path]] = None,
 ) -> tuple[list[dict], Optional[dict]]:
     """Read one phase directory and atomically replace its aggregate CSV tables."""
 
@@ -1485,7 +1525,18 @@ def analyze_phase(
         phase_dir.relative_to(HERE)
     except ValueError as exc:
         raise ValueError(f"phase directory must remain inside {HERE}: {phase_dir}") from exc
-    manifests = sorted(phase_dir.glob("*.manifest.json"))
+    manifests = (
+        sorted(Path(path).resolve() for path in manifest_paths)
+        if manifest_paths is not None
+        else sorted(phase_dir.glob("*.manifest.json"))
+    )
+    for manifest_path in manifests:
+        try:
+            manifest_path.relative_to(phase_dir)
+        except ValueError as exc:
+            raise ValueError(
+                f"manifest must remain inside requested phase directory: {manifest_path}"
+            ) from exc
     if not manifests:
         raise ValueError(f"no manifests found in requested phase directory: {phase_dir}")
     formal_config = None
@@ -1529,32 +1580,38 @@ def analyze_phase(
     coverage_rows = []
     group_rows = []
     for manifest, metadata, prefix, simulation_path in run_inputs:
-        trace = load_trace(prefix)
+        # Real M1 token traces are large. The compact loader preserves the same
+        # validation and row interface without materializing one dict per field.
+        trace = load_trace_compact(prefix)
         _validate_bundle_binding(trace, manifest)
         analysis = analyze_bundle(
             trace, threshold_ps=PRIMARY_THRESHOLD_PS,
             auxiliary=parse_flow_output(simulation_path),
         )
         summary_rows.append(_summary_dict(analysis.summary, metadata))
-        residual_rows.extend(_enrich(analysis.residual_rows, metadata))
-        next_rows.extend(_enrich(analysis.next_use_rows, metadata))
-        token_rows.extend(_enrich(analysis.token_rows, metadata))
-        coverage_rows.extend(_enrich(analysis.coverage_rows, metadata))
-        group_rows.extend(_enrich(analysis.group_rows, metadata))
+        # Calibration selection is defined entirely on per-run summaries. Retaining
+        # every raw observation across its 90 runs would exhaust the experiment host
+        # without contributing to selection; formal analysis retains all details.
+        if phase == "formal":
+            residual_rows.extend(_enrich(analysis.residual_rows, metadata))
+            next_rows.extend(_enrich(analysis.next_use_rows, metadata))
+            token_rows.extend(_enrich(analysis.token_rows, metadata))
+            coverage_rows.extend(_enrich(analysis.coverage_rows, metadata))
+            group_rows.extend(_enrich(analysis.group_rows, metadata))
 
     _write_table(phase_dir / "summary.csv", summary_rows, ["run_id"])
-    _write_table(phase_dir / "ecdf.csv", residual_rows, ["run_id", "residual_ps"])
-    _write_table(phase_dir / "next_use.csv", next_rows, ["run_id", "flow_id"])
-    _write_table(phase_dir / "token_detail.csv", token_rows, ["run_id", "token_id"])
-    _write_table(phase_dir / "coverage.csv", coverage_rows, ["run_id", "flow_id"])
-    _write_table(phase_dir / "group_direction.csv", group_rows, ["run_id", "grouping"])
-    conditioning = _conditioning_table(next_rows)
-    tokens = _token_aggregate(token_rows)
-    _write_table(phase_dir / "conditioning.csv", conditioning, ["arm", "current_state"])
-    _write_table(phase_dir / "tokens.csv", tokens, ["arm"])
 
     formal = None
     if phase == "formal":
+        _write_table(phase_dir / "ecdf.csv", residual_rows, ["run_id", "residual_ps"])
+        _write_table(phase_dir / "next_use.csv", next_rows, ["run_id", "flow_id"])
+        _write_table(phase_dir / "token_detail.csv", token_rows, ["run_id", "token_id"])
+        _write_table(phase_dir / "coverage.csv", coverage_rows, ["run_id", "flow_id"])
+        _write_table(phase_dir / "group_direction.csv", group_rows, ["run_id", "grouping"])
+        conditioning = _conditioning_table(next_rows)
+        tokens = _token_aggregate(token_rows)
+        _write_table(phase_dir / "conditioning.csv", conditioning, ["arm", "current_state"])
+        _write_table(phase_dir / "tokens.csv", tokens, ["arm"])
         formal = _formal_result(summary_rows, next_rows, group_rows, formal_config)
         _write_table(phase_dir / "formal_result.csv", [formal], list(formal))
     return summary_rows, formal
@@ -1566,13 +1623,22 @@ def main(argv=None) -> int:
     mode.add_argument("--calibration", action="store_true")
     mode.add_argument("--formal", action="store_true")
     parser.add_argument("--select-formal", action="store_true")
+    parser.add_argument(
+        "--manifest", type=Path,
+        help="analyze exactly one in-phase manifest; used by the resumable calibration runner",
+    )
     args = parser.parse_args(argv)
     if args.select_formal and not args.calibration:
         parser.error("--select-formal requires --calibration")
+    if args.manifest is not None and not args.calibration:
+        parser.error("--manifest requires --calibration")
+    if args.manifest is not None and args.select_formal:
+        parser.error("--manifest cannot be combined with --select-formal")
     phase = "calibration" if args.calibration else "formal"
     phase_dir = HERE / "data" / phase
     try:
-        summaries, formal = analyze_phase(phase, phase_dir)
+        manifests = None if args.manifest is None else (args.manifest,)
+        summaries, formal = analyze_phase(phase, phase_dir, manifests)
         if args.select_formal:
             selection = select_formal(
                 summaries, FORMAL_CONFIG, phase_dir / "calibration_selection.csv"

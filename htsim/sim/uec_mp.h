@@ -26,6 +26,8 @@ struct UecMpSelection {
 struct UecMpTokenEvent {
     enum Operation : uint8_t {
         ENQUEUE_GOOD_ACK,
+        OVERWRITE_GOOD_ACK,
+        REJECT_HIGH_RESIDUAL,
         DEQUEUE_RECYCLE,
         SELECT_FIRST_WINDOW,
         SELECT_RANDOM_EMPTY
@@ -41,7 +43,7 @@ struct UecMpTokenEvent {
 
 class UecMultipath {
 public:
-    enum PathFeedback {PATH_GOOD, PATH_ECN, PATH_NACK, PATH_TIMEOUT};
+    enum PathFeedback {PATH_GOOD, PATH_GOOD_HIGH_RESIDUAL, PATH_ECN, PATH_NACK, PATH_TIMEOUT};
     enum EvDefaults {UNKNOWN_EV};
     UecMultipath(bool debug): _debug(debug), _debug_tag("") {};
     virtual ~UecMultipath() {};
@@ -121,12 +123,20 @@ public:
     UecMpReps(uint16_t no_of_paths, bool debug, bool is_trimming_enabled);
     void processEv(uint32_t path_id, PathFeedback feedback) override;
     uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) override;
+    UecMpSelection lastSelection() const override { return _last_selection; }
+    void setTokenObserver(TokenObserver observer) override { _token_observer = observer; }
+    void setFeedbackTraceContext(uint64_t feedback_event_seq) override {
+        _feedback_event_seq = feedback_event_seq;
+    }
 private:
     uint16_t _no_of_paths;
     CircularBufferREPS<uint16_t> *circular_buffer_reps;
     uint32_t _crt_path;
     list<uint32_t> _next_pathid;
     bool _is_trimming_enabled = true;  // whether to trim the circular buffer
+    uint64_t _feedback_event_seq = UecMpTokenEvent::NO_EVENT;
+    UecMpSelection _last_selection;
+    TokenObserver _token_observer;
 };
 
 class UecMpMixed : public UecMultipath {

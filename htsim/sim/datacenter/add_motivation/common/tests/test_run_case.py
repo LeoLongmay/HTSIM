@@ -204,11 +204,11 @@ class RunCaseTest(unittest.TestCase):
             with self.subTest(phase=phase):
                 run_id = f"m2_{phase}_s101"
                 config = {
-                    "cell_id": "coarse-f8-h2-u50",
+                    "cell_id": "coarse-f8-d8-c50",
                     "scenario": scenario,
                     "foreground_flows": 8,
-                    "hot_path_groups": 2,
-                    "background_utilization": 0.5,
+                    "degraded_links": 8,
+                    "degraded_capacity_gbps": 50.0,
                     "seed": 101,
                 }
                 with mock.patch.object(
@@ -222,6 +222,8 @@ class RunCaseTest(unittest.TestCase):
                         seed=101,
                         out_dir=self.root / phase,
                         trace_prefix=self.root / phase / run_id,
+                        degraded_links=8,
+                        degraded_capacity_gbps=50.0,
                         analysis_config=config,
                     )
                 manifest = json.loads(manifest_path.read_text(encoding="ascii"))
@@ -252,11 +254,11 @@ class RunCaseTest(unittest.TestCase):
     def test_m2_rejects_missing_fields_and_seed_mismatch_before_running(self):
         module = load_run_case_module()
         valid = {
-            "cell_id": "coarse-f8-h2-u50",
+            "cell_id": "coarse-f8-d8-c50",
             "scenario": "",
             "foreground_flows": 8,
-            "hot_path_groups": 2,
-            "background_utilization": 0.5,
+            "degraded_links": 8,
+            "degraded_capacity_gbps": 50.0,
             "seed": 101,
         }
         invalid = [None, {key: value for key, value in valid.items() if key != "cell_id"}]
@@ -286,11 +288,11 @@ class RunCaseTest(unittest.TestCase):
             "--traffic", str(self.traffic),
             "--out-dir", str(self.root / "output"),
             "--trace-prefix", str(self.root / "output" / "m2_coarse_s101"),
-            "--m2-cell-id", "coarse-f8-h2-u50",
+            "--m2-cell-id", "coarse-f8-d8-c50",
             "--m2-scenario", "",
             "--m2-foreground-flows", "8",
-            "--m2-hot-path-groups", "2",
-            "--m2-background-utilization", "0.5",
+            "--m2-degraded-links", "8",
+            "--m2-degraded-capacity-gbps", "50",
         ]
         with mock.patch.object(
             module, "run_case", return_value=Path("manifest.json")
@@ -299,11 +301,11 @@ class RunCaseTest(unittest.TestCase):
         self.assertEqual(
             run.call_args.kwargs["analysis_config"],
             {
-                "cell_id": "coarse-f8-h2-u50",
+                "cell_id": "coarse-f8-d8-c50",
                 "scenario": "",
                 "foreground_flows": 8,
-                "hot_path_groups": 2,
-                "background_utilization": 0.5,
+                "degraded_links": 8,
+                "degraded_capacity_gbps": 50.0,
                 "seed": 101,
             },
         )

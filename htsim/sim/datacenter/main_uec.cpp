@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
     simtime_picosec switch_latency = timeFromUs((uint32_t)0);
     queue_type qt = COMPOSITE;
 
-    enum LoadBalancing_Algo { BITMAP, REPS, REPS_LEGACY, FREEZING, OBLIVIOUS, MIXED, ECMP};
+    enum LoadBalancing_Algo { BITMAP, REPS, REPS_LEGACY, REPS_ACTUAL, FREEZING, OBLIVIOUS, MIXED, ECMP};
     LoadBalancing_Algo load_balancing_algo = MIXED;
 
     bool log_sink = false;
@@ -182,6 +182,9 @@ int main(int argc, char **argv) {
     int64_t motivation_flow_id = -1;
     std::string motivation_background_config;
     bool motivation_background_config_set = false;
+    bool motivation_residual_recycle = false;
+    bool motivation_residual_threshold_set = false;
+    double motivation_residual_threshold_us = 10.0;
     vector<MotivationBackgroundSpec> motivation_background_specs;
 
     while (i<argc) {
@@ -308,6 +311,24 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-motivation_scenario")) {
             motivation_scenario = argv[i+1];
             i++;
+        } else if (!strcmp(argv[i], "-motivation_residual_recycle")) {
+            if (motivation_residual_recycle) {
+                cerr << "duplicate -motivation_residual_recycle" << endl;
+                return 1;
+            }
+            motivation_residual_recycle = true;
+        } else if (!strcmp(argv[i], "-motivation_residual_threshold_us")) {
+            if (motivation_residual_threshold_set) {
+                cerr << "duplicate -motivation_residual_threshold_us" << endl;
+                return 1;
+            }
+            motivation_residual_threshold_us = atof(argv[i + 1]);
+            if (!(motivation_residual_threshold_us > 0)) {
+                cerr << "-motivation_residual_threshold_us must be positive" << endl;
+                return 1;
+            }
+            motivation_residual_threshold_set = true;
+            i++;
         } else if (!strcmp(argv[i], "-motivation_background_config")) {
             if (i + 1 >= argc) {
                 cerr << "missing operand for -motivation_background_config" << endl;
@@ -432,6 +453,9 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[i+1], "reps_legacy")) {
                 load_balancing_algo = REPS_LEGACY;
             }
+            else if (!strcmp(argv[i+1], "reps_actual")) {
+                load_balancing_algo = REPS_ACTUAL;
+            }
             else if (!strcmp(argv[i+1], "freezing")) {
                 load_balancing_algo = FREEZING;
             }
@@ -448,7 +472,7 @@ int main(int argc, char **argv) {
                 load_balancing_algo = ECMP;
             }
             else {
-                cout << "Unknown load balancing algorithm of type " << argv[i+1] << ", expecting bitmap, reps, reps_legacy, freezing, oblivious, mixed, or ecmp" << endl;
+                cout << "Unknown load balancing algorithm of type " << argv[i+1] << ", expecting bitmap, reps, reps_legacy, reps_actual, freezing, oblivious, mixed, or ecmp" << endl;
                 exit_error(argv[0]);
             }
             cout << "Load balancing algorithm set to  "<< argv[i+1] << endl;
@@ -799,6 +823,17 @@ int main(int argc, char **argv) {
         cerr << "-motivation_background_config requires -motivation_trace_prefix" << endl;
         return 1;
     }
+    if (motivation_residual_recycle &&
+        (load_balancing_algo != REPS && load_balancing_algo != REPS_LEGACY)) {
+        cerr << "-motivation_residual_recycle requires -load_balancing_algo reps" << endl;
+        return 1;
+    }
+    if (motivation_residual_recycle && UecSrc::_sender_cc_algo != UecSrc::PRISM) {
+        cerr << "-motivation_residual_recycle requires -sender_cc_algo prism" << endl;
+        return 1;
+    }
+    UecSrc::_motivation_residual_recycle = motivation_residual_recycle;
+    UecSrc::_motivation_residual_threshold = timeFromUs(motivation_residual_threshold_us);
     try {
         if (motivation_background_config_set) {
             motivation_background_specs =
@@ -813,7 +848,9 @@ int main(int argc, char **argv) {
                                          motivation_scenario, static_cast<uint32_t>(seed),
                                          motivation_flow_id);
         UecSrc::validateMotivationTraceRuntimeConfig(
-            load_balancing_algo == REPS || load_balancing_algo == REPS_LEGACY, planes);
+            load_balancing_algo == REPS || load_balancing_algo == REPS_LEGACY ||
+                load_balancing_algo == REPS_ACTUAL,
+            planes);
     } catch (const std::exception& error) {
         cerr << error.what() << endl;
         return 1;
@@ -1154,6 +1191,11 @@ int main(int argc, char **argv) {
                     return std::make_unique<UecMpRepsLegacy>(path_entropy_size, UecSrc::_debug);
                 });
                 break;
+            case REPS_ACTUAL:
+                api->setMultipathFactory([path_entropy_size]() {
+                    return std::make_unique<UecMpReps>(path_entropy_size, UecSrc::_debug, true);
+                });
+                break;
             case FREEZING:
                 api->setMultipathFactory([path_entropy_size, disable_trim]() {
                     return std::make_unique<UecMpReps>(path_entropy_size, UecSrc::_debug, !disable_trim);
@@ -1225,6 +1267,8 @@ int main(int argc, char **argv) {
                 mp = make_unique<UecMpBitmap>(path_entropy_size, UecSrc::_debug);
             } else if (load_balancing_algo == REPS || load_balancing_algo == REPS_LEGACY){
                 mp = make_unique<UecMpRepsLegacy>(path_entropy_size, UecSrc::_debug);
+            } else if (load_balancing_algo == REPS_ACTUAL){
+                mp = make_unique<UecMpReps>(path_entropy_size, UecSrc::_debug, true);
             } else if (load_balancing_algo == FREEZING){
                 mp = make_unique<UecMpReps>(path_entropy_size, UecSrc::_debug, !disable_trim);
             }else if (load_balancing_algo == OBLIVIOUS){

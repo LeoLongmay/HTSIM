@@ -9,8 +9,22 @@ OUT="$HERE/data/calibration"
 RUNNER="$ADD_MOTIVATION/common/run_case.py"
 GENERATOR="$DATACENTER/prism_eval/common/gen/poisson_load.py"
 TOPOLOGY="$DATACENTER/topologies/fat_tree_128_1os.topo"
+TRACE_SUFFIXES=(ack token epoch background pathmap linkmap)
 
 mkdir -p "$OUT"
+
+clean_run() {
+    local run_id="$1"
+    local suffix
+    rm -f -- \
+        "$OUT/$run_id.cm" \
+        "$OUT/$run_id.dat" \
+        "$OUT/$run_id.stdout" \
+        "$OUT/$run_id.manifest.json"
+    for suffix in "${TRACE_SUFFIXES[@]}"; do
+        rm -f -- "$OUT/$run_id.$suffix.csv"
+    done
+}
 
 while IFS=, read -r scenario_id degraded_links degraded_capacity offered_load seed; do
     [ "$scenario_id" = "scenario_id" ] && continue
@@ -19,6 +33,7 @@ while IFS=, read -r scenario_id degraded_links degraded_capacity offered_load se
 
     run_id="calibration_${scenario_id}"
     python3 "$RUNNER" --validate-identifier "$run_id" >/dev/null
+    clean_run "$run_id"
     traffic="$OUT/${run_id}.cm"
     python3 "$GENERATOR" "$traffic" 64 16 8000000 128 16 \
         "$offered_load" 8000 1600 "$seed"

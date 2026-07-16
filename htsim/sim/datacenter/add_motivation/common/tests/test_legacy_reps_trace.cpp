@@ -42,6 +42,14 @@ int main() {
     assert(events.back().related_ack_event_seq == 41);
     const uint64_t good_ack_token_id = events.back().token_id;
 
+    reps.setFeedbackTraceContext(42);
+    reps.processEv(5, UecMultipath::PATH_GOOD_HIGH_RESIDUAL);
+    assert(events.back().operation == UecMpTokenEvent::REJECT_HIGH_RESIDUAL);
+    assert(events.back().entropy == 5);
+    assert(events.back().queue_depth_before == 1);
+    assert(events.back().queue_depth_after == 1);
+    assert(events.back().related_ack_event_seq == 42);
+
     uint32_t entropy = reps.nextEntropy(8, 8);
     assert(entropy == 3);
     assert(reps.lastSelection().source == UecMpSelection::RECYCLED);

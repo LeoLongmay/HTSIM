@@ -64,6 +64,11 @@ if [ "$MODE" = "smoke" ]; then
     run_one gray_c50_d2_l05 2 50 0.5 13
 else
     while IFS=, read -r scenario_id degraded_links degraded_capacity offered_load seed; do
+        scenario_id="${scenario_id%$'\r'}"
+        degraded_links="${degraded_links%$'\r'}"
+        degraded_capacity="${degraded_capacity%$'\r'}"
+        offered_load="${offered_load%$'\r'}"
+        seed="${seed%$'\r'}"
         [ "$scenario_id" = "scenario_id" ] && continue
         [ -n "$scenario_id" ] || continue
         run_one "$scenario_id" "$degraded_links" "$degraded_capacity" "$offered_load" "$seed"

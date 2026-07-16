@@ -1,1 +1,1 @@
-cell_id,scenario,foreground_flows,hot_path_groups,background_utilization,seed
+cell_id,scenario,foreground_flows,degraded_links,degraded_capacity_gbps,seed

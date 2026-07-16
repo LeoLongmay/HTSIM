@@ -1,1 +1,11 @@
 scenario_id,degraded_links,degraded_capacity_gbps,offered_load,seed
+symmetric_l03,0,100,0.3,13
+gray_c50_d8_l03,8,50.0,0.3,13
+symmetric_l03,0,100,0.3,14
+gray_c50_d8_l03,8,50.0,0.3,14
+symmetric_l03,0,100,0.3,15
+gray_c50_d8_l03,8,50.0,0.3,15
+symmetric_l03,0,100,0.3,16
+gray_c50_d8_l03,8,50.0,0.3,16
+symmetric_l03,0,100,0.3,17
+gray_c50_d8_l03,8,50.0,0.3,17

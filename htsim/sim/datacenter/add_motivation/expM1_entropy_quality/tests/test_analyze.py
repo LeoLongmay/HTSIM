@@ -61,6 +61,23 @@ def bundle(rows, tokens=(), pathmap=()):
 
 
 class RunMetricTests(unittest.TestCase):
+    def test_excludes_only_unclosed_tail_epoch_acks(self):
+        rows = [
+            ack(1, 1, 7, 1_000_000),
+            ack(3, 1, 7, 1_000_000),
+        ]
+        rows[0]["epoch_id"] = 4
+        rows[1]["epoch_id"] = 5
+        trace = TraceBundle(
+            run_id="fixture", ack=tuple(rows), token=(),
+            epoch=({"flow_id": 1, "epoch_id": 4, "event_seq": 2},),
+            pathmap=(), linkmap=(), background=(), events=(),
+        )
+
+        filtered = analyze._without_unclosed_tail_acks(trace)
+
+        self.assertEqual([row["event_seq"] for row in filtered.ack], [1])
+
     def test_flow_balanced_persistence_fixture(self):
         rows = [
             ack(1, 1, 10, 1_000_000),

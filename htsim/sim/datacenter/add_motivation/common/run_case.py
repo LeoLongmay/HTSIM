@@ -41,15 +41,17 @@ VALID_CCS = {
     "strack",
     "swift",
 }
+VALID_LOAD_BALANCERS = {"reps", "reps_actual"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 TRACE_SUFFIXES = ("ack", "token", "epoch", "background", "pathmap", "linkmap")
 M2_EXPERIMENT = "M2_redistribution_progress"
+M2_SIMULATION_END_MS = 3
 ANALYSIS_CONFIG_FIELDS = (
     "cell_id",
     "scenario",
     "foreground_flows",
-    "hot_path_groups",
-    "background_utilization",
+    "degraded_links",
+    "degraded_capacity_gbps",
     "seed",
 )
 
@@ -168,23 +170,23 @@ def _analysis_config(value, seed):
         raise ValueError(
             "analysis_config scenario must be empty, recoverable, or persistent"
         )
-    for field in ("foreground_flows", "hot_path_groups"):
+    for field in ("foreground_flows", "degraded_links"):
         if type(value[field]) is not int or value[field] <= 0:
             raise ValueError(f"analysis_config {field} must be a positive integer")
-    utilization = value["background_utilization"]
-    if isinstance(utilization, bool) or not isinstance(utilization, (int, float)):
-        raise TypeError("analysis_config background_utilization must be numeric")
-    utilization = float(utilization)
-    if not math.isfinite(utilization) or not 0 < utilization < 1:
-        raise ValueError("analysis_config background_utilization must be in (0, 1)")
+    capacity = value["degraded_capacity_gbps"]
+    if isinstance(capacity, bool) or not isinstance(capacity, (int, float)):
+        raise TypeError("analysis_config degraded_capacity_gbps must be numeric")
+    capacity = float(capacity)
+    if not math.isfinite(capacity) or not 0 < capacity < NORMAL_CAPACITY_GBPS:
+        raise ValueError("analysis_config degraded_capacity_gbps must be in (0, 100)")
     if type(value["seed"]) is not int or value["seed"] != seed:
         raise ValueError("analysis_config seed must equal run seed")
     return {
         "cell_id": value["cell_id"],
         "scenario": value["scenario"],
         "foreground_flows": value["foreground_flows"],
-        "hot_path_groups": value["hot_path_groups"],
-        "background_utilization": utilization,
+        "degraded_links": value["degraded_links"],
+        "degraded_capacity_gbps": capacity,
         "seed": value["seed"],
     }
 
@@ -192,17 +194,32 @@ def _analysis_config(value, seed):
 def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
              out_dir, trace_prefix, degraded_links=0,
              degraded_capacity_gbps=100.0, background_config=None,
-             analysis_config=None):
+             analysis_config=None, motivation_residual_recycle=False,
+             motivation_residual_threshold_us=10.0, load_balancing_algo="reps"):
     experiment = validate_identifier(experiment, "experiment")
     run_id = validate_identifier(run_id, "run_id")
     if phase not in VALID_PHASES:
         raise ValueError(f"phase must be one of {sorted(VALID_PHASES)}")
     if cc not in VALID_CCS:
         raise ValueError(f"cc must be one of {sorted(VALID_CCS)}")
+    if load_balancing_algo not in VALID_LOAD_BALANCERS:
+        raise ValueError(f"load_balancing_algo must be one of {sorted(VALID_LOAD_BALANCERS)}")
+    if type(motivation_residual_recycle) is not bool:
+        raise TypeError("motivation_residual_recycle must be boolean")
+    if isinstance(motivation_residual_threshold_us, bool) or not isinstance(
+        motivation_residual_threshold_us, (int, float)
+    ):
+        raise TypeError("motivation_residual_threshold_us must be numeric")
+    motivation_residual_threshold_us = float(motivation_residual_threshold_us)
+    if not math.isfinite(motivation_residual_threshold_us) or motivation_residual_threshold_us <= 0:
+        raise ValueError("motivation_residual_threshold_us must be positive")
+    if motivation_residual_recycle and cc != "prism":
+        raise ValueError("motivation_residual_recycle requires cc='prism'")
     if type(seed) is not int or seed < 0 or seed > 2**31 - 1:
         raise ValueError("seed must be an integer in [0, 2147483647]")
     if experiment == M2_EXPERIMENT and analysis_config is None:
         raise ValueError("M2 runs require analysis_config")
+    simulation_end_ms = M2_SIMULATION_END_MS if experiment == M2_EXPERIMENT else 12
     normalized_analysis_config = (
         _analysis_config(analysis_config, seed) if analysis_config is not None else None
     )
@@ -221,6 +238,14 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         raise ValueError(
             "controls require degraded_links=0 and degraded_capacity_gbps=100; "
             "gray cases require degraded_links>0 and degraded_capacity_gbps<100"
+        )
+    if normalized_analysis_config is not None and (
+        normalized_analysis_config["degraded_links"] != degraded_links
+        or normalized_analysis_config["degraded_capacity_gbps"]
+        != degraded_capacity_gbps
+    ):
+        raise ValueError(
+            "M2 analysis_config degradation fields must match simulator controls"
         )
 
     topology_path = _input_file(topology, "topology")
@@ -264,7 +289,7 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         "-nodes", "128",
         "-sender_cc_algo", cc,
         "-sender_cc_only",
-        "-load_balancing_algo", "reps",
+        "-load_balancing_algo", load_balancing_algo,
         "-paths", "8",
         "-mtu", str(MTU_BYTES),
         "-q", str(QUEUE_PACKETS),
@@ -278,6 +303,14 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         "-prism_t_spray", "14",
         "-prism_kappa", "1",
         "-prism_n_min", "3",
+        *(
+            [
+                "-motivation_residual_recycle",
+                "-motivation_residual_threshold_us", _number_arg(motivation_residual_threshold_us),
+            ]
+            if motivation_residual_recycle
+            else []
+        ),
         *(
             [
                 "-prism_smooth_beta", "1",
@@ -299,7 +332,7 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         "-motivation_trace_prefix", str(trace_path),
         "-motivation_run_id", run_id,
         "-motivation_scenario", experiment,
-        "-end", "12",
+        "-end", str(simulation_end_ms),
         "-o", str(simulation_path),
     ]
 
@@ -340,7 +373,7 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         "queue_bytes": QUEUE_BYTES,
         "config": {
             "cc": cc,
-            "load_balancing_algo": "reps",
+            "load_balancing_algo": load_balancing_algo,
             "paths": 8,
             "mtu_bytes": MTU_BYTES,
             "queue_packets": QUEUE_PACKETS,
@@ -356,7 +389,9 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
             "degraded_links": degraded_links,
             "degraded_capacity_gbps": degraded_capacity_gbps,
             "background_config": background_value,
-            "simulation_end_ms": 12,
+            "simulation_end_ms": simulation_end_ms,
+            "motivation_residual_recycle": motivation_residual_recycle,
+            "motivation_residual_threshold_us": motivation_residual_threshold_us,
         },
         "output_filenames": output_filenames,
     }
@@ -439,18 +474,20 @@ def main(argv=None):
     parser.add_argument("--degraded-links", type=int, default=0)
     parser.add_argument("--degraded-capacity-gbps", type=float, default=NORMAL_CAPACITY_GBPS)
     parser.add_argument("--background-config", type=Path)
+    parser.add_argument("--motivation-residual-recycle", action="store_true")
+    parser.add_argument("--motivation-residual-threshold-us", type=float, default=10.0)
     parser.add_argument("--m2-cell-id")
     parser.add_argument("--m2-scenario")
     parser.add_argument("--m2-foreground-flows", type=int)
-    parser.add_argument("--m2-hot-path-groups", type=int)
-    parser.add_argument("--m2-background-utilization", type=float)
+    parser.add_argument("--m2-degraded-links", type=int)
+    parser.add_argument("--m2-degraded-capacity-gbps", type=float)
     args = parser.parse_args(argv)
     m2_values = (
         args.m2_cell_id,
         args.m2_scenario,
         args.m2_foreground_flows,
-        args.m2_hot_path_groups,
-        args.m2_background_utilization,
+        args.m2_degraded_links,
+        args.m2_degraded_capacity_gbps,
     )
     if any(value is not None for value in m2_values) and not all(
         value is not None for value in m2_values
@@ -462,8 +499,8 @@ def main(argv=None):
             "cell_id": args.m2_cell_id,
             "scenario": args.m2_scenario,
             "foreground_flows": args.m2_foreground_flows,
-            "hot_path_groups": args.m2_hot_path_groups,
-            "background_utilization": args.m2_background_utilization,
+            "degraded_links": args.m2_degraded_links,
+            "degraded_capacity_gbps": args.m2_degraded_capacity_gbps,
             "seed": args.seed,
         }
     manifest = run_case(
@@ -480,6 +517,8 @@ def main(argv=None):
         degraded_capacity_gbps=args.degraded_capacity_gbps,
         background_config=args.background_config,
         analysis_config=analysis_config,
+        motivation_residual_recycle=args.motivation_residual_recycle,
+        motivation_residual_threshold_us=args.motivation_residual_threshold_us,
     )
     print(manifest)
 

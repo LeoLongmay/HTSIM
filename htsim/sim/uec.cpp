@@ -120,6 +120,9 @@ bool UecSink::_oversubscribed_cc = false; // can only be enabled when receiver_b
 
 UecSrc::Sender_CC UecSrc::_sender_cc_algo = UecSrc::NSCC;
 
+bool UecSrc::_motivation_residual_recycle = false;
+simtime_picosec UecSrc::_motivation_residual_threshold = timeFromUs(10u);
+
 /* 
     The following variable values are not default values, there are initializer values. The actual
     default values are set in initNsccParams/initRcccParams.
@@ -201,16 +204,16 @@ MotivationTraceWriter& UecSrc::motivationTrace() {
     return _motivation_trace_writer;
 }
 
-void UecSrc::validateMotivationTraceRuntimeConfig(bool legacy_reps, uint32_t planes) {
+void UecSrc::validateMotivationTraceRuntimeConfig(bool reps_traceable, uint32_t planes) {
     if (!_motivation_trace_writer.enabled()) {
         return;
     }
-    if (legacy_reps && planes == 1 && _sender_based_cc && !_receiver_based_cc) {
+    if (reps_traceable && planes == 1 && _sender_based_cc && !_receiver_based_cc) {
         return;
     }
     throw std::invalid_argument(
-        "Motivation tracing path metadata currently supports only Legacy REPS "
-        "runs: require -load_balancing_algo reps or reps_legacy, -planes 1, "
+        "Motivation tracing path metadata supports only REPS runs: require "
+        "-load_balancing_algo reps, reps_legacy, or reps_actual, -planes 1, "
         "sender-side CC active, and receiver-side CC inactive.");
 }
 
@@ -1484,8 +1487,19 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         motivationLogAck(pkt, raw_rtt, delay, _prism_genuine_sample, ack_selection,
                          newly_recvd_bytes, _motivation_new_data_bytes_sent_total,
                          static_cast<uint64_t>(_cwnd));
+    const bool reject_high_residual =
+        _motivation_residual_recycle &&
+        _sender_cc_algo == PRISM &&
+        _prism_region == prism::HOLD &&
+        _prism_genuine_sample &&
+        !pkt.ecn_echo() &&
+        _prism_epoch_samples > 0 &&
+        delay >= _prism_epoch_min &&
+        delay - _prism_epoch_min >= _motivation_residual_threshold;
     _mp->setFeedbackTraceContext(ack_event_seq);
-    _mp->processEv(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
+    _mp->processEv(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN :
+                   (reject_high_residual ? UecMultipath::PATH_GOOD_HIGH_RESIDUAL
+                                         : UecMultipath::PATH_GOOD));
 
     if(_flow.flow_id() == _debug_flowid ){
         cout <<  timeAsUs(eventlist().now()) << " flowid " << _flow.flow_id() << " track_avg_rtt " << timeAsUs(get_avg_delay())

@@ -439,6 +439,9 @@ public:
     static double          _prism_engage_mult;
     static double          _prism_disengage_ratio;
     static uint32_t        _prism_n_min;     // minimum genuine ACK samples needed to close an epoch
+    // Motivation-only REPS admission gate. Disabled unless explicitly requested.
+    static bool            _motivation_residual_recycle;
+    static simtime_picosec _motivation_residual_threshold;
     static bool            _prism_oracle_validation;
     static std::string     _prism_oracle_log_path;
     static std::string     _prism_oracle_run_id;

@@ -74,6 +74,7 @@ def _render_perf_panels(xs, xlabel, cellfn, stem, title):
             ax.plot(xs, ys, ls, marker="o", ms=5, lw=2.0,
                     color=plot_style.COLORS[ck], label=lab)
         ax.set_xlabel(xlabel); ax.set_ylabel(ylab); ax.grid(alpha=0.3)
+        ax.set_xticks(xs)   # discrete line plot: ticks AT the data points (e.g. 8/32/64), not auto 20/40/60
     axes[1].set_title(title)
     axes[0].legend(fontsize=8, ncol=2, loc="best")
     fig.tight_layout()

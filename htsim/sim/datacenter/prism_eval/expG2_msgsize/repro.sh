@@ -1,7 +1,8 @@
 #!/bin/bash
 # expG2_msgsize: STrack/MSwift-style collective CCT-slowdown vs per-flow message size, fixed -failed 8.
 # A2A (parallel=32) + Butterfly, 128-node fat_tree_128_1os (100G), delay-driven, flow-only logging.
-# END_MS scales with message size (A2A is NIC-bound). Metric = CCT slowdown (makespan / zero-queue LB).
+# END_MS scales with message size (A2A is NIC-bound). Metric = CCT slowdown = makespan relative to
+# REPS+NSCC, geometric mean over seeds (A2A n=5, Butterfly n=30). See make_figs.py / README §3.
 #   bash repro.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -11,7 +12,10 @@ REL="prism_eval/expG2_msgsize"
 cd "$DC"
 [ -x ./htsim_uec ] || { echo "ERROR: ./htsim_uec missing -- build it first"; exit 1; }
 mkdir -p "$REL/data"
-SEEDS="13 14 15 16 17"
+# Per-collective seed counts: A2A stays at 5 (A2A@4M is NIC-bound and slow), Butterfly uses 30
+# (every bfly run is ~0.3-3 s) to tighten the error bar at the bimodal 256 K knee. See README.
+A2A_SEEDS="13 14 15 16 17"
+BFLY_SEEDS="$(seq 13 42 | tr '\n' ' ')"
 DD="-disable_trim"
 FAILED=8
 SIZES="16384 65536 262144 1048576 4194304"
@@ -52,11 +56,12 @@ run_arm() { # coll size failed seed cm
 }
 
 for coll in $COLLS; do
+  case "$coll" in a2a) SEEDS="$A2A_SEEDS";; bfly) SEEDS="$BFLY_SEEDS";; esac
   for sz in $SIZES; do
     echo "== gen $coll sz$sz .cm (per seed) =="
     for s in $SEEDS; do gen_cm "$coll" "$sz" "$s" "$OUT/${coll}_sz${sz}_s${s}.cm"; done
   done
-  echo "== sweep: $coll x size{$SIZES} x failed$FAILED x 7 arms x 5 seeds =="
+  echo "== sweep: $coll x size{$SIZES} x failed$FAILED x 7 arms x seeds{$SEEDS} =="
   for sz in $SIZES; do for s in $SEEDS; do
     run_arm "$coll" "$sz" "$FAILED" "$s" "$OUT/${coll}_sz${sz}_s${s}.cm"
   done; done

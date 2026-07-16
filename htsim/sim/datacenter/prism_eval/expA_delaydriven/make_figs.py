@@ -20,7 +20,7 @@ FAILED = [0, 2, 4, 6, 8, 10, 12]
 SEEDS = [13, 14, 15, 16, 17]
 XLABEL = "Number of failed links"
 LOADS = [10, 30, 50, 70, 90]   # offered-load x-axis tick values = rho*100 (% of the 1.6 Tbps receiver-access capacity)
-XLABEL_LOAD = "offered load (% of receiver-access capacity, 1.6 Tbps)"
+XLABEL_LOAD = "Network load (%)"
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:

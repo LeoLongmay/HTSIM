@@ -1,0 +1,9 @@
+# Keep source, locked configuration, and final figures. All generated M1 data
+# is transient and can be regenerated through repro.sh/calibrate.sh.
+!README.md
+!configs/
+!configs/*.csv
+data/
+!figs/
+!figs/*.png
+!figs/*.pdf

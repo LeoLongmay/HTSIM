@@ -154,17 +154,45 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
                         color=plot_style.COLORS[ck], label=disp)
         ax.set_ylabel(ylabel)
         ax.set_xlabel(xlabel)
-        if key == "goodput":
-            ax.yaxis.set_label_coords(-0.2, 0.45)
+        if (tag_prefix == "expA" or tag_prefix == "expAload") and key == "goodput":
+            if tag_prefix == "expA":
+                ax.yaxis.set_label_coords(-0.2, 0.45)
+            elif tag_prefix == "expAload":
+                ax.yaxis.set_label_coords(-0.22, 0.45)
             ax.xaxis.label.set_x(0.45)
+        if (tag_prefix == "expD1" or tag_prefix == "expD3load") and key == "goodput":
+            ax.yaxis.set_label_coords(-0.1, 0.45)
+            ax.xaxis.label.set_x(0.45)
+        if tag_prefix == "expBa4os":
+            if key == "goodput":
+                ax.yaxis.set_label_coords(-0.23, 0.45)
+                ax.xaxis.label.set_x(0.45)
+            if key == "p99_fct":
+                ax.xaxis.label.set_x(0.45)
+        if tag_prefix == "expEp128":
+            if key == "avg_fct":
+                ax.xaxis.label.set_x(0.45)
+            if key == "goodput":
+                ax.yaxis.set_label_coords(-0.23, 0.45)
+                ax.xaxis.label.set_x(0.45)
+        if tag_prefix == "expEp1024":
+            if key == "avg_fct":
+                ax.xaxis.label.set_x(0.45)
+            if key == "goodput":
+                ax.yaxis.set_label_coords(-0.16, 0.45)
+                ax.xaxis.label.set_x(0.45)
+        if tag_prefix == "expD2_4os":
+            if key == 'goodput':
+                ax.yaxis.set_label_coords(-0.2, 0.45)
+                ax.xaxis.label.set_x(0.45)
         ax.set_xticks(failed)
         ax.grid(alpha=0.3)
         # ax.legend(fontsize=9)
-        incomplete = [(lab, f, aggs[lab][f]["cr"][0]) for (lab, _d, _c) in baselines
-                      for f in failed if aggs[lab].get(f) and aggs[lab][f]["cr"][0] < 0.999]
-        if incomplete:
-            note = "completion<1: " + ", ".join(f"{lab}@f{f}={cr:.2f}" for lab, f, cr in incomplete)
-            fig.text(0.5, 0.005, note, ha="center", fontsize=7, color="firebrick")
+        # incomplete = [(lab, f, aggs[lab][f]["cr"][0]) for (lab, _d, _c) in baselines
+        #               for f in failed if aggs[lab].get(f) and aggs[lab][f]["cr"][0] < 0.999]
+        # if incomplete:
+        #     note = "completion<1: " + ", ".join(f"{lab}@f{f}={cr:.2f}" for lab, f, cr in incomplete)
+        #     fig.text(0.5, 0.005, note, ha="center", fontsize=7, color="firebrick")
         plt.tight_layout()
         plot_style.save(fig, f"{stem_prefix}_{suffix}", figs_dir)
         plt.close(fig)
@@ -187,7 +215,7 @@ def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None):
                for (lab, disp, ck) in baselines]
     if row_counts:
         n = len(row_counts)
-        fig = plt.figure(figsize=(2.6 * max(row_counts), 0.42 * n))   # short -> rows close; tight-crop trims
+        fig = plt.figure(figsize=(2.7 * max(row_counts), 0.42 * n))   # short -> rows close; tight-crop trims
         ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
         i = 0
         for r, cnt in enumerate(row_counts):
@@ -395,7 +423,7 @@ def render_decomposition_merged(figs_dir, fig_stem, panels, ylim_us=None, bin_w_
     (no faint raw). `panels` = [(panel_title, [(data_dir, tag_prefix, failed, seed, ls, label, cc_color, spray_color), ...])].
     Per-series colors (cc_color for C_cc, spray_color for C_spray); linestyle also distinguishes scale."""
     import matplotlib.pyplot as plt
-    plot_style.apply_style(24)
+    plot_style.apply_style(22)
     n = len(panels)
     fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 4.0), sharey=True)
     if n == 1:
@@ -416,17 +444,17 @@ def render_decomposition_merged(figs_dir, fig_stem, panels, ylim_us=None, bin_w_
             sx, bsp = _bin_series(te, sp, bin_w_ms)
             ax.plot(sx, bsp, color=spray_color, lw=2.2, ls=ls, label=r"$C_{spray}$" + f" {slabel}")
         if base_us is not None:
-            ax.axhline(base_us, color=plot_style.COLORS["target"], ls=":", lw=1.3,
-                       label=f"target delay ({base_us:.0f}us)")
+            # darker, thicker target line; no label -> excluded from legend (explained in text)
+            ax.axhline(base_us, color="#444444", ls="--", lw=2.6, zorder=1)
         # ax.set_title(title, fontsize=11);
         ax.set_xlabel("time (ms)"); ax.grid(alpha=0.3)
         if ylim_us is not None:
             ax.set_ylim(0, ylim_us)
     axes[0].set_ylabel("Queuing delay (us)")
-    axes[0].yaxis.set_label_coords(-0.13, 0.35)
+    axes[0].yaxis.set_label_coords(-0.13, 0.45)
     _handles, _labels = axes[0].get_legend_handles_labels()   # figure itself carries NO legend
     _legfig = plt.figure(figsize=(10, 1.0))
-    _legfig.legend(_handles, _labels, loc="center", ncol=len(_labels), frameon=False, fontsize=14)
+    _legfig.legend(_handles, _labels, loc="center", ncol=len(_labels), frameon=False, fontsize=16)
     for _ext in ("png", "pdf"):
         _legfig.savefig(os.path.join(figs_dir, f"{fig_stem}_legend.{_ext}"), bbox_inches="tight", pad_inches=0.05)
     plt.close(_legfig)

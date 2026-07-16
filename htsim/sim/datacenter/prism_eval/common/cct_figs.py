@@ -43,10 +43,10 @@ def render_cct_bars(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fi
     with plain numeric ticks, SEM error bars, legend on top. baselines = (label, display, color_key)
     triples. (aggregate_cct returns inflation%; slowdown = inflation/100 + 1, an exact linear map.)"""
     import matplotlib.pyplot as plt
-    plot_style.apply_style(13)
+    plot_style.apply_style(16)
     aggs = {lab: aggregate_cct(data_dir, tag_prefix, lab, failed, seeds, size_bytes,
                                link_gbps, base_rtt_s, token) for lab, _d, _c in baselines}
-    fig, ax = plt.subplots(figsize=(0.95 * len(failed) + 1.6, 4.0))
+    fig, ax = plt.subplots(figsize=(6.4, 2.8))   # common size shared with figH_*_msgsize
     n = len(baselines); group_w = 0.66; bw = group_w / n
     x = list(range(len(failed)))
     for j, (lab, disp, ck) in enumerate(baselines):
@@ -59,8 +59,6 @@ def render_cct_bars(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, fi
     ax.set_xticks(x); ax.set_xticklabels([str(f) for f in failed])
     ax.set_xlabel("Number of failed links"); ax.set_ylabel("CCT slowdown")
     ax.grid(axis="y", alpha=0.3)
-    ax.legend(ncol=min(len(baselines), 4), fontsize=7, loc="upper center",
-              bbox_to_anchor=(0.5, 1.18), frameon=False)
     plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
 
 def render_fct_cdf(data_dir, figs_dir, tag_prefix, baselines, failed_level, seeds, fig_stem,
@@ -68,7 +66,7 @@ def render_fct_cdf(data_dir, figs_dir, tag_prefix, baselines, failed_level, seed
     """CDF of per-flow FCT (ms) at one failed level, one curve per arm (MSwift Fig. 5 aesthetic).
     Pools completed-flow FCTs across seeds. baselines = (label, display, color_key) triples."""
     import matplotlib.pyplot as plt
-    plot_style.apply_style(13)
+    plot_style.apply_style(22)
     fig, ax = plt.subplots(figsize=(5.0, 4.0))
     for lab, disp, ck in baselines:
         fcts = []
@@ -83,10 +81,11 @@ def render_fct_cdf(data_dir, figs_dir, tag_prefix, baselines, failed_level, seed
         fcts.sort()
         ys = [(i + 1) / len(fcts) for i in range(len(fcts))]
         ax.plot(fcts, ys, lw=1.8, color=plot_style.COLORS.get(ck), label=disp)
-    ax.set_xlabel("Flow Completion Time (ms)"); ax.set_ylabel("CDF")
-    ax.set_ylim(0, 1.0); ax.grid(alpha=0.3); ax.legend(fontsize=8, loc="lower right")
-    if title:
-        ax.set_title(title, fontsize=11)
+    ax.set_xlabel("FCT (ms)"); ax.set_ylabel("CDF")
+    ax.set_ylim(0, 1.0); ax.grid(alpha=0.3); 
+    ax.legend(fontsize=12, loc="lower right", frameon=True)
+    # if title:
+    #     ax.set_title(title, fontsize=11)
     plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
 
 def selftest():

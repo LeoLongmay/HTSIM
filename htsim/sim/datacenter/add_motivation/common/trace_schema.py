@@ -395,9 +395,11 @@ def _build_bundle(trace_prefix: Path, loaded: dict[str, tuple], *, compact: bool
     ack_by_event_seq = None if compact else {
         row["event_seq"]: row for row in loaded["ack"]
     }
-    enqueued_ack_event_seqs = set()
+    admission_ack_event_seqs = set()
+    residual_reject_ack_event_seqs = set()
     for token in loaded["token"]:
-        if token["operation"] != "enqueue_good_ack":
+        operation = token["operation"]
+        if operation not in ("enqueue_good_ack", "overwrite_good_ack", "reject_high_residual"):
             continue
         related_event_seq = token["related_ack_event_seq"]
         ack = (
@@ -434,13 +436,28 @@ def _build_bundle(trace_prefix: Path, loaded: dict[str, tuple], *, compact: bool
                 "related_ack_event_seq",
                 f"ACK event {related_event_seq} is ECN marked",
             )
-        if related_event_seq in enqueued_ack_event_seqs:
+        if operation in ("enqueue_good_ack", "overwrite_good_ack") and related_event_seq in admission_ack_event_seqs:
             raise _error(
                 token.source_path,
                 "related_ack_event_seq",
-                f"ACK event {related_event_seq} already produced an enqueue",
+                f"ACK event {related_event_seq} already produced an admission",
             )
-        enqueued_ack_event_seqs.add(related_event_seq)
+        if operation in ("enqueue_good_ack", "overwrite_good_ack"):
+            admission_ack_event_seqs.add(related_event_seq)
+        else:
+            if not ack["genuine_sample"]:
+                raise _error(
+                    token.source_path,
+                    "related_ack_event_seq",
+                    f"residual reject references non-genuine ACK event {related_event_seq}",
+                )
+            if related_event_seq in residual_reject_ack_event_seqs:
+                raise _error(
+                    token.source_path,
+                    "related_ack_event_seq",
+                    f"ACK event {related_event_seq} already produced a residual reject",
+                )
+            residual_reject_ack_event_seqs.add(related_event_seq)
 
     last_ack_event_by_epoch = {}
     for ack in loaded["ack"]:

@@ -33,11 +33,12 @@ except ModuleNotFoundError:
 
 HERE = Path(__file__).resolve().parent
 CALIBRATION_CONFIG = HERE / "configs" / "calibration.csv"
-CONFIRMATION_SELECTION = HERE / "data" / "coarse" / "confirmation_selection.csv"
+DATA_ROOT = HERE / "data" / "controlled"
+CONFIRMATION_SELECTION = DATA_ROOT / "coarse" / "confirmation_selection.csv"
 FORMAL_CONFIG = HERE / "configs" / "formal.csv"
 CONFIG_FIELDS = (
-    "cell_id", "scenario", "foreground_flows", "hot_path_groups",
-    "background_utilization", "seed",
+    "cell_id", "scenario", "foreground_flows", "degraded_links",
+    "degraded_capacity_gbps", "seed",
 )
 COARSE_SEEDS = (101,)
 CONFIRMATION_SEEDS = (101, 102, 103)
@@ -45,8 +46,8 @@ FORMAL_SEEDS = (13, 14, 15, 16, 17)
 TARGET_CUT_QUEUE = re.compile(r"CS[0-9]+->US[0-9]+\([0-9]+\)")
 PATH_ENTROPIES = frozenset(range(8))
 T_CC_PS = 14_000_000
+CONTROLLED_WARMUP_PS = 1_000_000_000
 DIAGNOSTIC_TOLERANCES_PS = (1_000_000, 2_000_000, 4_000_000)
-DELIVERY_RELATIVE_TOLERANCE = 0.05
 BOOTSTRAP_SAMPLES = 10_000
 BOOTSTRAP_SEED = 20260714
 MIN_VALID_COMPLETED_ROUNDS = 3
@@ -62,8 +63,6 @@ class CapacityWitness:
     c_healthy_gbps: float
     c_hot_residual_gbps: float
     c_effective_residual_gbps: float
-    configured_background_gbps: float
-    measured_background_gbps: float
     target_cut_queues: tuple[str, ...]
     hot_cut_queues: tuple[str, ...]
     flow_cut_queues: tuple[tuple[int, tuple[str, ...]], ...] = ()
@@ -189,7 +188,9 @@ def _logical_cut_suffix(queue_name: str) -> Optional[str]:
     return matches[0].group(0)
 
 
-def capacity_witness(bundle, start_ps: int, end_ps: int) -> CapacityWitness:
+def capacity_witness(
+    bundle, start_ps: int, end_ps: int, expected_reduced_capacity_gbps: float,
+) -> CapacityWitness:
     """Construct the exact target-pod cut witness for one evaluated interval."""
 
     if isinstance(start_ps, bool) or isinstance(end_ps, bool) or start_ps < 0 or end_ps <= start_ps:
@@ -197,6 +198,7 @@ def capacity_witness(bundle, start_ps: int, end_ps: int) -> CapacityWitness:
 
     link_rates: dict[str, float] = {}
     link_rates_exact: dict[str, Fraction] = {}
+    reduced_by_queue: dict[str, bool] = {}
     for row in bundle.linkmap:
         name = row["queue_name"]
         rate = row["rate_gbps"]
@@ -205,8 +207,12 @@ def capacity_witness(bundle, start_ps: int, end_ps: int) -> CapacityWitness:
         previous = link_rates.get(name)
         if previous is not None and previous != rate:
             raise EvidenceError(f"linkmap queue {name!r} has inconsistent capacities")
+        previous_reduced = reduced_by_queue.get(name)
+        if previous_reduced is not None and previous_reduced != bool(row["reduced_speed"]):
+            raise EvidenceError(f"linkmap queue {name!r} has inconsistent reduced_speed")
         link_rates[name] = float(rate)
         link_rates_exact[name] = Fraction(str(rate))
+        reduced_by_queue[name] = bool(row["reduced_speed"])
 
     paths_by_flow = defaultdict(list)
     for row in bundle.pathmap:
@@ -249,83 +255,31 @@ def capacity_witness(bundle, start_ps: int, end_ps: int) -> CapacityWitness:
     if not cut_queues:
         raise EvidenceError("pathmap/linkmap contain no resolved target-pod cut queues")
 
-    by_background = defaultdict(list)
-    for row in bundle.background:
-        by_background[row["background_id"]].append(row)
-    if not by_background:
-        raise EvidenceError("capacity witness requires background start/finish records")
-
-    configured_by_queue = defaultdict(float)
-    configured_by_queue_exact = defaultdict(Fraction)
-    measured_total = 0.0
-    for background_id in sorted(by_background):
-        records = by_background[background_id]
-        starts = [row for row in records if row["operation"] == "start"]
-        finishes = [row for row in records if row["operation"] in ("finish", "delivery")]
-        if len(starts) != 1 or len(finishes) != 1:
-            raise EvidenceError(
-                f"background_id {background_id} must have exactly one start and finish/delivery"
-            )
-        start, finish = starts[0], finishes[0]
-        if start["time_ps"] > start_ps or finish["time_ps"] < end_ps:
-            raise EvidenceError(f"background_id {background_id} does not cover evaluated interval")
-        if finish["time_ps"] <= start["time_ps"]:
-            raise EvidenceError(f"background_id {background_id} has nonpositive delivery interval")
-        if (
-            start["configured_rate_gbps"] != finish["configured_rate_gbps"]
-            or start["queue_fingerprint"] != finish["queue_fingerprint"]
-        ):
-            raise EvidenceError(f"background_id {background_id} start/finish metadata mismatch")
-        matches = [
-            name for name in _fingerprint_queues(start["queue_fingerprint"])
-            if _logical_cut_suffix(name) is not None
-        ]
-        if len(matches) != 1:
-            raise EvidenceError(
-                f"background_id {background_id} queue_fingerprint must contain exactly one "
-                "target-pod cut queue"
-            )
-        queue = matches[0]
-        if queue not in cut_queues:
-            raise EvidenceError(f"background cut queue {queue!r} is absent from foreground cut")
-        configured = float(start["configured_rate_gbps"])
-        if not math.isfinite(configured) or configured <= 0:
-            raise EvidenceError(f"background_id {background_id} has invalid configured rate")
-        measured = (
-            finish["delivered_bytes"] * 8.0 * 1000.0
-            / (finish["time_ps"] - start["time_ps"])
+    hot_queues = {name for name in cut_queues if reduced_by_queue[name]}
+    if not hot_queues:
+        raise EvidenceError("controlled M2 workload has no reduced target-pod cut queue")
+    if any(
+        not math.isclose(link_rates[name], expected_reduced_capacity_gbps,
+                         rel_tol=0.0, abs_tol=1e-9)
+        for name in hot_queues
+    ):
+        raise EvidenceError(
+            "target-pod reduced queue rate differs from configured degradation"
         )
-        if abs(measured - configured) > DELIVERY_RELATIVE_TOLERANCE * configured:
-            raise EvidenceError(
-                f"background_id {background_id} measured delivery {measured:g} Gbps "
-                f"differs from configured {configured:g} Gbps by more than 5%"
-            )
-        configured_by_queue[queue] += configured
-        configured_by_queue_exact[queue] += Fraction(str(start["configured_rate_gbps"]))
-        measured_total += measured
-
-    hot_queues = set(configured_by_queue)
     healthy_queues = cut_queues - hot_queues
     healthy = sum(link_rates[name] for name in sorted(healthy_queues))
-    hot_residual = sum(
-        max(link_rates[name] - configured_by_queue[name], 0.0)
-        for name in sorted(hot_queues)
-    )
+    hot_residual = sum(link_rates[name] for name in sorted(hot_queues))
     healthy_capacities = {
         name: link_rates_exact[name] for name in sorted(healthy_queues)
     }
     effective_capacities = dict(healthy_capacities)
     for name in sorted(hot_queues):
-        effective_capacities[name] = max(
-            link_rates_exact[name] - configured_by_queue_exact[name], Fraction(0)
-        )
+        effective_capacities[name] = link_rates_exact[name]
     flow_queue_edge_count = sum(len(queues) for queues in flow_cut_queues.values())
     return CapacityWitness(
         c_healthy_gbps=healthy,
         c_hot_residual_gbps=hot_residual,
         c_effective_residual_gbps=healthy + hot_residual,
-        configured_background_gbps=sum(configured_by_queue.values()),
-        measured_background_gbps=measured_total,
         target_cut_queues=tuple(sorted(cut_queues)),
         hot_cut_queues=tuple(sorted(hot_queues)),
         flow_cut_queues=tuple(sorted(flow_cut_queues.items())),
@@ -679,16 +633,16 @@ def _config(config: dict) -> dict:
         "cell_id": str(config["cell_id"]),
         "scenario": str(config["scenario"]),
         "foreground_flows": int(config["foreground_flows"]),
-        "hot_path_groups": int(config["hot_path_groups"]),
-        "background_utilization": float(config["background_utilization"]),
+        "degraded_links": int(config["degraded_links"]),
+        "degraded_capacity_gbps": float(config["degraded_capacity_gbps"]),
         "seed": int(config["seed"]),
     }
     if normalized["scenario"] not in ("", "recoverable", "persistent"):
         raise ValueError("scenario must be empty, recoverable, or persistent")
     if (
         not normalized["cell_id"] or normalized["foreground_flows"] <= 0
-        or normalized["hot_path_groups"] <= 0
-        or not 0 < normalized["background_utilization"] < 1
+        or normalized["degraded_links"] <= 0
+        or not 0 < normalized["degraded_capacity_gbps"] < 100
     ):
         raise ValueError("M2 config contains invalid fixed-field values")
     return normalized
@@ -740,29 +694,28 @@ def analyze_bundle(bundle, config: dict) -> BundleAnalysis:
             f"config requires {metadata['foreground_flows']}"
         )
     epoch_index = _build_epoch_index(bundle.epoch)
+    first_epoch_start_ps = min(
+        epoch["start_ps"]
+        for epochs, _end_times in epoch_index.values()
+        for epoch in epochs
+    )
+    shadow_injection_ps = max(first_epoch_start_ps, CONTROLLED_WARMUP_PS)
     capacity_base = None
     capacity_failure = None
-    background_intervals = ()
-    coverage_start = None
-    coverage_end = None
-    evidence_end = None
+    coverage_start = 0
+    coverage_end = min(end_times[-1] for _epochs, end_times in epoch_index.values())
+    evidence_end = coverage_end
     try:
-        coverage_start, coverage_end, background_intervals = _background_common_coverage(
-            bundle
+        capacity_base = capacity_witness(
+            bundle, coverage_start, coverage_end,
+            metadata["degraded_capacity_gbps"],
         )
-        capacity_start, capacity_end = coverage_start, coverage_end
-        if capacity_end <= capacity_start:
-            _background_id, capacity_start, capacity_end = background_intervals[0]
-        capacity_base = capacity_witness(bundle, capacity_start, capacity_end)
     except EvidenceError as exc:
         capacity_failure = str(exc)
-    if coverage_end is not None:
-        evidence_end = _common_evidence_end(epoch_index, coverage_end)
     replay_bundle = (
         _observation_bundle(bundle, evidence_end)
-        if evidence_end is not None else bundle
     )
-    rounds = replay_shadow(replay_bundle)
+    rounds = replay_shadow(replay_bundle, injection_time_ps=shadow_injection_ps)
     epochs_by_flow = {
         flow_id: epochs for flow_id, (epochs, _end_times) in epoch_index.items()
     }
@@ -814,7 +767,6 @@ def analyze_bundle(bundle, config: dict) -> BundleAnalysis:
         failures = []
         offered = _foreground_offered_load_indexed(
             epoch_index, shadow.start_ps, interval_end, foreground_ids,
-            latest_snapshot_ps=coverage_end,
         )
         capacity = capacity_base
         if shadow.start_ps < 0 or interval_end <= shadow.start_ps:
@@ -826,13 +778,6 @@ def analyze_bundle(bundle, config: dict) -> BundleAnalysis:
         elif capacity_failure is not None:
             capacity = None
             failures.append(f"capacity_witness_invalid:{capacity_failure}")
-        else:
-            coverage_error = _background_interval_error(
-                background_intervals, shadow.start_ps, interval_end,
-            )
-            if coverage_error is not None:
-                capacity = None
-                failures.append(f"capacity_witness_invalid:{coverage_error}")
         if not offered.valid:
             failures.extend(offered.failed_predicates)
         routing = None
@@ -911,10 +856,8 @@ def analyze_bundle(bundle, config: dict) -> BundleAnalysis:
             "capacity_valid": int(capacity is not None),
             "capacity_classification": classification,
             "C_healthy_gbps": capacity.c_healthy_gbps if capacity else "",
-            "C_hot_residual_gbps": capacity.c_hot_residual_gbps if capacity else "",
+            "C_reduced_gbps": capacity.c_hot_residual_gbps if capacity else "",
             "C_effective_residual_gbps": capacity.c_effective_residual_gbps if capacity else "",
-            "configured_background_gbps": capacity.configured_background_gbps if capacity else "",
-            "measured_background_gbps": capacity.measured_background_gbps if capacity else "",
             "healthy_maxflow_gbps": (
                 float(routing.healthy_maxflow_gbps) if routing else ""
             ),
@@ -970,7 +913,10 @@ def analyze_bundle(bundle, config: dict) -> BundleAnalysis:
     literal = [int(row["literal_no_progress"]) for row in valid]
     total_round_epochs = sum(int(row["round_epoch_count"]) for row in round_rows)
     summary = {
-        **metadata, "run_id": bundle.run_id, "episode_count": len(round_rows),
+        **metadata, "run_id": bundle.run_id,
+        "shadow_injection_ps": shadow_injection_ps,
+        "controlled_warmup_ps": CONTROLLED_WARMUP_PS,
+        "episode_count": len(round_rows),
         "round_count": len(round_rows), "completed_rounds": len(complete),
         "valid_completed_rounds": len(valid), "censored_rounds": len(round_rows) - len(complete),
         "completion_rate": len(complete) / len(round_rows) if round_rows else "",
@@ -1000,16 +946,10 @@ def analyze_bundle(bundle, config: dict) -> BundleAnalysis:
         "min_capacity_margin_gbps": _median([]) if not valid else min(
             float(row["capacity_margin_gbps"]) for row in valid
         ),
-        "configured_background_gbps": _mean(
-            row["configured_background_gbps"] for row in valid
-        ) if valid else "",
-        "measured_background_gbps": _mean(
-            row["measured_background_gbps"] for row in valid
-        ) if valid else "",
         "L_foreground_gbps": _mean(row["L_foreground_gbps"] for row in valid) if valid else "",
         "C_healthy_gbps": _mean(row["C_healthy_gbps"] for row in valid) if valid else "",
-        "C_hot_residual_gbps": _mean(
-            row["C_hot_residual_gbps"] for row in valid
+        "C_reduced_gbps": _mean(
+            row["C_reduced_gbps"] for row in valid
         ) if valid else "",
         "C_effective_residual_gbps": _mean(
             row["C_effective_residual_gbps"] for row in valid
@@ -1053,9 +993,15 @@ def _candidate_rank(rows: list[dict], scenario: str) -> tuple:
     capacities = [_number(row, "min_capacity_margin_gbps") for row in rows]
     if any(value is None for value in margins + capacities):
         return (math.inf, math.inf, math.inf, "")
+    evidence = [_integer(row, "valid_completed_rounds") or 0 for row in rows]
+    if scenario == "recoverable":
+        return (
+            -min(evidence), -min(margins), -min(capacities),
+            float(rows[0]["degraded_capacity_gbps"]), str(rows[0]["cell_id"]),
+        )
     return (
         -min(margins), -min(capacities),
-        float(rows[0]["background_utilization"]), str(rows[0]["cell_id"]),
+        float(rows[0]["degraded_capacity_gbps"]), str(rows[0]["cell_id"]),
     )
 
 
@@ -1136,7 +1082,7 @@ def _selection_evidence_adequate(row: dict) -> bool:
 
 
 def select_confirmation(summary_rows: Iterable[dict], output_path: Path | str) -> list[dict]:
-    """Select at most three seed-101 coarse cells per predeclared scenario."""
+    """Select one seed-101 coarse cell per predeclared scenario."""
 
     rows = list(summary_rows)
     output = []
@@ -1147,7 +1093,7 @@ def select_confirmation(summary_rows: Iterable[dict], output_path: Path | str) -
             and _truth(row, "all_valid_rounds_match_scenario")
             and _selection_evidence_adequate(row)
         ]
-        for selected in sorted(eligible, key=lambda row: _candidate_rank([row], scenario))[:3]:
+        for selected in sorted(eligible, key=lambda row: _candidate_rank([row], scenario))[:1]:
             for seed in CONFIRMATION_SEEDS:
                 output.append({field: seed if field == "seed" else selected[field] for field in CONFIG_FIELDS})
     output.sort(key=lambda row: (row["scenario"], row["cell_id"], row["seed"]))
@@ -1398,19 +1344,19 @@ def _read_locked_config_rows(path: Path | str, label: str) -> tuple[dict, ...]:
 
 def _read_coarse_config(path: Path | str) -> tuple[dict, ...]:
     rows = _read_locked_config_rows(path, "coarse")
-    if len(rows) != 27:
-        raise ValueError(f"coarse config {path} must contain exactly 27 rows")
+    if len(rows) != 6:
+        raise ValueError(f"coarse config {path} must contain exactly 6 rows")
     if any(row["scenario"] or row["seed"] != COARSE_SEEDS[0] for row in rows):
         raise ValueError("coarse config must use empty scenario and seed 101")
     if len({row["cell_id"] for row in rows}) != len(rows):
-        raise ValueError("coarse config must contain 27 unique cells")
+        raise ValueError("coarse config must contain 6 unique cells")
     return rows
 
 
 def _read_confirmation_config(path: Path | str) -> tuple[dict, ...]:
     rows = _read_locked_config_rows(path, "confirmation")
-    if not 1 <= len(rows) <= 18:
-        raise ValueError("confirmation config must contain between 1 and 18 rows")
+    if not 1 <= len(rows) <= 6:
+        raise ValueError("confirmation config must contain between 1 and 6 rows")
     by_cell = defaultdict(list)
     for row in rows:
         if row["scenario"] not in ("recoverable", "persistent"):
@@ -1572,10 +1518,10 @@ def main(argv=None) -> int:
     if args.select_formal and phase != "confirmation":
         parser.error("--select-formal requires --confirmation")
     try:
-        summaries, _rounds, _epochs = analyze_phase(phase, HERE / "data" / phase)
+        summaries, _rounds, _epochs = analyze_phase(phase, DATA_ROOT / phase)
         if args.select_confirmation:
             selected = select_confirmation(
-                summaries, HERE / "data" / phase / "confirmation_selection.csv"
+                summaries, DATA_ROOT / phase / "confirmation_selection.csv"
             )
             if not selected:
                 return 1
