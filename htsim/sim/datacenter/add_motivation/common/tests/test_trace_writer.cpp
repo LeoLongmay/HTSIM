@@ -12,7 +12,7 @@ constexpr const char* kPrefix = "/tmp/motivation_writer_test";
 
 const char* const kSuffixes[] = {
     ".ack.csv", ".token.csv", ".epoch.csv", ".background.csv", ".pathmap.csv",
-    ".linkmap.csv"};
+    ".linkmap.csv", ".coordination.csv"};
 
 void removeTraceFiles(const std::string& prefix) {
     for (const char* suffix : kSuffixes) {
@@ -86,6 +86,9 @@ int main() {
                    true, false, 80, "recycled", 17, 1200, 6400, 3200});
     writer.logEpoch({writer.nextEventSeq(), 7, 2, 100, 1200, 4, 500, 300, 550, 250,
                      "hold", "hold", true, 3, 2, 6400, 5200, 3200});
+    writer.logCoordination({writer.nextEventSeq(), 1250, 7, 2, 1, 3, 5, 500, 300, 350, 50,
+                            "retain", "residual_below_threshold", true, false, false, 3200,
+                            "hold"});
     writer.logBackground({writer.nextEventSeq(), 1300, 9, "start", 1, 2, 3, 25, 0,
                           "q1|q2"});
     writer.logAck({writer.nextEventSeq(), 1350, 7, 3, 42, 4, 6, 710, 500, 210, false,
@@ -120,6 +123,10 @@ int main() {
            "queue_fingerprint,bottleneck_rate_gbps,contains_reduced_link,ordered_queue_ids");
     assert(lineAt(std::string(kPrefix) + ".linkmap.csv", 1) ==
            "schema_version,run_id,queue_id,queue_name,rate_gbps,reduced_speed");
+    assert(lineAt(std::string(kPrefix) + ".coordination.csv", 1) ==
+           "schema_version,run_id,event_seq,time_ps,flow_id,epoch_id,round_id,cache_slot,"
+           "cache_generation,floor_ps,spread_ps,spread_ref_ps,residual_ps,action,reason,"
+           "refresh_complete,progress,handoff,cwnd_bytes,control_state");
     assert(lineAt(std::string(kPrefix) + ".token.csv", 2) ==
            "2,run,0,1000,7,enqueue_good_ack,good_ack,17,3,0,1,19");
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 2) ==
@@ -127,18 +134,21 @@ int main() {
            "6400,3200");
     assert(lineAt(std::string(kPrefix) + ".epoch.csv", 2) ==
            "2,run,3,7,2,100,1200,4,500,300,550,250,hold,hold,1,3,2,6400,5200,3200");
+    assert(lineAt(std::string(kPrefix) + ".coordination.csv", 2) ==
+           "2,run,4,1250,7,2,1,3,5,500,300,350,50,retain,residual_below_threshold,1,0,0,"
+           "3200,hold");
     assert(lineAt(std::string(kPrefix) + ".background.csv", 2) ==
-           "2,run,4,1300,9,start,1,2,3,25,0,q1|q2");
+           "2,run,5,1300,9,start,1,2,3,25,0,q1|q2");
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 3) ==
-           "2,run,13,scenario,5,1350,7,3,42,4,6,710,500,210,0,1,0,90,first_window,18,1300,"
+           "2,run,13,scenario,6,1350,7,3,42,4,6,710,500,210,0,1,0,90,first_window,18,1300,"
            "7700,3300");
     assert(lineAt(std::string(kPrefix) + ".background.csv", 3) ==
-           "2,run,6,1400,9,finish,1,2,3,25,6000,q1|q2");
+           "2,run,7,1400,9,finish,1,2,3,25,6000,q1|q2");
     assert(lineAt(std::string(kPrefix) + ".background.csv", 4) ==
-           "2,run,7,1450,10,start,4,5,6,0.123046875,0,q3");
+           "2,run,8,1450,10,start,4,5,6,0.123046875,0,q3");
     const std::string boundary_row = lineAt(std::string(kPrefix) + ".background.csv", 5);
     assert(boundary_row ==
-           "2,run,8,1500,11,start,7,8,9,9007199.2547409926,0,q4");
+           "2,run,9,1500,11,start,7,8,9,9007199.2547409926,0,q4");
     assert(boundary_row.find(formatMotivationBackgroundRateGbps(
                speedAsGbps(kMaximumExactTraceRate))) != std::string::npos);
     assert(speedFromGbps(std::stod("9007199.2547409926")) == kMaximumExactTraceRate);

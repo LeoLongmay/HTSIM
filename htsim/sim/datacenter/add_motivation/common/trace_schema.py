@@ -74,6 +74,7 @@ class TraceBundle:
     pathmap: tuple[dict, ...]
     linkmap: tuple[dict, ...]
     background: tuple[dict, ...]
+    coordination: tuple[dict, ...]
     events: tuple[EventRef, ...]
 
 
@@ -167,13 +168,38 @@ _SCHEMAS: dict[str, tuple[tuple[str, Callable[[str], object]], ...]] = {
         ("schema_version", _U32), ("run_id", _S), ("queue_id", _U64),
         ("queue_name", _S), ("rate_gbps", _F), ("reduced_speed", _B),
     ),
+    "coordination": (
+        ("schema_version", _U32), ("run_id", _S), ("event_seq", _U64),
+        ("time_ps", _U64), ("flow_id", _U64), ("epoch_id", _U64),
+        ("round_id", _U64), ("cache_slot", _U32), ("cache_generation", _U64),
+        ("floor_ps", _U64), ("spread_ps", _U64), ("spread_ref_ps", _U64),
+        ("residual_ps", _U64), ("action", _S), ("reason", _S),
+        ("refresh_complete", _B), ("progress", _B), ("handoff", _B),
+        ("cwnd_bytes", _U64), ("control_state", _S),
+    ),
 }
 
-_EVENT_KINDS = ("ack", "token", "epoch", "background")
+_EVENT_KINDS = ("ack", "token", "epoch", "background", "coordination")
+_COORDINATION_ACTIONS = frozenset({
+    "retain",
+    "invalidate",
+    "pending",
+    "round_complete_progress",
+    "round_complete_handoff",
+})
 
 
 def _error(path: Path, key: str, detail: str) -> TraceValidationError:
     return TraceValidationError(f"{path}: {key}: {detail}")
+
+
+def _validate_coordination_row(path: Path, row: dict) -> None:
+    if row["action"] not in _COORDINATION_ACTIONS:
+        raise _error(path, "action", f"unknown coordination action {row['action']!r}")
+    if row["action"] == "invalidate" and row["refresh_complete"]:
+        raise _error(path, "refresh_complete", "invalidate action cannot mark refresh complete")
+    if row["handoff"] and row["action"] != "round_complete_handoff":
+        raise _error(path, "action", "handoff requires round_complete_handoff action")
 
 
 def _load_file(prefix: Path, kind: str) -> tuple[dict, ...]:
@@ -220,6 +246,9 @@ def _load_file(prefix: Path, kind: str) -> tuple[dict, ...]:
                     "schema_version",
                     f"expected {SCHEMA_VERSION}, got {parsed['schema_version']}",
                 )
+
+            if kind == "coordination":
+                _validate_coordination_row(path, parsed)
 
             if kind in _EVENT_KINDS:
                 event_seq = parsed["event_seq"]
@@ -292,6 +321,9 @@ def _load_file_compact(prefix: Path, kind: str) -> tuple[_CompactTraceRow, ...]:
                     "schema_version",
                     f"expected {SCHEMA_VERSION}, got {row['schema_version']}",
                 )
+
+            if kind == "coordination":
+                _validate_coordination_row(path, row)
 
             if kind in _EVENT_KINDS:
                 event_seq = row["event_seq"]
@@ -484,12 +516,13 @@ def _build_bundle(trace_prefix: Path, loaded: dict[str, tuple], *, compact: bool
         pathmap=loaded["pathmap"],
         linkmap=loaded["linkmap"],
         background=loaded["background"],
+        coordination=loaded["coordination"],
         events=events,
     )
 
 
 def load_trace(prefix: Path | str) -> TraceBundle:
-    """Load and validate the six CSV files emitted for one trace prefix."""
+    """Load and validate the seven CSV files emitted for one trace prefix."""
 
     trace_prefix = Path(prefix)
     loaded = {kind: _load_file(trace_prefix, kind) for kind in _SCHEMAS}

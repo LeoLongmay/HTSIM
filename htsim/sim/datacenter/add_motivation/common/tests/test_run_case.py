@@ -49,6 +49,12 @@ TRACE_HEADERS = {
         "schema_version", "run_id", "queue_id", "queue_name", "rate_gbps",
         "reduced_speed",
     ),
+    "coordination": (
+        "schema_version", "run_id", "event_seq", "time_ps", "flow_id", "epoch_id",
+        "round_id", "cache_slot", "cache_generation", "floor_ps", "spread_ps",
+        "spread_ref_ps", "residual_ps", "action", "reason", "refresh_complete",
+        "progress", "handoff", "cwnd_bytes", "control_state",
+    ),
 }
 
 
@@ -146,6 +152,7 @@ class RunCaseTest(unittest.TestCase):
         self.assertNotIn("-queue_type", argv)
         self.assertNotIn("-host_queue_type", argv)
         self.assertNotIn("-motivation_background_config", argv)
+        self.assertNotIn("-prism_coordination_mode", argv)
         for flag in (
             "-prism_smooth_beta", "-prism_hysteresis",
             "-prism_engage_spread", "-prism_engage_mult",
@@ -176,6 +183,7 @@ class RunCaseTest(unittest.TestCase):
         self.assertEqual(manifest["config"]["degraded_links"], 2)
         self.assertEqual(manifest["config"]["degraded_capacity_gbps"], 50.0)
         self.assertIsNone(manifest["config"]["background_config"])
+        self.assertEqual(manifest["config"]["prism_coordination_mode"], "disabled")
         self.assertNotIn("network_queue_type", manifest["config"])
         self.assertNotIn("host_queue_type", manifest["config"])
         self.assertNotIn("background_config_sha256", manifest)
@@ -193,6 +201,7 @@ class RunCaseTest(unittest.TestCase):
                 "background",
                 "pathmap",
                 "linkmap",
+                "coordination",
                 "manifest",
             },
         )
@@ -250,6 +259,28 @@ class RunCaseTest(unittest.TestCase):
             {key: manifest["config"][key.removeprefix("-")] for key in expected},
             {key: int(value) for key, value in expected.items()},
         )
+
+    def test_prism_coordination_mode_is_opt_in_and_recorded(self):
+        module = load_run_case_module()
+        with mock.patch.object(module.subprocess, "run", side_effect=self.completed) as run:
+            manifest_path = self.invoke(
+                module,
+                cc="prism",
+                load_balancing_algo="reps_actual",
+                prism_coordination_mode="full_prism",
+            )
+
+        argv = run.call_args_list[-1].args[0]
+        self.assertEqual(argv[argv.index("-prism_coordination_mode") + 1], "full_prism")
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+        self.assertEqual(manifest["config"]["prism_coordination_mode"], "full_prism")
+
+    def test_rejects_invalid_prism_coordination_mode_before_running(self):
+        module = load_run_case_module()
+        with mock.patch.object(module.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "invalid prism_coordination_mode"):
+                self.invoke(module, prism_coordination_mode="unknown")
+        run.assert_not_called()
 
     def test_m2_rejects_missing_fields_and_seed_mismatch_before_running(self):
         module = load_run_case_module()

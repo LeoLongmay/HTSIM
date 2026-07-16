@@ -45,6 +45,12 @@ HEADERS = {
         "schema_version", "run_id", "queue_id", "queue_name", "rate_gbps",
         "reduced_speed",
     ),
+    "coordination": (
+        "schema_version", "run_id", "event_seq", "time_ps", "flow_id", "epoch_id",
+        "round_id", "cache_slot", "cache_generation", "floor_ps", "spread_ps",
+        "spread_ref_ps", "residual_ps", "action", "reason", "refresh_complete",
+        "progress", "handoff", "cwnd_bytes", "control_state",
+    ),
 }
 
 
@@ -97,6 +103,17 @@ def valid_rows():
             {
                 "schema_version": "2", "run_id": "fixture", "queue_id": "2",
                 "queue_name": "cut-2", "rate_gbps": "50.5", "reduced_speed": "1",
+            },
+        ],
+        "coordination": [
+            {
+                "schema_version": "2", "run_id": "fixture", "event_seq": "100",
+                "time_ps": "1000", "flow_id": "7", "epoch_id": "3", "round_id": "1",
+                "cache_slot": "2", "cache_generation": "9", "floor_ps": "3000000",
+                "spread_ps": "1000000", "spread_ref_ps": "1200000", "residual_ps": "500000",
+                "action": "retain", "reason": "residual_below_threshold",
+                "refresh_complete": "1", "progress": "0", "handoff": "0",
+                "cwnd_bytes": "16600", "control_state": "hold",
             },
         ],
     }
@@ -217,18 +234,64 @@ class TraceSchemaTests(unittest.TestCase):
                     messages.append(str(raised.exception))
                 self.assertEqual(messages[1], messages[0])
 
-    def test_loads_all_six_v2_files_with_explicit_types(self):
+    def test_loads_all_seven_v2_files_with_explicit_types(self):
         with tempfile.TemporaryDirectory() as directory:
             bundle = load_trace(write_trace(directory))
 
         self.assertEqual(bundle.run_id, "fixture")
-        self.assertEqual([event.event_seq for event in bundle.events], [0, 1, 2])
-        self.assertEqual([event.kind for event in bundle.events], ["ack", "token", "epoch"])
+        self.assertEqual([event.event_seq for event in bundle.events], [0, 1, 2, 100])
+        self.assertEqual(
+            [event.kind for event in bundle.events],
+            ["ack", "token", "epoch", "coordination"],
+        )
         self.assertIsInstance(bundle.ack[0]["event_seq"], int)
         self.assertIsInstance(bundle.ack[0]["ecn"], bool)
         self.assertIsInstance(bundle.pathmap[0]["bottleneck_rate_gbps"], float)
         self.assertIsInstance(bundle.linkmap[0]["reduced_speed"], bool)
+        self.assertIsInstance(bundle.coordination[0]["refresh_complete"], bool)
         self.assertNotIn("event_seq", bundle.pathmap[0])
+
+    def test_rejects_missing_coordination_leaf(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory)
+            Path(f"{prefix}.coordination.csv").unlink()
+            with self.assertRaisesRegex(TraceValidationError, r"fixture\.coordination\.csv.*file"):
+                load_trace(prefix)
+
+    def test_rejects_non_monotonic_coordination_event_sequence_within_file(self):
+        rows = valid_rows()
+        later = dict(rows["coordination"][0])
+        later["event_seq"] = "101"
+        rows["coordination"] = [later, rows["coordination"][0]]
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.coordination\.csv.*event_seq",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_invalidation_marked_refresh_complete(self):
+        rows = valid_rows()
+        rows["coordination"][0].update({"action": "invalidate", "refresh_complete": "1"})
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.coordination\.csv.*refresh_complete",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_handoff_without_round_complete_handoff_action(self):
+        rows = valid_rows()
+        rows["coordination"][0].update({"action": "retain", "handoff": "1"})
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.coordination\.csv.*action",
+            ):
+                load_trace(prefix)
 
     def test_rejects_wrong_schema_version_with_filename_and_key(self):
         rows = valid_rows()
@@ -316,7 +379,7 @@ class TraceSchemaTests(unittest.TestCase):
         rows["epoch"][0].update({"event_seq": "3", "end_ps": "100"})
         with tempfile.TemporaryDirectory() as directory:
             bundle = load_trace(write_trace(directory, rows))
-        self.assertEqual([event.event_seq for event in bundle.events], [0, 1, 2, 3])
+        self.assertEqual([event.event_seq for event in bundle.events], [0, 1, 2, 3, 100])
 
     def test_rejects_mismatched_run_id_with_filename_and_key(self):
         rows = valid_rows()

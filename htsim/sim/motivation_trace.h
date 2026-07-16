@@ -90,6 +90,27 @@ struct MotivationLinkRecord {
     bool reduced_speed;
 };
 
+struct MotivationCoordinationRecord {
+    uint64_t event_seq;
+    uint64_t time_ps;
+    uint64_t flow_id;
+    uint64_t epoch_id;
+    uint64_t round_id;
+    uint32_t cache_slot;
+    uint64_t cache_generation;
+    uint64_t floor_ps;
+    uint64_t spread_ps;
+    uint64_t spread_ref_ps;
+    uint64_t residual_ps;
+    std::string action;
+    std::string reason;
+    bool refresh_complete;
+    bool progress;
+    bool handoff;
+    uint64_t cwnd_bytes;
+    std::string control_state;
+};
+
 class MotivationTraceWriter {
 public:
     MotivationTraceWriter() = default;
@@ -112,6 +133,7 @@ public:
     void logBackground(const MotivationBackgroundRecord& record);
     void logPath(const MotivationPathRecord& record);
     void logLink(const MotivationLinkRecord& record);
+    void logCoordination(const MotivationCoordinationRecord& record);
 
     void close();
 
@@ -125,6 +147,7 @@ private:
     std::ofstream _background;
     std::ofstream _path;
     std::ofstream _link;
+    std::ofstream _coordination;
 };
 
 #endif

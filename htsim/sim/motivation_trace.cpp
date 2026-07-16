@@ -73,6 +73,7 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
         openCsv(_background, _config.prefix + ".background.csv");
         openCsv(_path, _config.prefix + ".pathmap.csv");
         openCsv(_link, _config.prefix + ".linkmap.csv");
+        openCsv(_coordination, _config.prefix + ".coordination.csv");
     } catch (...) {
         close();
         throw;
@@ -93,6 +94,9 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
     _path << "schema_version,run_id,flow_id,entropy,physical_path_id,resolution_status,"
              "queue_fingerprint,bottleneck_rate_gbps,contains_reduced_link,ordered_queue_ids\n";
     _link << "schema_version,run_id,queue_id,queue_name,rate_gbps,reduced_speed\n";
+    _coordination << "schema_version,run_id,event_seq,time_ps,flow_id,epoch_id,round_id,"
+                     "cache_slot,cache_generation,floor_ps,spread_ps,spread_ref_ps,residual_ps,"
+                     "action,reason,refresh_complete,progress,handoff,cwnd_bytes,control_state\n";
     _enabled = true;
 }
 
@@ -175,10 +179,24 @@ void MotivationTraceWriter::logLink(const MotivationLinkRecord& record) {
           << record.queue_name << ',' << record.rate_gbps << ',' << record.reduced_speed << '\n';
 }
 
+void MotivationTraceWriter::logCoordination(const MotivationCoordinationRecord& record) {
+    if (!_enabled) {
+        return;
+    }
+    _coordination << kSchemaVersion << ',' << _config.run_id << ',' << record.event_seq << ','
+                  << record.time_ps << ',' << record.flow_id << ',' << record.epoch_id << ','
+                  << record.round_id << ',' << record.cache_slot << ','
+                  << record.cache_generation << ',' << record.floor_ps << ','
+                  << record.spread_ps << ',' << record.spread_ref_ps << ','
+                  << record.residual_ps << ',' << record.action << ',' << record.reason << ','
+                  << record.refresh_complete << ',' << record.progress << ',' << record.handoff
+                  << ',' << record.cwnd_bytes << ',' << record.control_state << '\n';
+}
+
 void MotivationTraceWriter::close() {
     _enabled = false;
-    const std::array<std::ofstream*, 6> streams = {
-        &_ack, &_token, &_epoch, &_background, &_path, &_link};
+    const std::array<std::ofstream*, 7> streams = {
+        &_ack, &_token, &_epoch, &_background, &_path, &_link, &_coordination};
     for (std::ofstream* stream : streams) {
         if (stream->is_open()) {
             stream->close();

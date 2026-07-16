@@ -43,7 +43,9 @@ VALID_CCS = {
 }
 VALID_LOAD_BALANCERS = {"reps", "reps_actual"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
-TRACE_SUFFIXES = ("ack", "token", "epoch", "background", "pathmap", "linkmap")
+TRACE_SUFFIXES = (
+    "ack", "token", "epoch", "background", "pathmap", "linkmap", "coordination",
+)
 M2_EXPERIMENT = "M2_redistribution_progress"
 M2_SIMULATION_END_MS = 3
 ANALYSIS_CONFIG_FIELDS = (
@@ -195,7 +197,8 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
              out_dir, trace_prefix, degraded_links=0,
              degraded_capacity_gbps=100.0, background_config=None,
              analysis_config=None, motivation_residual_recycle=False,
-             motivation_residual_threshold_us=10.0, load_balancing_algo="reps"):
+             motivation_residual_threshold_us=10.0, load_balancing_algo="reps",
+             prism_coordination_mode="disabled"):
     experiment = validate_identifier(experiment, "experiment")
     run_id = validate_identifier(run_id, "run_id")
     if phase not in VALID_PHASES:
@@ -204,6 +207,10 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         raise ValueError(f"cc must be one of {sorted(VALID_CCS)}")
     if load_balancing_algo not in VALID_LOAD_BALANCERS:
         raise ValueError(f"load_balancing_algo must be one of {sorted(VALID_LOAD_BALANCERS)}")
+    if prism_coordination_mode not in {
+        "disabled", "original_prism", "prism_recycle", "full_prism",
+    }:
+        raise ValueError("invalid prism_coordination_mode")
     if type(motivation_residual_recycle) is not bool:
         raise TypeError("motivation_residual_recycle must be boolean")
     if isinstance(motivation_residual_threshold_us, bool) or not isinstance(
@@ -312,6 +319,11 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
             else []
         ),
         *(
+            ["-prism_coordination_mode", prism_coordination_mode]
+            if prism_coordination_mode != "disabled"
+            else []
+        ),
+        *(
             [
                 "-prism_smooth_beta", "1",
                 "-prism_hysteresis", "0",
@@ -392,6 +404,7 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
             "simulation_end_ms": simulation_end_ms,
             "motivation_residual_recycle": motivation_residual_recycle,
             "motivation_residual_threshold_us": motivation_residual_threshold_us,
+            "prism_coordination_mode": prism_coordination_mode,
         },
         "output_filenames": output_filenames,
     }
@@ -476,6 +489,11 @@ def main(argv=None):
     parser.add_argument("--background-config", type=Path)
     parser.add_argument("--motivation-residual-recycle", action="store_true")
     parser.add_argument("--motivation-residual-threshold-us", type=float, default=10.0)
+    parser.add_argument(
+        "--prism-coordination-mode",
+        choices=("disabled", "original_prism", "prism_recycle", "full_prism"),
+        default="disabled",
+    )
     parser.add_argument("--m2-cell-id")
     parser.add_argument("--m2-scenario")
     parser.add_argument("--m2-foreground-flows", type=int)
@@ -519,6 +537,7 @@ def main(argv=None):
         analysis_config=analysis_config,
         motivation_residual_recycle=args.motivation_residual_recycle,
         motivation_residual_threshold_us=args.motivation_residual_threshold_us,
+        prism_coordination_mode=args.prism_coordination_mode,
     )
     print(manifest)
 
