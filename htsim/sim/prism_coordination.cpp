@@ -68,12 +68,13 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
         }
         const SlotGeneration key{slot.slot, slot.generation};
         const auto observation = _observations.find({epoch.epoch_id, key});
+        const bool has_matching_observation = observation != _observations.end();
         const bool completed = _completed_slots.find(slot.slot) != _completed_slots.end();
-        if (observation == _observations.end() && completed) {
+        if (!has_matching_observation && completed) {
             continue;
         }
         simtime_picosec residual = 0;
-        if (observation != _observations.end()) {
+        if (has_matching_observation) {
             residual = observation->second.qdelay > epoch.floor
                            ? observation->second.qdelay - epoch.floor
                            : 0;
@@ -92,14 +93,14 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
                 continue;
             }
         }
-        if (!slot.valid || !slot.ack_validated) {
+        if (!slot.ack_validated || (!slot.valid && !has_matching_observation)) {
             if (!completed) {
                 addSlotAction(result, slot, PrismCoordinationAction::PENDING, 0,
                               "slot_not_refreshable");
             }
             continue;
         }
-        if (observation == _observations.end()) {
+        if (!has_matching_observation) {
             addSlotAction(result, slot, PrismCoordinationAction::PENDING, 0,
                           "missing_epoch_observation");
             continue;

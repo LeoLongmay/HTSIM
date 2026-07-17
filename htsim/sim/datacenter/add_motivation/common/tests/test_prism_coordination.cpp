@@ -228,6 +228,32 @@ void completed_physical_slots_survive_reps_freshness_consumption() {
     assert(second.handoff_requested);
 }
 
+void ack_validated_consumed_token_completes_a_refresh_round_with_progress() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    auto slots = eight_slots();
+
+    for (uint16_t slot = 0; slot < 8; ++slot) {
+        if (slot == 3) {
+            continue;
+        }
+        coordinator.observeAck(1, slot, 1, 3, false, true);
+    }
+    assert(!coordinator.closeEpoch(hold_epoch(1, 2, 16, slots)).round_complete);
+
+    slots[3].valid = false;
+    for (uint16_t slot = 0; slot < 8; ++slot) {
+        coordinator.observeAck(2, slot, 1, 3, false, true);
+    }
+    const auto result = coordinator.closeEpoch(hold_epoch(2, 2, 15, slots));
+
+    assert(result.invalidated_slots.empty());
+    assert(result.pending_slots.empty());
+    assert(result.retained_slots == std::vector<uint16_t>({0, 1, 2, 3, 4, 5, 6, 7}));
+    assert(result.round_complete);
+    assert(result.progress);
+    assert(!result.handoff_requested);
+}
+
 void invalidated_slot_requires_a_clean_new_generation() {
     PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
     auto slots = eight_slots();
@@ -249,6 +275,27 @@ void invalidated_slot_requires_a_clean_new_generation() {
     const auto replacement = coordinator.closeEpoch(hold_epoch(3, 2, 16, slots));
     assert(replacement.round_complete);
     assert(replacement.handoff_requested);
+}
+
+void late_ack_for_an_invalidated_consumed_token_remains_pending() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    auto slots = eight_slots();
+
+    for (uint16_t slot = 0; slot < 8; ++slot) {
+        coordinator.observeAck(1, slot, 1, slot == 3 ? 12 : 3, false, true);
+    }
+    const auto first = coordinator.closeEpoch(hold_epoch(1, 2, 16, slots));
+    assert(first.invalidated_slots == std::vector<uint16_t>({3}));
+    assert(!first.round_complete);
+
+    slots[3].valid = false;
+    slots[3].ack_validated = true;
+    coordinator.observeAck(2, 3, 1, 3, false, true);
+    const auto late = coordinator.closeEpoch(hold_epoch(2, 2, 16, slots));
+
+    assert(late.pending_slots == std::vector<uint16_t>({3}));
+    assert(late.slot_actions[0].reason == "awaiting_replacement");
+    assert(!late.round_complete);
 }
 
 void ecn_observation_invalidates_the_matching_cached_slot() {
@@ -320,7 +367,9 @@ int main() {
     late_observation_from_an_older_epoch_is_pending();
     coordination_results_preserve_trace_values();
     completed_physical_slots_survive_reps_freshness_consumption();
+    ack_validated_consumed_token_completes_a_refresh_round_with_progress();
     invalidated_slot_requires_a_clean_new_generation();
+    late_ack_for_an_invalidated_consumed_token_remains_pending();
     ecn_observation_invalidates_the_matching_cached_slot();
     ecn_observation_invalidates_a_slot_consumed_before_its_ack();
     coordinator_uses_independent_cc_and_spray_thresholds_at_boundaries();
