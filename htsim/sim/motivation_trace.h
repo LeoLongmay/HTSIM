@@ -111,6 +111,23 @@ struct MotivationCoordinationRecord {
     std::string control_state;
 };
 
+struct MotivationOutcomeRecord {
+    uint64_t event_seq;
+    uint64_t time_ps;
+    uint64_t flow_id;
+    uint64_t round_id;
+    uint64_t window_ps;
+    uint64_t pre_classified_bytes;
+    uint64_t pre_harmful_bytes;
+    double pre_exposure;
+    uint64_t post1_classified_bytes;
+    uint64_t post1_harmful_bytes;
+    double post1_exposure;
+    uint64_t post2_classified_bytes;
+    uint64_t post2_harmful_bytes;
+    double post2_exposure;
+};
+
 class MotivationTraceWriter {
 public:
     MotivationTraceWriter() = default;
@@ -134,6 +151,7 @@ public:
     void logPath(const MotivationPathRecord& record);
     void logLink(const MotivationLinkRecord& record);
     void logCoordination(const MotivationCoordinationRecord& record);
+    void logOutcome(const MotivationOutcomeRecord& record);
 
     void close();
 
@@ -148,6 +166,7 @@ private:
     std::ofstream _path;
     std::ofstream _link;
     std::ofstream _coordination;
+    std::ofstream _outcome;
 };
 
 #endif

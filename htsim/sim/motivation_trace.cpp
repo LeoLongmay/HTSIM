@@ -2,6 +2,7 @@
 #include "motivation_trace.h"
 
 #include <array>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -21,6 +22,23 @@ void openCsv(std::ofstream& stream, const std::string& path) {
     stream.open(path, std::ios::out | std::ios::trunc);
     if (!stream.is_open()) {
         throw std::runtime_error("failed to open motivation trace: " + path);
+    }
+}
+
+void validateOutcomeWindow(const char* name, uint64_t classified_bytes, uint64_t harmful_bytes,
+                           double exposure) {
+    if (harmful_bytes > classified_bytes) {
+        throw std::invalid_argument(std::string(name) + " harmful bytes exceed classified bytes");
+    }
+    if (!std::isfinite(exposure) || exposure < 0.0 || exposure > 1.0) {
+        throw std::invalid_argument(std::string(name) + " exposure must be finite and in [0, 1]");
+    }
+    const double expected = classified_bytes == 0
+                                ? 0.0
+                                : static_cast<double>(harmful_bytes) /
+                                      static_cast<double>(classified_bytes);
+    if (std::fabs(exposure - expected) > 1e-12) {
+        throw std::invalid_argument(std::string(name) + " exposure does not match its byte ratio");
     }
 }
 
@@ -74,6 +92,7 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
         openCsv(_path, _config.prefix + ".pathmap.csv");
         openCsv(_link, _config.prefix + ".linkmap.csv");
         openCsv(_coordination, _config.prefix + ".coordination.csv");
+        openCsv(_outcome, _config.prefix + ".outcome.csv");
     } catch (...) {
         close();
         throw;
@@ -98,6 +117,10 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
     _coordination << "schema_version,run_id,event_seq,time_ps,flow_id,epoch_id,round_id,"
                      "cache_slot,cache_generation,floor_ps,spread_ps,spread_ref_ps,residual_ps,"
                      "action,reason,refresh_complete,progress,handoff,cwnd_bytes,control_state\n";
+    _outcome << "schema_version,run_id,seed,scenario,event_seq,time_ps,flow_id,round_id,window_ps,"
+                "pre_classified_bytes,pre_harmful_bytes,pre_exposure,post1_classified_bytes,"
+                "post1_harmful_bytes,post1_exposure,post2_classified_bytes,post2_harmful_bytes,"
+                "post2_exposure\n";
     _enabled = true;
 }
 
@@ -196,10 +219,30 @@ void MotivationTraceWriter::logCoordination(const MotivationCoordinationRecord& 
                   << ',' << record.cwnd_bytes << ',' << record.control_state << '\n';
 }
 
+void MotivationTraceWriter::logOutcome(const MotivationOutcomeRecord& record) {
+    if (!_enabled) {
+        return;
+    }
+    validateOutcomeWindow("pre", record.pre_classified_bytes, record.pre_harmful_bytes,
+                          record.pre_exposure);
+    validateOutcomeWindow("post1", record.post1_classified_bytes, record.post1_harmful_bytes,
+                          record.post1_exposure);
+    validateOutcomeWindow("post2", record.post2_classified_bytes, record.post2_harmful_bytes,
+                          record.post2_exposure);
+    _outcome << kSchemaVersion << ',' << _config.run_id << ',' << _config.seed << ','
+             << _config.scenario << ',' << record.event_seq << ',' << record.time_ps << ','
+             << record.flow_id << ',' << record.round_id << ',' << record.window_ps << ','
+             << record.pre_classified_bytes << ',' << record.pre_harmful_bytes << ','
+             << record.pre_exposure << ',' << record.post1_classified_bytes << ','
+             << record.post1_harmful_bytes << ',' << record.post1_exposure << ','
+             << record.post2_classified_bytes << ',' << record.post2_harmful_bytes << ','
+             << record.post2_exposure << '\n';
+}
+
 void MotivationTraceWriter::close() {
     _enabled = false;
-    const std::array<std::ofstream*, 7> streams = {
-        &_ack, &_token, &_epoch, &_background, &_path, &_link, &_coordination};
+    const std::array<std::ofstream*, 8> streams = {
+        &_ack, &_token, &_epoch, &_background, &_path, &_link, &_coordination, &_outcome};
     for (std::ofstream* stream : streams) {
         if (stream->is_open()) {
             stream->close();

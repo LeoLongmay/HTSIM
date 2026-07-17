@@ -51,6 +51,13 @@ HEADERS = {
         "spread_ref_ps", "residual_ps", "action", "reason", "refresh_complete",
         "progress", "handoff", "cwnd_bytes", "control_state",
     ),
+    "outcome": (
+        "schema_version", "run_id", "seed", "scenario", "event_seq", "time_ps",
+        "flow_id", "round_id", "window_ps", "pre_classified_bytes",
+        "pre_harmful_bytes", "pre_exposure", "post1_classified_bytes",
+        "post1_harmful_bytes", "post1_exposure", "post2_classified_bytes",
+        "post2_harmful_bytes", "post2_exposure",
+    ),
 }
 
 
@@ -117,14 +124,28 @@ def valid_rows():
                 "cwnd_bytes": "16600", "control_state": "hold",
             },
         ],
+        "outcome": [
+            {
+                "schema_version": "2", "run_id": "fixture", "seed": "13",
+                "scenario": "unit", "event_seq": "101", "time_ps": "1100",
+                "flow_id": "7", "round_id": "1", "window_ps": "40",
+                "pre_classified_bytes": "100", "pre_harmful_bytes": "0",
+                "pre_exposure": "0.0", "post1_classified_bytes": "100",
+                "post1_harmful_bytes": "30", "post1_exposure": "0.3",
+                "post2_classified_bytes": "100", "post2_harmful_bytes": "50",
+                "post2_exposure": "0.5",
+            },
+        ],
     }
 
 
-def write_trace(directory, rows=None, headers=None):
+def write_trace(directory, rows=None, headers=None, *, include_outcome=False):
     prefix = Path(directory) / "fixture"
     rows = valid_rows() if rows is None else rows
     headers = HEADERS if headers is None else headers
     for kind, fieldnames in headers.items():
+        if kind == "outcome" and not include_outcome:
+            continue
         with Path(f"{prefix}.{kind}.csv").open("w", newline="", encoding="utf-8") as stream:
             writer = csv.DictWriter(stream, fieldnames=fieldnames)
             writer.writeheader()
@@ -135,7 +156,7 @@ def write_trace(directory, rows=None, headers=None):
 class TraceSchemaTests(unittest.TestCase):
     def test_compact_loader_preserves_all_values_events_and_source_paths(self):
         with tempfile.TemporaryDirectory() as directory:
-            prefix = write_trace(directory)
+            prefix = write_trace(directory, include_outcome=True)
             with Path(f"{prefix}.ack.csv").open("a", encoding="utf-8") as stream:
                 stream.write("\n")
             default = load_trace(prefix)
@@ -235,25 +256,42 @@ class TraceSchemaTests(unittest.TestCase):
                     messages.append(str(raised.exception))
                 self.assertEqual(messages[1], messages[0])
 
-    def test_loads_all_seven_v2_files_with_explicit_types(self):
+    def test_loads_optional_outcome_file_with_explicit_types(self):
         with tempfile.TemporaryDirectory() as directory:
-            bundle = load_trace(write_trace(directory))
+            bundle = load_trace(write_trace(directory, include_outcome=True))
 
         self.assertEqual(bundle.run_id, "fixture")
-        self.assertEqual([event.event_seq for event in bundle.events], [0, 1, 2, 100])
+        self.assertEqual([event.event_seq for event in bundle.events], [0, 1, 2, 100, 101])
         self.assertEqual(
             [event.kind for event in bundle.events],
-            ["ack", "token", "epoch", "coordination"],
+            ["ack", "token", "epoch", "coordination", "outcome"],
         )
         self.assertIsInstance(bundle.ack[0]["event_seq"], int)
         self.assertIsInstance(bundle.ack[0]["ecn"], bool)
         self.assertIsInstance(bundle.pathmap[0]["bottleneck_rate_gbps"], float)
         self.assertIsInstance(bundle.linkmap[0]["reduced_speed"], bool)
         self.assertIsInstance(bundle.coordination[0]["refresh_complete"], bool)
+        self.assertIsInstance(bundle.outcome[0]["pre_exposure"], float)
         self.assertEqual(bundle.token[0]["cache_slot"], 3)
         self.assertEqual(bundle.token[0]["cache_generation"], 5)
         self.assertTrue(bundle.token[0]["admission_written"])
         self.assertNotIn("event_seq", bundle.pathmap[0])
+
+    def test_outcome_file_is_optional_for_existing_trace_bundles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory)
+            for loader in (load_trace, load_trace_compact):
+                with self.subTest(loader=loader.__name__):
+                    bundle = loader(prefix)
+                    self.assertEqual(bundle.outcome, ())
+
+    def test_rejects_nonfinite_outcome_exposure(self):
+        rows = valid_rows()
+        rows["outcome"][0]["post1_exposure"] = "nan"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows, include_outcome=True)
+            with self.assertRaisesRegex(TraceValidationError, r"outcome\.csv.*post1_exposure"):
+                load_trace(prefix)
 
     def test_rejects_written_admission_with_sentinel_slot(self):
         rows = valid_rows()

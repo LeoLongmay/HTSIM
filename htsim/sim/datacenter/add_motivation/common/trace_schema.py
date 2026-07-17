@@ -77,6 +77,7 @@ class TraceBundle:
     background: tuple[dict, ...]
     coordination: tuple[dict, ...]
     events: tuple[EventRef, ...]
+    outcome: tuple[dict, ...] = ()
 
 
 def _parse_bounded_int(value: str, minimum: int, maximum: int) -> int:
@@ -184,9 +185,21 @@ _SCHEMAS: dict[str, tuple[tuple[str, Callable[[str], object]], ...]] = {
         ("refresh_complete", _B), ("progress", _B), ("handoff", _B),
         ("cwnd_bytes", _U64), ("control_state", _S),
     ),
+    "outcome": (
+        ("schema_version", _U32), ("run_id", _S), ("seed", _U32), ("scenario", _S),
+        ("event_seq", _U64), ("time_ps", _U64), ("flow_id", _U64),
+        ("round_id", _U64), ("window_ps", _U64),
+        ("pre_classified_bytes", _U64), ("pre_harmful_bytes", _U64),
+        ("pre_exposure", _F), ("post1_classified_bytes", _U64),
+        ("post1_harmful_bytes", _U64), ("post1_exposure", _F),
+        ("post2_classified_bytes", _U64), ("post2_harmful_bytes", _U64),
+        ("post2_exposure", _F),
+    ),
 }
 
-_EVENT_KINDS = ("ack", "token", "epoch", "background", "coordination")
+_OPTIONAL_TRACE_KINDS = ("outcome",)
+_REQUIRED_TRACE_KINDS = tuple(kind for kind in _SCHEMAS if kind not in _OPTIONAL_TRACE_KINDS)
+_EVENT_KINDS = ("ack", "token", "epoch", "background", "coordination", "outcome")
 _COORDINATION_ACTIONS = frozenset({
     "retain",
     "invalidate",
@@ -235,6 +248,17 @@ def _validate_coordination_row(path: Path, row: dict) -> None:
         raise _error(path, "progress", "round_complete_progress action requires progress")
     if row["progress"] and row["action"] != "round_complete_progress":
         raise _error(path, "action", "progress requires round_complete_progress action")
+
+
+def _validate_outcome_row(path: Path, row: dict) -> None:
+    for window in ("pre", "post1", "post2"):
+        classified = row[f"{window}_classified_bytes"]
+        harmful = row[f"{window}_harmful_bytes"]
+        exposure = row[f"{window}_exposure"]
+        if harmful > classified:
+            raise _error(path, f"{window}_harmful_bytes", "cannot exceed classified bytes")
+        if not 0.0 <= exposure <= 1.0:
+            raise _error(path, f"{window}_exposure", "must be in [0, 1]")
 
 
 def _validate_token_admission_provenance(token: dict) -> None:
@@ -313,6 +337,8 @@ def _load_file(prefix: Path, kind: str) -> tuple[dict, ...]:
 
             if kind == "coordination":
                 _validate_coordination_row(path, parsed)
+            if kind == "outcome":
+                _validate_outcome_row(path, parsed)
 
             if kind in _EVENT_KINDS:
                 event_seq = parsed["event_seq"]
@@ -388,6 +414,8 @@ def _load_file_compact(prefix: Path, kind: str) -> tuple[_CompactTraceRow, ...]:
 
             if kind == "coordination":
                 _validate_coordination_row(path, row)
+            if kind == "outcome":
+                _validate_outcome_row(path, row)
 
             if kind in _EVENT_KINDS:
                 event_seq = row["event_seq"]
@@ -583,14 +611,25 @@ def _build_bundle(trace_prefix: Path, loaded: dict[str, tuple], *, compact: bool
         background=loaded["background"],
         coordination=loaded["coordination"],
         events=events,
+        outcome=loaded["outcome"],
     )
 
 
+def _load_trace_files(trace_prefix: Path, loader: Callable[[Path, str], tuple]) -> dict[str, tuple]:
+    loaded = {kind: loader(trace_prefix, kind) for kind in _REQUIRED_TRACE_KINDS}
+    for kind in _OPTIONAL_TRACE_KINDS:
+        if Path(f"{trace_prefix}.{kind}.csv").exists():
+            loaded[kind] = loader(trace_prefix, kind)
+        else:
+            loaded[kind] = ()
+    return loaded
+
+
 def load_trace(prefix: Path | str) -> TraceBundle:
-    """Load and validate the seven CSV files emitted for one trace prefix."""
+    """Load and validate required trace files plus any optional outcome trace."""
 
     trace_prefix = Path(prefix)
-    loaded = {kind: _load_file(trace_prefix, kind) for kind in _SCHEMAS}
+    loaded = _load_trace_files(trace_prefix, _load_file)
     return _build_bundle(trace_prefix, loaded, compact=False)
 
 
@@ -598,5 +637,5 @@ def load_trace_compact(prefix: Path | str) -> TraceBundle:
     """Load an equivalent trace using compact read-only rows for M2 analysis."""
 
     trace_prefix = Path(prefix)
-    loaded = {kind: _load_file_compact(trace_prefix, kind) for kind in _SCHEMAS}
+    loaded = _load_trace_files(trace_prefix, _load_file_compact)
     return _build_bundle(trace_prefix, loaded, compact=True)
