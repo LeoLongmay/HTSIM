@@ -198,6 +198,21 @@ class DistributionRunnerTests(unittest.TestCase):
 
 
 class DistributionAnalysisTests(unittest.TestCase):
+    def _assert_rejects_written_admission_mutation(self, mutate, error):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = _write_locked_distribution_matrix(root)
+            with prefix.with_suffix(".token.csv").open(newline="", encoding="ascii") as stream:
+                token_rows = list(csv.DictReader(stream))
+            with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
+                ack_rows = list(csv.DictReader(stream))
+            mutate(token_rows, ack_rows)
+            _write_csv(prefix.with_suffix(".token.csv"), "token", token_rows)
+            _write_csv(prefix.with_suffix(".ack.csv"), "ack", ack_rows)
+
+            with self.assertRaisesRegex(ValueError, error):
+                analyze_distribution(root, root / "aggregate")
+
     def test_chain_specs_share_evidence_between_terminals_in_one_round(self):
         records = [
             {
@@ -254,6 +269,48 @@ class DistributionAnalysisTests(unittest.TestCase):
                 r"token\.csv: entropy: value 2 differs from ACK entropy 1",
             ):
                 analyze_distribution(root, root / "aggregate")
+
+    def test_rejects_written_admission_not_after_its_referenced_ack(self):
+        self._assert_rejects_written_admission_mutation(
+            lambda tokens, _acks: tokens[0].update(event_seq="6"),
+            r"token\.csv: event_seq: value 6 must be after ACK event 6",
+        )
+
+    def test_rejects_written_admission_with_mismatched_ack_flow(self):
+        self._assert_rejects_written_admission_mutation(
+            lambda tokens, _acks: tokens[0].update(flow_id="2"),
+            r"token\.csv: flow_id: value 2 differs from ACK flow 1",
+        )
+
+    def test_rejects_written_admission_with_ecn_marked_ack(self):
+        self._assert_rejects_written_admission_mutation(
+            lambda _tokens, acks: acks[2].update(ecn="1"),
+            r"ack\.csv: ecn: ACK event 6 must not be ECN-marked",
+        )
+
+    def test_rejects_written_admission_with_non_genuine_ack(self):
+        self._assert_rejects_written_admission_mutation(
+            lambda _tokens, acks: acks[2].update(genuine_sample="0"),
+            r"ack\.csv: genuine_sample: ACK event 6 must be genuine",
+        )
+
+    def test_rejects_written_admission_with_unsupported_operation(self):
+        self._assert_rejects_written_admission_mutation(
+            lambda tokens, _acks: tokens[0].update(operation="dequeue_bad_ack"),
+            r"token\.csv: operation: value 'dequeue_bad_ack' cannot write an admission",
+        )
+
+    def test_rejects_written_admission_with_sentinel_cache_slot(self):
+        self._assert_rejects_written_admission_mutation(
+            lambda tokens, _acks: tokens[0].update(cache_slot="65535"),
+            r"token\.csv: cache_slot: sentinel slot cannot write an admission",
+        )
+
+    def test_rejects_written_admission_with_zero_cache_generation(self):
+        self._assert_rejects_written_admission_mutation(
+            lambda tokens, _acks: tokens[0].update(cache_generation="0"),
+            r"token\.csv: cache_generation: written admission requires a positive generation",
+        )
 
     def test_rejects_original_prism_admission_entropy_that_differs_from_ack(self):
         with tempfile.TemporaryDirectory() as directory:

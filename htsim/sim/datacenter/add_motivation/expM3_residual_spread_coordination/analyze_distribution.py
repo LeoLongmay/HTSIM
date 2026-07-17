@@ -9,6 +9,7 @@ import json
 import statistics
 from collections import defaultdict
 from pathlib import Path
+from typing import NamedTuple
 
 from htsim.sim.datacenter.add_motivation.common.trace_schema import (
     SCHEMA_VERSION,
@@ -56,6 +57,20 @@ _COORDINATION_ACTIONS = frozenset({
     "round_complete_clean",
     "round_complete_retry",
 })
+_ADMISSION_OPERATIONS = frozenset({"enqueue_good_ack", "overwrite_good_ack"})
+_NO_CACHE_SLOT = 2**16 - 1
+
+
+class _AdmissionFact(NamedTuple):
+    """The token fields needed for admission provenance and chain validation."""
+
+    operation: str
+    event_seq: int
+    flow_id: int
+    entropy: int
+    cache_slot: int
+    cache_generation: int
+    related_ack_event_seq: int
 
 
 def _trace_prefix(manifest_path: Path) -> Path:
@@ -282,7 +297,8 @@ def _stream_candidate_admissions(prefix: Path, run_id: str, specs: list[dict]):
         for cache_slot in slots:
             specs_by_slot[(spec["terminal"]["flow_id"], cache_slot)].append(spec)
     admissions_by_slot = defaultdict(list)
-    admission_entropies = defaultdict(set)
+    admissions_by_ack = defaultdict(list)
+    token_path = Path(f"{prefix}.token.csv")
     for row in _stream_rows(
         prefix,
         "token",
@@ -292,21 +308,44 @@ def _stream_candidate_admissions(prefix: Path, run_id: str, specs: list[dict]):
         ),
         run_id,
     ):
-        if row["operation"] not in {"enqueue_good_ack", "overwrite_good_ack"} or not row["admission_written"]:
+        if not row["admission_written"]:
             continue
-        admission_entropies[row["related_ack_event_seq"]].add(row["entropy"])
+        admission = _AdmissionFact(
+            row["operation"],
+            row["event_seq"],
+            row["flow_id"],
+            row["entropy"],
+            row["cache_slot"],
+            row["cache_generation"],
+            row["related_ack_event_seq"],
+        )
+        if admission.operation not in _ADMISSION_OPERATIONS:
+            raise _trace_error(
+                token_path,
+                "operation",
+                f"value {admission.operation!r} cannot write an admission",
+            )
+        if admission.cache_slot == _NO_CACHE_SLOT:
+            raise _trace_error(token_path, "cache_slot", "sentinel slot cannot write an admission")
+        if admission.cache_generation == 0:
+            raise _trace_error(
+                token_path,
+                "cache_generation",
+                "written admission requires a positive generation",
+            )
+        admissions_by_ack[admission.related_ack_event_seq].append(admission)
         for spec in specs_by_slot.get((row["flow_id"], row["cache_slot"]), ()):
             terminal_seq = spec["terminal"]["event_seq"]
             if any(
-                invalidation["event_seq"] < row["event_seq"] < terminal_seq
-                and row["cache_generation"] > invalidation["cache_generation"]
+                invalidation["event_seq"] < admission.event_seq < terminal_seq
+                and admission.cache_generation > invalidation["cache_generation"]
                 for invalidation in spec["evidence"]["invalidations"].values()
                 if invalidation["event_seq"] < terminal_seq
-                and invalidation["cache_slot"] == row["cache_slot"]
+                and invalidation["cache_slot"] == admission.cache_slot
             ):
-                admissions_by_slot[(row["flow_id"], row["cache_slot"])].append(row)
+                admissions_by_slot[(admission.flow_id, admission.cache_slot)].append(admission)
                 break
-    return admissions_by_slot, admission_entropies
+    return admissions_by_slot, admissions_by_ack
 
 
 def _ratio(healthy_bytes: int, throttled_bytes: int) -> float | str:
@@ -314,10 +353,8 @@ def _ratio(healthy_bytes: int, throttled_bytes: int) -> float | str:
     return throttled_bytes / total if total else ""
 
 
-def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admission_entropies):
-    selected_event_seqs = {
-        ack_event_seq for ack_event_seq in admission_entropies
-    }
+def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admissions_by_ack):
+    selected_event_seqs = set(admissions_by_ack)
     selected_acks = {}
     base_rtt_ps = None
     last_ack_ps = None
@@ -359,9 +396,10 @@ def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admission_ent
     return base_rtt_ps, last_ack_ps, counts, selected_acks
 
 
-def _validate_admission_entropies(prefix: Path, admission_entropies, selected_acks: dict) -> None:
+def _validate_admission_provenance(prefix: Path, admissions_by_ack, selected_acks: dict) -> None:
     token_path = Path(f"{prefix}.token.csv")
-    for ack_event_seq, entropies in admission_entropies.items():
+    ack_path = Path(f"{prefix}.ack.csv")
+    for ack_event_seq, admissions in admissions_by_ack.items():
         ack = selected_acks.get(ack_event_seq)
         if ack is None:
             raise _trace_error(
@@ -369,12 +407,36 @@ def _validate_admission_entropies(prefix: Path, admission_entropies, selected_ac
                 "related_ack_event_seq",
                 f"ACK event {ack_event_seq} does not exist",
             )
-        for entropy in sorted(entropies):
-            if entropy != ack["entropy"]:
+        for admission in admissions:
+            if admission.event_seq <= ack["event_seq"]:
+                raise _trace_error(
+                    token_path,
+                    "event_seq",
+                    f"value {admission.event_seq} must be after ACK event {ack_event_seq}",
+                )
+            if admission.flow_id != ack["flow_id"]:
+                raise _trace_error(
+                    token_path,
+                    "flow_id",
+                    f"value {admission.flow_id} differs from ACK flow {ack['flow_id']}",
+                )
+            if admission.entropy != ack["entropy"]:
                 raise _trace_error(
                     token_path,
                     "entropy",
-                    f"value {entropy} differs from ACK entropy {ack['entropy']}",
+                    f"value {admission.entropy} differs from ACK entropy {ack['entropy']}",
+                )
+            if not ack["genuine_sample"]:
+                raise _trace_error(
+                    ack_path,
+                    "genuine_sample",
+                    f"ACK event {ack_event_seq} must be genuine",
+                )
+            if ack["ecn"]:
+                raise _trace_error(
+                    ack_path,
+                    "ecn",
+                    f"ACK event {ack_event_seq} must not be ECN-marked",
                 )
 
 
@@ -386,25 +448,25 @@ def _replacement_chain_complete(spec: dict, admissions_by_slot, selected_acks: d
             continue
         for admission in admissions_by_slot[(terminal["flow_id"], invalidation["cache_slot"])]:
             if not (
-                invalidation["event_seq"] < admission["event_seq"] < terminal_seq
-                and admission["flow_id"] == terminal["flow_id"]
-                and admission["cache_slot"] == invalidation["cache_slot"]
-                and admission["cache_generation"] > invalidation["cache_generation"]
+                invalidation["event_seq"] < admission.event_seq < terminal_seq
+                and admission.flow_id == terminal["flow_id"]
+                and admission.cache_slot == invalidation["cache_slot"]
+                and admission.cache_generation > invalidation["cache_generation"]
             ):
                 continue
-            ack = selected_acks.get(admission["related_ack_event_seq"])
+            ack = selected_acks.get(admission.related_ack_event_seq)
             if not (
                 ack
-                and invalidation["event_seq"] < ack["event_seq"] < admission["event_seq"]
+                and invalidation["event_seq"] < ack["event_seq"] < admission.event_seq
                 and ack["flow_id"] == terminal["flow_id"]
                 and ack["genuine_sample"]
                 and not ack["ecn"]
             ):
                 continue
             if any(
-                admission["event_seq"] < retain["event_seq"] < terminal_seq
-                and retain["cache_slot"] == admission["cache_slot"]
-                and retain["cache_generation"] == admission["cache_generation"]
+                admission.event_seq < retain["event_seq"] < terminal_seq
+                and retain["cache_slot"] == admission.cache_slot
+                and retain["cache_generation"] == admission.cache_generation
                 for retain in spec["evidence"]["retains"]
             ):
                 break
@@ -531,11 +593,11 @@ def _analyze_bundle(manifest_path: Path) -> tuple[list[dict], list[dict], dict]:
     prefix = _trace_prefix(manifest_path)
     attribution = _load_attribution(prefix, run_id)
     specs = _load_coordination(prefix, run_id, mode)
-    admissions_by_slot, admission_entropies = _stream_candidate_admissions(prefix, run_id, specs)
+    admissions_by_slot, admissions_by_ack = _stream_candidate_admissions(prefix, run_id, specs)
     base_rtt_ps, last_ack_ps, counts, selected_acks = _stream_ack_aggregates(
-        prefix, run_id, attribution, admission_entropies
+        prefix, run_id, attribution, admissions_by_ack
     )
-    _validate_admission_entropies(prefix, admission_entropies, selected_acks)
+    _validate_admission_provenance(prefix, admissions_by_ack, selected_acks)
     complete_specs = [
         spec
         for spec in specs
