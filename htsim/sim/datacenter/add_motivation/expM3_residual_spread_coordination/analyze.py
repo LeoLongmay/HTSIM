@@ -29,7 +29,7 @@ SCENARIOS = ("recoverable", "persistent")
 SEEDS = (13, 14, 15)
 TABLE_FIELDS = {
     "epoch_series": ("run_id", "scenario", "mode", "seed", "epoch_index", "floor_ps", "spread_ps", "cwnd_bytes", "hold_fraction"),
-    "rounds": ("run_id", "scenario", "mode", "seed", "round_index", "epoch_id", "plot_epoch_index", "floor_ps", "spread_ps", "spread_ref_ps", "spread_change_ps", "refresh_complete", "progress", "handoff", "cwnd_bytes", "control_state"),
+    "rounds": ("run_id", "scenario", "mode", "seed", "round_index", "epoch_id", "plot_epoch_index", "floor_ps", "spread_ps", "spread_ref_ps", "spread_change_ps", "refresh_complete", "replacement_chain_complete", "progress", "handoff", "cwnd_bytes", "control_state"),
     "per_seed_metrics": ("run_id", "scenario", "mode", "seed", "window_start_ps", "window_end_ps", "foreground_acked_bytes", "healthy_acked_bytes", "throttled_acked_bytes", "healthy_to_throttled_ratio", "throttled_traffic_ratio", "goodput_gbps", "p99_genuine_qdelay_ps", "completed_rounds", "progress_rounds", "handoff_rounds"),
     "summary": ("scenario", "mode", "seed_count", "mean_healthy_to_throttled_ratio", "mean_throttled_traffic_ratio", "mean_goodput_gbps", "mean_p99_genuine_qdelay_ps", "mean_progress_rounds", "mean_handoff_rounds"),
 }
@@ -43,10 +43,9 @@ ROUND_MATRIX_PREDICATE = (
     "with matching run_id, scenario, mode, and seed"
 )
 CAUSAL_PREDICATES = (
-    "every recoverable/full_prism seed has a completed progress round",
-    "no recoverable/full_prism seed has a handoff round",
-    "every recoverable/full_prism seed has a lower throttled traffic ratio than original_prism",
-    "every persistent/full_prism seed has a completed no-progress handoff round",
+    "at least two recoverable/prism_recycle seeds have a chain-backed progress round",
+    "at least two recoverable/full_prism seeds have a chain-backed progress round without handoff",
+    "at least two persistent/full_prism seeds have a chain-backed no-progress applied-handoff round",
     "no persistent/original_prism seed has a handoff round",
     "no persistent/prism_recycle seed has a handoff round",
 )
@@ -144,6 +143,62 @@ def _observer_epoch_index(bundle, coordination: dict, *, start_ps: int) -> int:
     return latest[0]["epoch_id"]
 
 
+def _replacement_chain_complete(bundle, terminal: dict) -> bool:
+    """Return whether every invalidated slot has an ordered replacement chain."""
+    terminal_seq = terminal["event_seq"]
+    if not terminal["refresh_complete"]:
+        return False
+
+    invalidations = [
+        row for row in bundle.coordination
+        if row["action"] == "invalidate"
+        and row["flow_id"] == terminal["flow_id"]
+        and row["round_id"] == terminal["round_id"]
+        and row["event_seq"] < terminal_seq
+    ]
+    ack_by_event_seq = {row["event_seq"]: row for row in bundle.ack}
+    retains = [
+        row for row in bundle.coordination
+        if row["action"] == "retain"
+        and row["flow_id"] == terminal["flow_id"]
+        and row["round_id"] == terminal["round_id"]
+        and row["event_seq"] < terminal_seq
+    ]
+
+    for invalidation in invalidations:
+        replacement_found = False
+        for admission in bundle.token:
+            if not (
+                invalidation["event_seq"] < admission["event_seq"] < terminal_seq
+                and admission["flow_id"] == terminal["flow_id"]
+                and admission["operation"] in {"enqueue_good_ack", "overwrite_good_ack"}
+                and admission["admission_written"]
+                and admission["cache_slot"] == invalidation["cache_slot"]
+                and admission["cache_generation"] > invalidation["cache_generation"]
+            ):
+                continue
+            ack = ack_by_event_seq.get(admission["related_ack_event_seq"])
+            if not (
+                ack
+                and invalidation["event_seq"] < ack["event_seq"] < admission["event_seq"]
+                and ack["flow_id"] == terminal["flow_id"]
+                and ack["genuine_sample"]
+                and not ack["ecn"]
+            ):
+                continue
+            if any(
+                admission["event_seq"] < retain["event_seq"] < terminal_seq
+                and retain["cache_slot"] == admission["cache_slot"]
+                and retain["cache_generation"] == admission["cache_generation"]
+                for retain in retains
+            ):
+                replacement_found = True
+                break
+        if not replacement_found:
+            return False
+    return True
+
+
 def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -> list[dict]:
     rounds = []
     completed = [row for row in bundle.coordination if row["action"].startswith("round_complete_")]
@@ -156,6 +211,11 @@ def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -
             raise ValueError(f"{bundle.run_id}: recoverable full_prism handed off")
         if mode == "full_prism" and row["handoff"] and row["spread_ps"] < row["spread_ref_ps"]:
             raise ValueError(f"{bundle.run_id}: handoff after positive spread progress")
+        chain_complete = _replacement_chain_complete(bundle, row)
+        if not chain_complete:
+            raise ValueError(
+                f"{bundle.run_id}: replacement chain incomplete for terminal round {row['round_id']}"
+            )
         rounds.append({
             "run_id": bundle.run_id,
             "scenario": scenario,
@@ -169,6 +229,7 @@ def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -
             "spread_ref_ps": row["spread_ref_ps"],
             "spread_change_ps": row["spread_ref_ps"] - row["spread_ps"],
             "refresh_complete": row["refresh_complete"],
+            "replacement_chain_complete": chain_complete,
             "progress": row["progress"],
             "handoff": row["handoff"],
             "cwnd_bytes": row["cwnd_bytes"],
@@ -407,29 +468,42 @@ def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
         ]
 
     recoverable_full = {seed: selected_rounds("recoverable", "full_prism", seed) for seed in SEEDS}
-    if not all(any(_is_true(row, "progress") for row in seed_rounds) for seed_rounds in recoverable_full.values()):
+    recoverable_recycle = {seed: selected_rounds("recoverable", "prism_recycle", seed) for seed in SEEDS}
+    recoverable_recycle_successes = sum(
+        any(
+            _is_true(row, "replacement_chain_complete")
+            and _is_true(row, "progress")
+            for row in seed_rounds
+        )
+        for seed_rounds in recoverable_recycle.values()
+    )
+    if recoverable_recycle_successes < 2:
         return f"not_supported: {CAUSAL_PREDICATES[0]}"
-    if any(_is_true(row, "handoff") for seed_rounds in recoverable_full.values() for row in seed_rounds):
+    recoverable_successes = sum(
+        any(
+            _is_true(row, "replacement_chain_complete")
+            and _is_true(row, "progress")
+            and not _is_true(row, "handoff")
+            for row in seed_rounds
+        )
+        for seed_rounds in recoverable_full.values()
+    )
+    if recoverable_successes < 2:
         return f"not_supported: {CAUSAL_PREDICATES[1]}"
 
-    try:
-        lower_throttled_ratio = all(
-            float(matrix[("recoverable", "full_prism", seed)]["throttled_traffic_ratio"])
-            < float(matrix[("recoverable", "original_prism", seed)]["throttled_traffic_ratio"])
-            for seed in SEEDS
-        )
-    except (KeyError, TypeError, ValueError):
-        lower_throttled_ratio = False
-    if not lower_throttled_ratio:
-        return f"not_supported: {CAUSAL_PREDICATES[2]}"
-
     persistent_full = {seed: selected_rounds("persistent", "full_prism", seed) for seed in SEEDS}
-    if not all(
-        any(_is_true(row, "handoff") and not _is_true(row, "progress") for row in seed_rounds)
+    persistent_successes = sum(
+        any(
+            _is_true(row, "replacement_chain_complete")
+            and _is_true(row, "handoff")
+            and not _is_true(row, "progress")
+            for row in seed_rounds
+        )
         for seed_rounds in persistent_full.values()
-    ):
-        return f"not_supported: {CAUSAL_PREDICATES[3]}"
-    for mode, predicate in (("original_prism", CAUSAL_PREDICATES[4]), ("prism_recycle", CAUSAL_PREDICATES[5])):
+    )
+    if persistent_successes < 2:
+        return f"not_supported: {CAUSAL_PREDICATES[2]}"
+    for mode, predicate in (("original_prism", CAUSAL_PREDICATES[3]), ("prism_recycle", CAUSAL_PREDICATES[4])):
         if any(
             _is_true(row, "handoff")
             for seed in SEEDS

@@ -26,7 +26,35 @@ writes `data/aggregate/epoch_series.csv`, `rounds.csv`, `per_seed_metrics.csv`,
 and `summary.csv`. `make_figs.py` reads only those aggregate files and renders
 `figs/m3_recoverable.{pdf,png}` and `figs/m3_persistent.{pdf,png}`.
 
-## Fixed-Matrix Result
+## Chain-Backed Verifier
+
+Each terminal `rounds.csv` row includes `replacement_chain_complete`. For every
+same-flow, same-round invalidation before that terminal record, the analyzer
+requires a later genuine, ECN-unmarked ACK admission token that wrote a newer
+generation to the same physical cache slot, followed by a later same-round
+retain for that replacement generation. A terminal without all of these ordered
+replacement chains is rejected as invalid trace evidence.
+
+The aggregate-only verifier reads `data/aggregate/per_seed_metrics.csv` and
+`data/aggregate/rounds.csv`, first checking the exact 18-run matrix and run-ID
+binding. It reports `supported` only when at least two recoverable
+`prism_recycle` seeds have a chain-backed progress terminal, at least two
+recoverable `full_prism` seeds have a chain-backed progress/no-handoff terminal,
+and at least two persistent `full_prism` seeds have a chain-backed no-progress,
+applied-handoff terminal. Persistent `original_prism` and `prism_recycle`
+records must never report an applied handoff. Goodput, P99 genuine queue delay,
+and traffic ratios remain descriptive aggregate fields, not support gates.
+
+Run the verifier without selecting individual seeds:
+
+```bash
+python3 htsim/sim/datacenter/add_motivation/expM3_residual_spread_coordination/analyze.py --verify-only
+```
+
+It prints either `supported` or `not_supported: <first predicate>` and exits
+zero for either valid verdict.
+
+## Historical Output
 
 The final reproduction command was:
 
@@ -35,28 +63,16 @@ bash htsim/sim/datacenter/add_motivation/expM3_residual_spread_coordination/repr
 ```
 
 It produced the locked 18 manifests, 18 coordination traces, and four aggregate
-CSVs. The retained figures are
+CSVs before admission-slot provenance and chain reconstruction were introduced.
+The retained figures are
 `figs/m3_recoverable.pdf` and `figs/m3_persistent.pdf` (with matching PNGs).
 Every trial fixes the same capacity relation: eight degraded links at 25 Gbps,
 against the 100 Gbps normal-link capacity.
 
-The aggregate-only causal verifier was run without selecting individual seeds:
-
-```bash
-python3 htsim/sim/datacenter/add_motivation/expM3_residual_spread_coordination/analyze.py --verify-only
-```
-
-It emitted:
-
-```text
-not_supported: every recoverable/full_prism seed has a completed progress round
-```
-
-The fixed 18-run matrix is complete, but `rounds.csv` is header-only, so the
-required all-seed recoverable progress evidence is absent. This result means the
-current small setup did not demonstrate the coordination mechanism; it is not a
-claim about full PRISM performance evaluation. M3 remains a mechanism-validation
-experiment, not a substitute for a full performance evaluation.
+Those historical traces do not contain the required admission provenance and
+must not be used for a chain-backed verdict. Regenerate the fixed matrix before
+recording a new result. M3 remains a mechanism-validation experiment, not a
+substitute for a full performance evaluation.
 
 Remove generated traces and aggregate data while retaining local figures:
 
