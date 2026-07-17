@@ -751,6 +751,31 @@ class RefreshOutcomeAnalysisTests(unittest.TestCase):
 
 
 class RefreshOutcomeFigureTests(unittest.TestCase):
+    def test_mean_line_weights_seed_means_by_complete_outcome_count(self):
+        summaries = [
+            {
+                "scenario": "recoverable",
+                "seed": "13",
+                "complete_outcome_count": "1",
+                "mean_pre_throttled_ratio": "0.9",
+                "mean_post1_throttled_ratio": "0.9",
+                "mean_post2_throttled_ratio": "0.9",
+            },
+            {
+                "scenario": "recoverable",
+                "seed": "14",
+                "complete_outcome_count": "9",
+                "mean_pre_throttled_ratio": "0.1",
+                "mean_post1_throttled_ratio": "0.1",
+                "mean_post2_throttled_ratio": "0.1",
+            },
+        ]
+
+        self.assertEqual(
+            make_refresh_outcome_fig._mean_line(summaries, "recoverable"),
+            [0.18, 0.18, 0.18],
+        )
+
     def test_renders_pdf_and_png_from_minimal_refresh_outcome_csvs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

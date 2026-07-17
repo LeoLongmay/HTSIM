@@ -77,15 +77,17 @@ def _mean_line(summaries: list[dict[str, str]], scenario: str) -> list[float]:
         raise ValueError(f"no refresh-outcome summary rows for {scenario}")
     values = []
     for field in _MEAN_FIELDS:
-        field_values = []
+        weighted_total = 0.0
+        complete_total = 0.0
         for row in rows:
             complete_count = _finite_number(row, "complete_outcome_count")
             if complete_count <= 0:
                 continue
-            field_values.append(_finite_number(row, field))
-        if not field_values:
+            weighted_total += complete_count * _finite_number(row, field)
+            complete_total += complete_count
+        if complete_total <= 0:
             raise ValueError(f"no finite {field} values for {scenario}")
-        values.append(sum(field_values) / len(field_values))
+        values.append(weighted_total / complete_total)
     return values
 
 
