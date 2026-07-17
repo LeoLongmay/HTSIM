@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.analyze import (
+    ROUND_MATRIX_PREDICATE,
     TABLE_FIELDS,
     _is_true,
     analyze_data,
@@ -257,7 +258,23 @@ class AnalyzeTests(unittest.TestCase):
 
             self.assertEqual(
                 self._verdict(Path(directory)),
-                "not_supported: every recoverable/full_prism seed has a completed progress round\n",
+                f"not_supported: {ROUND_MATRIX_PREDICATE}\n",
+            )
+
+    def test_verify_only_rejects_appended_foreign_blank_round(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            rounds.append({
+                "run_id": "foreign-run",
+                "scenario": "",
+                "mode": "",
+                "seed": "",
+            })
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                f"not_supported: {ROUND_MATRIX_PREDICATE}\n",
             )
 
     def test_verify_only_rejects_recoverable_full_prism_handoff(self):

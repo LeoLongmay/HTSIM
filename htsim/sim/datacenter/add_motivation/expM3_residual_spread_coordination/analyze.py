@@ -38,6 +38,10 @@ MATRIX_PREDICATE = (
     "fixed complete 18-run matrix (scenarios recoverable/persistent, "
     "modes original_prism/prism_recycle/full_prism, seeds 13/14/15)"
 )
+ROUND_MATRIX_PREDICATE = (
+    "every round evidence row belongs to exactly one fixed matrix coordinate "
+    "with matching run_id, scenario, mode, and seed"
+)
 CAUSAL_PREDICATES = (
     "every recoverable/full_prism seed has a completed progress round",
     "no recoverable/full_prism seed has a handoff round",
@@ -358,6 +362,27 @@ def _is_true(row: dict, field: str) -> bool:
     return isinstance(value, str) and value.strip().lower() in {"1", "true"}
 
 
+def _rounds_belong_to_matrix(rounds: list[dict], matrix: dict[tuple[str, str, int], dict]) -> bool:
+    run_id_coordinates = defaultdict(list)
+    for coordinate, row in matrix.items():
+        run_id_coordinates[row["run_id"]].append(coordinate)
+    for row in rounds:
+        run_id = row.get("run_id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            return False
+        coordinates = run_id_coordinates.get(run_id, [])
+        if len(coordinates) != 1:
+            return False
+        scenario, mode, seed = coordinates[0]
+        if (
+            row.get("scenario") != scenario
+            or row.get("mode") != mode
+            or row.get("seed") != str(seed)
+        ):
+            return False
+    return True
+
+
 def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
     """Return the all-seed M3 causal verdict from existing aggregate CSVs."""
     data_root = Path(data_root)
@@ -368,6 +393,8 @@ def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
     rounds = _read_aggregate_csv(data_root, "rounds")
     if rounds is None:
         rounds = []
+    if not _rounds_belong_to_matrix(rounds, matrix):
+        return f"not_supported: {ROUND_MATRIX_PREDICATE}"
 
     def selected_rounds(scenario: str, mode: str, seed: int) -> list[dict]:
         run_id = matrix[(scenario, mode, seed)]["run_id"]
