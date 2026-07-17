@@ -213,93 +213,100 @@ def _validate_coordination_row(path: Path, row: dict) -> None:
         raise _trace_error(path, "action", "progress requires round_complete_progress action")
 
 
-def _load_coordination(prefix: Path, run_id: str) -> list[dict]:
+def _load_coordination(prefix: Path, run_id: str, mode: str) -> list[dict]:
     path = Path(f"{prefix}.coordination.csv")
-    records = []
-    for row in _stream_rows(
-        prefix,
-        "coordination",
-        (
-            "event_seq", "time_ps", "flow_id", "round_id", "cache_slot",
-            "cache_generation", "action", "refresh_complete", "progress", "handoff",
-        ),
-        run_id,
-    ):
-        _validate_coordination_row(path, row)
-        if row["action"] == "invalidate" or row["action"] == "retain" or row["action"].startswith("round_complete_"):
-            records.append(row)
-    return records
+
+    def records():
+        for row in _stream_rows(
+            prefix,
+            "coordination",
+            (
+                "event_seq", "time_ps", "flow_id", "round_id", "cache_slot",
+                "cache_generation", "action", "refresh_complete", "progress", "handoff",
+            ),
+            run_id,
+        ):
+            _validate_coordination_row(path, row)
+            if (
+                row["action"] == "invalidate"
+                or row["action"] == "retain"
+                or row["action"].startswith("round_complete_")
+            ):
+                yield row
+
+    return _chain_specs(records(), mode)
 
 
-def _chain_specs(records: list[dict], mode: str) -> list[dict]:
+def _chain_specs(records, mode: str) -> list[dict]:
     if mode != "prism_recycle":
+        for _row in records:
+            pass
         return []
     specs = []
-    terminals = [
-        row for row in records
-        if row["action"].startswith("round_complete_") and row["time_ps"] >= WARMUP_PS
-    ]
-    for terminal in terminals:
-        if not terminal["refresh_complete"]:
+    evidence_by_round = {}
+    for row in records:
+        identity = (row["flow_id"], row["round_id"])
+        evidence = evidence_by_round.setdefault(identity, {
+            "invalidations": {},
+            "retains": [],
+        })
+        if row["action"] == "invalidate":
+            invalidation_identity = (
+                row["flow_id"], row["round_id"], row["cache_slot"], row["cache_generation"],
+            )
+            evidence["invalidations"].setdefault(invalidation_identity, row)
             continue
-        terminal_seq = terminal["event_seq"]
-        invalidations_by_identity = {}
-        retains = []
-        for row in records:
-            if not (
-                row["flow_id"] == terminal["flow_id"]
-                and row["round_id"] == terminal["round_id"]
-                and row["event_seq"] < terminal_seq
-            ):
-                continue
-            if row["action"] == "invalidate":
-                identity = (
-                    row["flow_id"], row["round_id"], row["cache_slot"], row["cache_generation"],
-                )
-                invalidations_by_identity.setdefault(identity, row)
-            elif row["action"] == "retain":
-                retains.append(row)
-        invalidations = list(invalidations_by_identity.values())
-        if invalidations:
-            specs.append({
-                "terminal": terminal,
-                "invalidations": invalidations,
-                "retains": retains,
-                "admissions": [],
-            })
+        if row["action"] == "retain":
+            evidence["retains"].append(row)
+            continue
+        if not (
+            row["action"].startswith("round_complete_")
+            and row["time_ps"] >= WARMUP_PS
+            and row["refresh_complete"]
+            and evidence["invalidations"]
+        ):
+            continue
+        specs.append({"terminal": row, "evidence": evidence})
     return specs
 
 
-def _stream_candidate_admissions(prefix: Path, run_id: str, specs: list[dict]) -> None:
-    requirements_by_slot = defaultdict(list)
-    for index, spec in enumerate(specs):
-        for invalidation in spec["invalidations"]:
-            requirements_by_slot[(invalidation["flow_id"], invalidation["cache_slot"])].append(
-                (index, invalidation)
-            )
-    if not requirements_by_slot:
-        return
+def _stream_candidate_admissions(prefix: Path, run_id: str, specs: list[dict]):
+    specs_by_slot = defaultdict(list)
+    for spec in specs:
+        terminal_seq = spec["terminal"]["event_seq"]
+        slots = {
+            invalidation["cache_slot"]
+            for invalidation in spec["evidence"]["invalidations"].values()
+            if invalidation["event_seq"] < terminal_seq
+        }
+        for cache_slot in slots:
+            specs_by_slot[(spec["terminal"]["flow_id"], cache_slot)].append(spec)
+    admissions_by_slot = defaultdict(list)
+    if not specs_by_slot:
+        return admissions_by_slot
     for row in _stream_rows(
         prefix,
         "token",
         (
             "event_seq", "flow_id", "operation", "related_ack_event_seq", "cache_slot",
-            "cache_generation", "admission_written",
+            "cache_generation", "admission_written", "entropy",
         ),
         run_id,
     ):
         if row["operation"] not in {"enqueue_good_ack", "overwrite_good_ack"} or not row["admission_written"]:
             continue
-        matching_specs = set()
-        for index, invalidation in requirements_by_slot.get((row["flow_id"], row["cache_slot"]), ()):
-            terminal = specs[index]["terminal"]
-            if (
-                invalidation["event_seq"] < row["event_seq"] < terminal["event_seq"]
+        for spec in specs_by_slot.get((row["flow_id"], row["cache_slot"]), ()):
+            terminal_seq = spec["terminal"]["event_seq"]
+            if any(
+                invalidation["event_seq"] < row["event_seq"] < terminal_seq
                 and row["cache_generation"] > invalidation["cache_generation"]
+                for invalidation in spec["evidence"]["invalidations"].values()
+                if invalidation["event_seq"] < terminal_seq
+                and invalidation["cache_slot"] == row["cache_slot"]
             ):
-                matching_specs.add(index)
-        for index in matching_specs:
-            specs[index]["admissions"].append(row)
+                admissions_by_slot[(row["flow_id"], row["cache_slot"])].append(row)
+                break
+    return admissions_by_slot
 
 
 def _ratio(healthy_bytes: int, throttled_bytes: int) -> float | str:
@@ -307,11 +314,11 @@ def _ratio(healthy_bytes: int, throttled_bytes: int) -> float | str:
     return throttled_bytes / total if total else ""
 
 
-def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, specs: list[dict]):
+def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admissions_by_slot):
     selected_event_seqs = {
         admission["related_ack_event_seq"]
-        for spec in specs
-        for admission in spec["admissions"]
+        for admissions in admissions_by_slot.values()
+        for admission in admissions
     }
     selected_acks = {}
     base_rtt_ps = None
@@ -354,11 +361,32 @@ def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, specs: list[d
     return base_rtt_ps, last_ack_ps, counts, selected_acks
 
 
-def _replacement_chain_complete(spec: dict, selected_acks: dict) -> bool:
+def _validate_admission_entropies(prefix: Path, admissions_by_slot, selected_acks: dict) -> None:
+    token_path = Path(f"{prefix}.token.csv")
+    for admissions in admissions_by_slot.values():
+        for admission in admissions:
+            ack = selected_acks.get(admission["related_ack_event_seq"])
+            if ack is None:
+                raise _trace_error(
+                    token_path,
+                    "related_ack_event_seq",
+                    f"ACK event {admission['related_ack_event_seq']} does not exist",
+                )
+            if admission["entropy"] != ack["entropy"]:
+                raise _trace_error(
+                    token_path,
+                    "entropy",
+                    f"value {admission['entropy']} differs from ACK entropy {ack['entropy']}",
+                )
+
+
+def _replacement_chain_complete(spec: dict, admissions_by_slot, selected_acks: dict) -> bool:
     terminal = spec["terminal"]
     terminal_seq = terminal["event_seq"]
-    for invalidation in spec["invalidations"]:
-        for admission in spec["admissions"]:
+    for invalidation in spec["evidence"]["invalidations"].values():
+        if invalidation["event_seq"] >= terminal_seq:
+            continue
+        for admission in admissions_by_slot[(terminal["flow_id"], invalidation["cache_slot"])]:
             if not (
                 invalidation["event_seq"] < admission["event_seq"] < terminal_seq
                 and admission["flow_id"] == terminal["flow_id"]
@@ -379,7 +407,7 @@ def _replacement_chain_complete(spec: dict, selected_acks: dict) -> bool:
                 admission["event_seq"] < retain["event_seq"] < terminal_seq
                 and retain["cache_slot"] == admission["cache_slot"]
                 and retain["cache_generation"] == admission["cache_generation"]
-                for retain in spec["retains"]
+                for retain in spec["evidence"]["retains"]
             ):
                 break
         else:
@@ -504,13 +532,16 @@ def _analyze_bundle(manifest_path: Path) -> tuple[list[dict], list[dict], dict]:
     run_id, scenario, seed, mode = _load_manifest(manifest_path)
     prefix = _trace_prefix(manifest_path)
     attribution = _load_attribution(prefix, run_id)
-    specs = _chain_specs(_load_coordination(prefix, run_id), mode)
-    _stream_candidate_admissions(prefix, run_id, specs)
+    specs = _load_coordination(prefix, run_id, mode)
+    admissions_by_slot = _stream_candidate_admissions(prefix, run_id, specs)
     base_rtt_ps, last_ack_ps, counts, selected_acks = _stream_ack_aggregates(
-        prefix, run_id, attribution, specs
+        prefix, run_id, attribution, admissions_by_slot
     )
+    _validate_admission_entropies(prefix, admissions_by_slot, selected_acks)
     complete_specs = [
-        spec for spec in specs if _replacement_chain_complete(spec, selected_acks)
+        spec
+        for spec in specs
+        if _replacement_chain_complete(spec, admissions_by_slot, selected_acks)
     ]
     _stream_effect_windows(prefix, run_id, attribution, complete_specs, base_rtt_ps)
     bins = _distribution_bins(

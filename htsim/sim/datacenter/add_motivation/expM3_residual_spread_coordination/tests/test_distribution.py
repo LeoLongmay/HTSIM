@@ -9,6 +9,9 @@ from unittest.mock import patch
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination import (
     run_distribution,
 )
+from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination import (
+    analyze_distribution as distribution_analysis,
+)
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.analyze_distribution import (
     analyze_distribution,
 )
@@ -195,6 +198,76 @@ class DistributionRunnerTests(unittest.TestCase):
 
 
 class DistributionAnalysisTests(unittest.TestCase):
+    def test_chain_specs_share_evidence_between_terminals_in_one_round(self):
+        records = [
+            {
+                "action": "invalidate",
+                "time_ps": 2_100_000_000,
+                "event_seq": 5,
+                "flow_id": 1,
+                "round_id": 1,
+                "cache_slot": 3,
+                "cache_generation": 10,
+                "refresh_complete": False,
+            },
+            {
+                "action": "round_complete_progress",
+                "time_ps": 2_200_000_000,
+                "event_seq": 8,
+                "flow_id": 1,
+                "round_id": 1,
+                "cache_slot": 0,
+                "cache_generation": 0,
+                "refresh_complete": True,
+            },
+            {
+                "action": "round_complete_progress",
+                "time_ps": 2_300_000_000,
+                "event_seq": 9,
+                "flow_id": 1,
+                "round_id": 1,
+                "cache_slot": 0,
+                "cache_generation": 0,
+                "refresh_complete": True,
+            },
+        ]
+
+        specs = distribution_analysis._chain_specs(records, "prism_recycle")
+
+        self.assertEqual(len(specs), 2)
+        self.assertIs(specs[0]["evidence"], specs[1]["evidence"])
+        self.assertNotIn("invalidations", specs[0])
+        self.assertNotIn("retains", specs[0])
+        self.assertNotIn("admissions", specs[0])
+
+    def test_rejects_admission_entropy_that_differs_from_referenced_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = _write_locked_distribution_matrix(root)
+            with prefix.with_suffix(".token.csv").open(newline="", encoding="ascii") as stream:
+                token_rows = list(csv.DictReader(stream))
+            token_rows[0]["entropy"] = "2"
+            _write_csv(prefix.with_suffix(".token.csv"), "token", token_rows)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"token\.csv: entropy: value 2 differs from ACK entropy 1",
+            ):
+                analyze_distribution(root, root / "aggregate")
+
+    def test_validates_coordination_rows_for_original_prism_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_locked_distribution_matrix(root)
+            prefix = root / "fixture_recoverable_original_prism_s13"
+            with prefix.with_suffix(".coordination.csv").open(newline="", encoding="ascii") as stream:
+                coordination_rows = list(csv.DictReader(stream))
+            coordination_rows[0]["action"] = "invalid_action"
+            _write_csv(prefix.with_suffix(".coordination.csv"), "coordination", coordination_rows)
+
+            with self.assertRaisesRegex(ValueError, "unknown coordination action"):
+                analyze_distribution(root, root / "aggregate")
+
     def test_streams_large_ack_trace_without_full_bundle_loader(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
