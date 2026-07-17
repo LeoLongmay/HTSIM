@@ -449,7 +449,10 @@ def analyze_recurrence(data_root: Path | str, output_root: Path | str) -> list[d
         if bundle.run_id != manifest.get("run_id"):
             raise ValueError(f"{manifest_path}: manifest and trace run IDs differ")
         for terminal in bundle.coordination:
-            if not terminal["action"].startswith("round_complete_"):
+            if (
+                not terminal["action"].startswith("round_complete_")
+                or terminal["time_ps"] < WARMUP_PS
+            ):
                 continue
             chains = _completed_replacement_chains(bundle, terminal)
             if chains is None:

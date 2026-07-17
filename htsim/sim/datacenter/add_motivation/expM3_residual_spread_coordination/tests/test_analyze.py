@@ -76,9 +76,11 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                   pathmap_resolution="resolved", duplicate_pathmap=False,
                   ack_flow_ids=None, ack_physical_path_ids=None,
                   ack_event_seq=1, ack_epoch_id=1,
+                  ack_time_ps=2_000_000_000,
                   observer_epoch_id=1, coordination_epoch_id=1,
                   coordination_time_ps=2_200_000_000,
                   coordination_record_start_time_ps=2_100_000_000,
+                  replacement_chain_start_time_ps=2_100_000_000,
                   observer_epoch_start_ps=1_000_000_000,
                   observer_epoch_end_ps=2_000_000_000,
                   coordination_event_seq=5, observer_event_seq=3,
@@ -90,7 +92,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
     ack_physical_path_ids = ack_physical_path_ids or (10, 20)
     ack_rows = [
         _row("ack", **run_id_values, seed=seed, scenario=scenario, event_seq=ack_event_seq,
-             time_ps=2_000_000_000, flow_id=ack_flow_ids[0], epoch_id=ack_epoch_id, acked_psn=1,
+             time_ps=ack_time_ps, flow_id=ack_flow_ids[0], epoch_id=ack_epoch_id, acked_psn=1,
              entropy=0, physical_path_id=ack_physical_path_ids[0], raw_rtt_ps=18_000_000,
              base_rtt_ps=14_000_000, qdelay_ps=4_000_000, ecn=0,
              genuine_sample=1, retransmitted=0,
@@ -98,7 +100,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
              newly_acked_bytes=throttled_bytes,
              new_data_bytes_sent_total=throttled_bytes, cwnd_bytes=12000),
         _row("ack", **run_id_values, seed=seed, scenario=scenario, event_seq=ack_event_seq + 1,
-             time_ps=2_000_000_000, flow_id=ack_flow_ids[1], epoch_id=ack_epoch_id, acked_psn=1,
+             time_ps=ack_time_ps, flow_id=ack_flow_ids[1], epoch_id=ack_epoch_id, acked_psn=1,
              entropy=0, physical_path_id=ack_physical_path_ids[1], raw_rtt_ps=16_000_000,
              base_rtt_ps=14_000_000, qdelay_ps=2_000_000, ecn=0,
              genuine_sample=1, retransmitted=0, selection_source="fresh",
@@ -159,7 +161,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
         ))
     elif replacement_chain:
         invalidation = _row(
-            "coordination", **run_id_values, event_seq=5, time_ps=2_100_000_000,
+            "coordination", **run_id_values, event_seq=5, time_ps=replacement_chain_start_time_ps,
             flow_id=1, epoch_id=1, round_id=1, cache_slot=3, cache_generation=10,
             floor_ps=2_000_000, spread_ps=8_000_000, spread_ref_ps=8_000_000,
             residual_ps=6_000_000, action="invalidate", reason="slot_high_residual",
@@ -170,7 +172,9 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
         terminal_event_seq = 6
         if replacement_chain != "without_admission":
             admission_event_seq = 7 if replacement_chain == "admission_after_terminal" else 6
-            admission_time_ps = 2_210_000_000 if replacement_chain == "admission_after_terminal" else 2_110_000_000
+            admission_time_ps = replacement_chain_start_time_ps + (
+                110_000_000 if replacement_chain == "admission_after_terminal" else 10_000_000
+            )
             admission_generation = 10 if replacement_chain == "stale_generation" else 11
             ack_rows.append(_row(
                 "ack", **run_id_values, seed=seed, scenario=scenario,
@@ -858,6 +862,37 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(rows["14"]["later_invalidation_generation"], "")
         self.assertEqual(rows["14"]["later_invalidation_reason"], "")
         self.assertEqual(rows["14"]["later_invalidation_time_ps"], "")
+
+    def test_recurrence_only_excludes_completed_chain_with_pre_warmup_terminal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "raw"
+            output_root = Path(directory) / "recurrence"
+            root.mkdir()
+            _write_bundle(
+                root,
+                "recoverable",
+                "full_prism",
+                replacement_chain="complete",
+                ack_time_ps=700_000_000,
+                coordination_time_ps=950_000_000,
+                replacement_chain_start_time_ps=800_000_000,
+                observer_epoch_start_ps=600_000_000,
+                observer_epoch_end_ps=750_000_000,
+            )
+
+            self.assertEqual(
+                main([
+                    "--data-root", str(root),
+                    "--recurrence-only",
+                    "--output-root", str(output_root),
+                ]),
+                0,
+            )
+
+            with (output_root / "replacement_recurrence.csv").open(newline="", encoding="ascii") as stream:
+                rows = list(csv.DictReader(stream))
+
+        self.assertEqual(rows, [])
 
     def test_counts_retry_terminal_with_replacement_evidence_without_progress_or_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
