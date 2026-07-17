@@ -11,6 +11,7 @@ from typing import Callable
 
 
 SCHEMA_VERSION = 2
+_NO_CACHE_SLOT = 2**16 - 1
 
 
 class TraceValidationError(ValueError):
@@ -89,6 +90,10 @@ def _parse_uint32(value: str) -> int:
     return _parse_bounded_int(value, 0, 2**32 - 1)
 
 
+def _parse_uint16(value: str) -> int:
+    return _parse_bounded_int(value, 0, _NO_CACHE_SLOT)
+
+
 def _parse_uint64(value: str) -> int:
     return _parse_bounded_int(value, 0, 2**64 - 1)
 
@@ -117,6 +122,7 @@ def _parse_text(value: str) -> str:
 
 
 _I64 = _parse_int64
+_U16 = _parse_uint16
 _U32 = _parse_uint32
 _U64 = _parse_uint64
 _F = _parse_float
@@ -140,6 +146,7 @@ _SCHEMAS: dict[str, tuple[tuple[str, Callable[[str], object]], ...]] = {
         ("time_ps", _U64), ("flow_id", _U64), ("operation", _S), ("reason", _S),
         ("token_id", _U64), ("entropy", _U32), ("queue_depth_before", _U32),
         ("queue_depth_after", _U32), ("related_ack_event_seq", _U64),
+        ("cache_slot", _U16), ("cache_generation", _U64), ("admission_written", _B),
     ),
     "epoch": (
         ("schema_version", _U32), ("run_id", _S), ("event_seq", _U64),
@@ -215,6 +222,35 @@ def _validate_coordination_row(path: Path, row: dict) -> None:
         raise _error(path, "progress", "round_complete_progress action requires progress")
     if row["progress"] and row["action"] != "round_complete_progress":
         raise _error(path, "action", "progress requires round_complete_progress action")
+
+
+def _validate_token_admission_provenance(token: dict) -> None:
+    admission_operation = token["operation"] in ("enqueue_good_ack", "overwrite_good_ack")
+    if token["admission_written"]:
+        if not admission_operation:
+            raise _error(
+                token.source_path,
+                "admission_written",
+                "written admission requires enqueue_good_ack or overwrite_good_ack",
+            )
+        if token["cache_slot"] == _NO_CACHE_SLOT:
+            raise _error(token.source_path, "cache_slot", "written admission requires a cache slot")
+        if token["cache_generation"] == 0:
+            raise _error(
+                token.source_path,
+                "cache_generation",
+                "written admission requires a nonzero cache generation",
+            )
+        return
+
+    if token["cache_slot"] != _NO_CACHE_SLOT:
+        raise _error(token.source_path, "cache_slot", "unwritten admission requires sentinel cache slot")
+    if token["cache_generation"] != 0:
+        raise _error(
+            token.source_path,
+            "cache_generation",
+            "unwritten admission requires sentinel cache generation",
+        )
 
 
 def _load_file(prefix: Path, kind: str) -> tuple[dict, ...]:
@@ -445,6 +481,7 @@ def _build_bundle(trace_prefix: Path, loaded: dict[str, tuple], *, compact: bool
     admission_ack_event_seqs = set()
     residual_reject_ack_event_seqs = set()
     for token in loaded["token"]:
+        _validate_token_admission_provenance(token)
         operation = token["operation"]
         if operation not in ("enqueue_good_ack", "overwrite_good_ack", "reject_high_residual"):
             continue

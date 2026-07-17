@@ -194,7 +194,10 @@ void UecMpReps::processEv(uint32_t path_id, PathFeedback feedback) {
                              path_id,
                              fresh_before,
                              circular_buffer_reps->getNumberFreshEntropies(),
-                             _feedback_event_seq});
+                             _feedback_event_seq,
+                             admission.slot,
+                             admission.generation,
+                             admission.written});
         }
     } else if (circular_buffer_reps->isFrozenMode() && (feedback == PATH_GOOD)) {
         const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
@@ -208,7 +211,10 @@ void UecMpReps::processEv(uint32_t path_id, PathFeedback feedback) {
                              path_id,
                              fresh_before,
                              circular_buffer_reps->getNumberFreshEntropies(),
-                             _feedback_event_seq});
+                             _feedback_event_seq,
+                             admission.slot,
+                             admission.generation,
+                             admission.written});
         }
     }
 }

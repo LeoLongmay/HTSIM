@@ -22,7 +22,7 @@ HEADERS = {
     "token": (
         "schema_version", "run_id", "event_seq", "time_ps", "flow_id", "operation",
         "reason", "token_id", "entropy", "queue_depth_before", "queue_depth_after",
-        "related_ack_event_seq",
+        "related_ack_event_seq", "cache_slot", "cache_generation", "admission_written",
     ),
     "epoch": (
         "schema_version", "run_id", "event_seq", "flow_id", "epoch_id", "start_ps",
@@ -75,7 +75,8 @@ def valid_rows():
                 "time_ps": "110", "flow_id": "7", "operation": "enqueue_good_ack",
                 "reason": "good_ack", "token_id": "42", "entropy": "1",
                 "queue_depth_before": "0", "queue_depth_after": "1",
-                "related_ack_event_seq": "0",
+                "related_ack_event_seq": "0", "cache_slot": "3",
+                "cache_generation": "5", "admission_written": "1",
             },
         ],
         "epoch": [
@@ -249,7 +250,58 @@ class TraceSchemaTests(unittest.TestCase):
         self.assertIsInstance(bundle.pathmap[0]["bottleneck_rate_gbps"], float)
         self.assertIsInstance(bundle.linkmap[0]["reduced_speed"], bool)
         self.assertIsInstance(bundle.coordination[0]["refresh_complete"], bool)
+        self.assertEqual(bundle.token[0]["cache_slot"], 3)
+        self.assertEqual(bundle.token[0]["cache_generation"], 5)
+        self.assertTrue(bundle.token[0]["admission_written"])
         self.assertNotIn("event_seq", bundle.pathmap[0])
+
+    def test_rejects_written_admission_with_sentinel_slot(self):
+        rows = valid_rows()
+        rows["token"][0]["cache_slot"] = str(2**16 - 1)
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(TraceValidationError, r"fixture\.token\.csv.*cache_slot"):
+                load_trace(prefix)
+
+    def test_rejects_written_admission_with_sentinel_generation(self):
+        rows = valid_rows()
+        rows["token"][0]["cache_generation"] = "0"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.token\.csv.*cache_generation",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_written_admission_for_dequeue(self):
+        rows = valid_rows()
+        rows["token"][0].update({
+            "operation": "dequeue_recycle", "reason": "recycle", "cache_slot": "3",
+            "cache_generation": "5", "admission_written": "1",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.token\.csv.*admission_written",
+            ):
+                load_trace(prefix)
+
+    def test_accepts_legacy_admission_with_sentinel_provenance(self):
+        rows = valid_rows()
+        rows["token"][0].update({
+            "cache_slot": str(2**16 - 1), "cache_generation": "0",
+            "admission_written": "0",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            for loader in (load_trace, load_trace_compact):
+                with self.subTest(loader=loader.__name__):
+                    token = loader(prefix).token[0]
+                    self.assertFalse(token["admission_written"])
+                    self.assertEqual(token["cache_slot"], 2**16 - 1)
+                    self.assertEqual(token["cache_generation"], 0)
 
     def test_rejects_missing_coordination_leaf(self):
         with tempfile.TemporaryDirectory() as directory:

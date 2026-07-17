@@ -56,6 +56,9 @@ struct UecMpTokenEvent {
     uint32_t queue_depth_before;
     uint32_t queue_depth_after;
     uint64_t related_ack_event_seq = NO_EVENT;
+    uint16_t cache_slot = UINT16_MAX;
+    uint64_t cache_generation = 0;
+    bool admission_written = false;
 };
 
 class UecMultipath {

@@ -1,4 +1,5 @@
 #include "motivation_background.h"
+#include "uec_mp.h"
 
 #include <cassert>
 #include <cstdio>
@@ -80,8 +81,22 @@ int main() {
 
     const uint64_t seq = writer.nextEventSeq();
     assert(writer.nextEventSeq() == seq + 1);
-    const UecMpTokenEvent event{UecMpTokenEvent::ENQUEUE_GOOD_ACK, 17, 3, 0, 1, 19};
-    writer.logToken(seq, 7, 1000, event);
+    UecMpTokenEvent admission_event{UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                                    UecMpSelection::NO_TOKEN, 0, 0, 0};
+    bool observed_admission = false;
+    UecMpReps reps(16, false, true);
+    reps.setFeedbackTraceContext(19);
+    reps.setTokenObserver([&](const UecMpTokenEvent& event) {
+        admission_event = event;
+        observed_admission = true;
+    });
+    reps.processEv(3, UecMultipath::PATH_GOOD);
+    assert(observed_admission);
+    assert(admission_event.operation == UecMpTokenEvent::ENQUEUE_GOOD_ACK);
+    assert(admission_event.cache_slot == 0);
+    assert(admission_event.cache_generation == 1);
+    assert(admission_event.admission_written);
+    writer.logToken(seq, 7, 1000, admission_event);
     writer.logAck({writer.nextEventSeq(), 1100, 7, 2, 41, 3, 5, 700, 500, 200, true,
                    true, false, 80, "recycled", 17, 1200, 6400, 3200});
     writer.logEpoch({writer.nextEventSeq(), 7, 2, 100, 1200, 4, 500, 300, 550, 250,
@@ -109,7 +124,8 @@ int main() {
            "newly_acked_bytes,new_data_bytes_sent_total,cwnd_bytes");
     assert(lineAt(std::string(kPrefix) + ".token.csv", 1) ==
            "schema_version,run_id,event_seq,time_ps,flow_id,operation,reason,token_id,entropy,"
-           "queue_depth_before,queue_depth_after,related_ack_event_seq");
+           "queue_depth_before,queue_depth_after,related_ack_event_seq,cache_slot,"
+           "cache_generation,admission_written");
     assert(lineAt(std::string(kPrefix) + ".epoch.csv", 1) ==
            "schema_version,run_id,event_seq,flow_id,epoch_id,start_ps,end_ps,sample_count,"
            "raw_floor_ps,raw_spread_ps,smooth_floor_ps,smooth_spread_ps,observed_region,"
@@ -128,7 +144,7 @@ int main() {
            "cache_generation,floor_ps,spread_ps,spread_ref_ps,residual_ps,action,reason,"
            "refresh_complete,progress,handoff,cwnd_bytes,control_state");
     assert(lineAt(std::string(kPrefix) + ".token.csv", 2) ==
-           "2,run,0,1000,7,enqueue_good_ack,good_ack,17,3,0,1,19");
+           "2,run,0,1000,7,enqueue_good_ack,good_ack,18446744073709551615,3,0,1,19,0,1,1");
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 2) ==
            "2,run,13,scenario,2,1100,7,2,41,3,5,700,500,200,1,1,0,80,recycled,17,1200,"
            "6400,3200");

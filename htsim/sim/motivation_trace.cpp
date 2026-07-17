@@ -84,7 +84,8 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
             "retransmitted,forward_path_backlog_ps,selection_source,source_token_id,"
             "newly_acked_bytes,new_data_bytes_sent_total,cwnd_bytes\n";
     _token << "schema_version,run_id,event_seq,time_ps,flow_id,operation,reason,token_id,entropy,"
-              "queue_depth_before,queue_depth_after,related_ack_event_seq\n";
+              "queue_depth_before,queue_depth_after,related_ack_event_seq,cache_slot,"
+              "cache_generation,admission_written\n";
     _epoch << "schema_version,run_id,event_seq,flow_id,epoch_id,start_ps,end_ps,sample_count,"
               "raw_floor_ps,raw_spread_ps,smooth_floor_ps,smooth_spread_ps,observed_region,"
               "actual_region,engaged,entropy_coverage,physical_path_coverage,"
@@ -133,7 +134,9 @@ void MotivationTraceWriter::logToken(uint64_t event_seq, uint64_t flow_id, uint6
     _token << kSchemaVersion << ',' << _config.run_id << ',' << event_seq << ',' << time_ps << ','
            << flow_id << ',' << operation.first << ',' << operation.second << ',' << event.token_id
            << ',' << event.entropy << ',' << event.queue_depth_before << ','
-           << event.queue_depth_after << ',' << event.related_ack_event_seq << '\n';
+           << event.queue_depth_after << ',' << event.related_ack_event_seq << ','
+           << event.cache_slot << ',' << event.cache_generation << ',' << event.admission_written
+           << '\n';
 }
 
 void MotivationTraceWriter::logEpoch(const MotivationEpochRecord& record) {
