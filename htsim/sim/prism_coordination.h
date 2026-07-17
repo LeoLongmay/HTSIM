@@ -127,6 +127,7 @@ private:
     bool enabled() const;
     bool outcomeEnabled() const;
     void beginOutcomeReplacement(uint16_t slot, uint64_t generation);
+    void resetOutcomeValidationProgress();
     void resetOutcomeState();
     void completeOutcomeBucket(const OutcomeBucket& bucket);
     void snapshotOutcomePre(simtime_picosec timestamp);

@@ -1,8 +1,15 @@
 #include "uec_mp.h"
+#include "eventlist.h"
 
 #include <cassert>
 
 namespace {
+
+class NoopEventSource : public EventSource {
+  public:
+    explicit NoopEventSource(EventList& eventlist) : EventSource(eventlist, "noop") {}
+    void doNextEvent() override {}
+};
 
 void fill_cache(UecMpReps& reps) {
     for (uint32_t entropy = 0; entropy < 8; ++entropy) {
@@ -109,6 +116,29 @@ void reserved_invalid_slot_is_refilled_before_the_circular_head() {
     assert(reps.lastAdmission().cache_slot == 0);
 }
 
+void reset_buffer_clears_reserved_slot_before_path_good_admission() {
+    EventList& eventlist = EventList::getTheEventList();
+    NoopEventSource timer(eventlist);
+    const uint64_t original_exit_freeze_after = CircularBufferREPS<uint16_t>::exit_freeze_after;
+    CircularBufferREPS<uint16_t>::exit_freeze_after = 1;
+
+    UecMpReps reps(16, false, true);
+    fill_cache(reps);
+    const auto original = reps.cacheSlots()[3];
+    assert(reps.invalidateCacheSlot(original.slot, original.generation));
+    assert(reps.reserveCacheSlot(original.slot, original.generation));
+
+    reps.processEv(31, UecMultipath::PATH_TIMEOUT);
+    EventList::sourceIsPending(timer, 2);
+    assert(EventList::doNextEvent());
+
+    reps.processEv(32, UecMultipath::PATH_GOOD);
+    assert(reps.lastAdmission().written);
+    assert(reps.lastAdmission().cache_slot == 0);
+
+    CircularBufferREPS<uint16_t>::exit_freeze_after = original_exit_freeze_after;
+}
+
 }  // namespace
 
 int main() {
@@ -117,4 +147,5 @@ int main() {
     stale_generation_cannot_invalidate_a_replacement();
     non_good_feedback_clears_last_admission();
     reserved_invalid_slot_is_refilled_before_the_circular_head();
+    reset_buffer_clears_reserved_slot_before_path_good_admission();
 }

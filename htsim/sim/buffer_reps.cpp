@@ -188,6 +188,7 @@ template <typename T> void CircularBufferREPS<T>::resetBuffer() {
     head_frozen_mode = 0;
     head_round = 0;
     number_fresh_entropies = 0;
+    reserved_cache_slots.clear();
 }
 
 // Returns the number of elements in the buffer

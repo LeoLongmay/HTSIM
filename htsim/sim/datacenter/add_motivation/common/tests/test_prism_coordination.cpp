@@ -435,6 +435,47 @@ void outcome_uses_three_complete_classified_ack_windows() {
     assert(outcome->post2.exposure == 0.5);
 }
 
+void later_invalidation_restarts_outcome_validation_and_post_windows() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
+    const auto slots = four_slots();
+
+    for (uint16_t slot = 0; slot < 4; ++slot) {
+        coordinator.observeAck(1, slot, 1, slot == 3 ? 12 : 3, false, true);
+    }
+    assert(coordinator.closeEpoch(hold_epoch(1, 2, 16, slots)).invalidated_slots ==
+           std::vector<uint16_t>({3}));
+
+    coordinator.observeClassifiedAck(0, 0, false, true, 100);
+    coordinator.observeClassifiedAck(40, 0, false, true, 1);
+    coordinator.observeReplacementAdmission(3, 2);
+    coordinator.observeReplacementReuse(3, 2, 0, false, true, 40);
+    assert(coordinator.outcomeReplacementsValidated());
+
+    coordinator.observeClassifiedAck(41, 0, false, true, 100);
+    coordinator.observeClassifiedAck(80, 0, false, true, 1);
+
+    coordinator.observeAck(2, 2, 1, 12, false, true);
+    assert(coordinator.closeEpoch(hold_epoch(2, 2, 16, slots)).invalidated_slots ==
+           std::vector<uint16_t>({2}));
+    assert(!coordinator.outcomeReplacementsValidated());
+
+    coordinator.observeClassifiedAck(81, 0, false, true, 100);
+    coordinator.observeClassifiedAck(120, 0, false, true, 1);
+    assert(!coordinator.takeOutcome().has_value());
+
+    coordinator.observeReplacementAdmission(2, 2);
+    coordinator.observeReplacementReuse(2, 2, 0, false, true, 120);
+    assert(coordinator.outcomeReplacementsValidated());
+
+    coordinator.observeClassifiedAck(121, 0, false, true, 100);
+    coordinator.observeClassifiedAck(160, 0, false, true, 1);
+    assert(!coordinator.takeOutcome().has_value());
+
+    coordinator.observeClassifiedAck(161, 0, false, true, 100);
+    coordinator.observeClassifiedAck(200, 0, false, true, 1);
+    assert(coordinator.takeOutcome().has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -457,4 +498,5 @@ int main() {
     no_progress_handoff_applies_one_gentle_cut();
     outcome_replacement_requires_a_reused_clean_matching_generation();
     outcome_uses_three_complete_classified_ack_windows();
+    later_invalidation_restarts_outcome_validation_and_post_windows();
 }

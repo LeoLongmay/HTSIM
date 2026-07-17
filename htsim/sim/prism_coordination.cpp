@@ -256,15 +256,19 @@ void PrismResidualCoordinator::beginOutcomeReplacement(uint16_t slot, uint64_t g
     if (!_outcome_tracking) {
         _outcome_tracking = true;
         _outcome_replacements.clear();
-        _outcome_replacements_validated = false;
-        _outcome_active_bucket.reset();
         _outcome_last_pre_bucket.reset();
         _outcome_pre.reset();
-        _outcome_post1.reset();
-        _outcome_post2.reset();
-        _outcome_event.reset();
     }
+    resetOutcomeValidationProgress();
     _outcome_replacements[slot] = {generation, 0, false, false};
+}
+
+void PrismResidualCoordinator::resetOutcomeValidationProgress() {
+    _outcome_replacements_validated = false;
+    _outcome_active_bucket.reset();
+    _outcome_post1.reset();
+    _outcome_post2.reset();
+    _outcome_event.reset();
 }
 
 void PrismResidualCoordinator::resetOutcomeState() {
