@@ -373,6 +373,68 @@ void no_progress_handoff_applies_one_gentle_cut() {
     assert(cwnd == 1000);
 }
 
+void outcome_replacement_requires_a_reused_clean_matching_generation() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
+    auto slots = four_slots();
+
+    for (uint16_t slot = 0; slot < 4; ++slot) {
+        coordinator.observeAck(1, slot, 1, slot == 3 ? 12 : 3, false, true);
+    }
+    const auto invalidated = coordinator.closeEpoch(hold_epoch(1, 2, 16, slots));
+    assert(invalidated.invalidated_slots == std::vector<uint16_t>({3}));
+    assert(!invalidated.handoff_requested);
+
+    coordinator.observeReplacementAdmission(3, 2);
+    assert(!coordinator.outcomeReplacementsValidated());
+
+    coordinator.observeReplacementReuse(3, 1, 0, false, true, 40);
+    assert(!coordinator.outcomeReplacementsValidated());
+
+    coordinator.observeReplacementReuse(3, 2, 10, false, true, 40);
+    assert(!coordinator.outcomeReplacementsValidated());
+
+    coordinator.observeReplacementReuse(3, 2, 0, false, true, 40);
+    assert(coordinator.outcomeReplacementsValidated());
+    assert(!coordinator.takeOutcome().has_value());
+}
+
+void outcome_uses_three_complete_classified_ack_windows() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
+    auto slots = four_slots();
+
+    for (uint16_t slot = 0; slot < 4; ++slot) {
+        coordinator.observeAck(1, slot, 1, slot == 3 ? 12 : 3, false, true);
+    }
+    assert(coordinator.closeEpoch(hold_epoch(1, 2, 16, slots)).invalidated_slots ==
+           std::vector<uint16_t>({3}));
+
+    coordinator.observeClassifiedAck(0, 0, false, true, 100);
+    coordinator.observeClassifiedAck(40, 0, false, true, 1);
+    coordinator.observeReplacementAdmission(3, 2);
+    coordinator.observeReplacementReuse(3, 2, 0, false, true, 40);
+    assert(coordinator.outcomeReplacementsValidated());
+
+    coordinator.observeClassifiedAck(41, 0, false, true, 70);
+    coordinator.observeClassifiedAck(60, 10, false, true, 30);
+    coordinator.observeClassifiedAck(80, 0, false, true, 1);
+    coordinator.observeClassifiedAck(81, 0, false, true, 49);
+    coordinator.observeClassifiedAck(100, 0, true, true, 50);
+    coordinator.observeClassifiedAck(120, 0, false, true, 1);
+
+    const auto outcome = coordinator.takeOutcome();
+    assert(outcome.has_value());
+    assert(outcome->window_ps == 40);
+    assert(outcome->pre.classified_bytes == 100);
+    assert(outcome->pre.harmful_bytes == 0);
+    assert(outcome->post1.classified_bytes == 100);
+    assert(outcome->post1.harmful_bytes == 30);
+    assert(outcome->post2.classified_bytes == 100);
+    assert(outcome->post2.harmful_bytes == 50);
+    assert(outcome->pre.exposure == 0.0);
+    assert(outcome->post1.exposure == 0.3);
+    assert(outcome->post2.exposure == 0.5);
+}
+
 }  // namespace
 
 int main() {
@@ -393,4 +455,6 @@ int main() {
     ecn_observation_invalidates_a_slot_consumed_before_its_ack();
     coordinator_uses_independent_cc_and_spray_thresholds_at_boundaries();
     no_progress_handoff_applies_one_gentle_cut();
+    outcome_replacement_requires_a_reused_clean_matching_generation();
+    outcome_uses_three_complete_classified_ack_windows();
 }

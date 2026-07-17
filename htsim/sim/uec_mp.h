@@ -82,6 +82,8 @@ public:
     virtual UecMpSelection lastSelection() const { return {}; }
     virtual std::vector<UecMpCacheSlot> cacheSlots() const { return {}; }
     virtual bool invalidateCacheSlot(uint16_t, uint64_t) { return false; }
+    virtual bool reserveCacheSlot(uint16_t, uint64_t) { return false; }
+    virtual void clearReservedCacheSlots() {}
     virtual UecMpAdmission lastAdmission() const { return {}; }
     virtual bool isFrozen() const { return false; }
     virtual void setTokenObserver(TokenObserver) {}
@@ -150,6 +152,8 @@ public:
     UecMpSelection lastSelection() const override { return _last_selection; }
     std::vector<UecMpCacheSlot> cacheSlots() const override;
     bool invalidateCacheSlot(uint16_t slot, uint64_t generation) override;
+    bool reserveCacheSlot(uint16_t slot, uint64_t generation) override;
+    void clearReservedCacheSlots() override;
     UecMpAdmission lastAdmission() const override { return _last_admission; }
     bool isFrozen() const override;
     void setTokenObserver(TokenObserver observer) override { _token_observer = observer; }

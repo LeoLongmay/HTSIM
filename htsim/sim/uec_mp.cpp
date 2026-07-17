@@ -310,6 +310,14 @@ bool UecMpReps::invalidateCacheSlot(uint16_t slot, uint64_t generation) {
     return circular_buffer_reps->invalidateCacheSlot(slot, generation);
 }
 
+bool UecMpReps::reserveCacheSlot(uint16_t slot, uint64_t generation) {
+    return circular_buffer_reps->reserveCacheSlot(slot, generation);
+}
+
+void UecMpReps::clearReservedCacheSlots() {
+    circular_buffer_reps->clearReservedCacheSlots();
+}
+
 bool UecMpReps::isFrozen() const {
     return circular_buffer_reps->isFrozenMode();
 }

@@ -25,16 +25,24 @@ template <typename T> CircularBufferREPS<T>::~CircularBufferREPS() { delete[] bu
 
 // Adds an element to the buffer
 template <typename T> typename CircularBufferREPS<T>::Admission CircularBufferREPS<T>::add(T element) {
-    const uint16_t slot = head;
-    if (!buffer[head].isValid) {
+    uint16_t slot = head;
+    bool reserved_slot = false;
+    if (!reserved_cache_slots.empty()) {
+        slot = *reserved_cache_slots.begin();
+        reserved_cache_slots.erase(reserved_cache_slots.begin());
+        reserved_slot = true;
+    }
+    if (!buffer[slot].isValid) {
         number_fresh_entropies++;
     }
-    buffer[head].value = element;
-    buffer[head].isValid = true;
-    buffer[head].usable_lifetime = repsMaxLifetimeEntropy;
-    buffer[head].generation++;
-    buffer[head].ack_validated = true;
-    head = (head + 1) % max_size;
+    buffer[slot].value = element;
+    buffer[slot].isValid = true;
+    buffer[slot].usable_lifetime = repsMaxLifetimeEntropy;
+    buffer[slot].generation++;
+    buffer[slot].ack_validated = true;
+    if (!reserved_slot) {
+        head = (head + 1) % max_size;
+    }
 
     if (number_fresh_entropies > max_size) {
         number_fresh_entropies = max_size;
@@ -223,6 +231,19 @@ template <typename T> bool CircularBufferREPS<T>::invalidateCacheSlot(uint16_t s
     buffer[slot].ack_validated = false;
     number_fresh_entropies--;
     return true;
+}
+
+template <typename T> bool CircularBufferREPS<T>::reserveCacheSlot(uint16_t slot,
+                                                                      uint64_t generation) {
+    if (slot >= max_size || buffer[slot].isValid || buffer[slot].generation != generation) {
+        return false;
+    }
+    reserved_cache_slots.insert(slot);
+    return true;
+}
+
+template <typename T> void CircularBufferREPS<T>::clearReservedCacheSlots() {
+    reserved_cache_slots.clear();
 }
 
 // Prints the elements of the buffer

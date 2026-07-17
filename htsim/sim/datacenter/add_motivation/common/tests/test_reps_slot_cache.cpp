@@ -83,6 +83,32 @@ void non_good_feedback_clears_last_admission() {
     assert(!reps.lastAdmission().written);
 }
 
+void reserved_invalid_slot_is_refilled_before_the_circular_head() {
+    UecMpReps reps(16, false, true);
+    fill_cache(reps);
+
+    const auto original = reps.cacheSlots()[3];
+    assert(reps.invalidateCacheSlot(original.slot, original.generation));
+    assert(reps.reserveCacheSlot(original.slot, original.generation));
+
+    reps.processEv(31, UecMultipath::PATH_GOOD_HIGH_RESIDUAL);
+    assert(!reps.lastAdmission().written);
+    assert(!reps.cacheSlots()[3].valid);
+
+    reps.processEv(32, UecMultipath::PATH_GOOD);
+    const UecMpAdmission reserved = reps.lastAdmission();
+    assert(reserved.written);
+    assert(reserved.cache_slot == 3);
+    assert(reserved.cache_generation > original.generation);
+
+    assert(reps.invalidateCacheSlot(reserved.cache_slot, reserved.cache_generation));
+    assert(reps.reserveCacheSlot(reserved.cache_slot, reserved.cache_generation));
+    reps.clearReservedCacheSlots();
+
+    reps.processEv(33, UecMultipath::PATH_GOOD);
+    assert(reps.lastAdmission().cache_slot == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -90,4 +116,5 @@ int main() {
     good_ack_admission_identifies_the_physical_slot_written();
     stale_generation_cannot_invalidate_a_replacement();
     non_good_feedback_clears_last_admission();
+    reserved_invalid_slot_is_refilled_before_the_circular_head();
 }

@@ -2,6 +2,7 @@
 #define CIRCULARBUFFERREPS_H
 
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <vector>
 #include "stdint.h"
@@ -51,6 +52,7 @@ template <typename T> class CircularBufferREPS {
 
     bool frozen_mode = false;
     bool circle_mode = true;
+    std::set<uint16_t> reserved_cache_slots;
 
   public:
     CircularBufferREPS(uint16_t bufferSize = 8); // Default size is 8
@@ -71,6 +73,8 @@ template <typename T> class CircularBufferREPS {
     uint16_t numValid() const;
     std::vector<SlotSnapshot> cacheSlots() const;
     bool invalidateCacheSlot(uint16_t slot, uint64_t generation);
+    bool reserveCacheSlot(uint16_t slot, uint64_t generation);
+    void clearReservedCacheSlots();
     void setFrozenMode(bool mode) {
         if (repsUseFreezing) {
             frozen_mode = mode;
