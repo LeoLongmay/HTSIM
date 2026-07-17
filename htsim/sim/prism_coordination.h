@@ -82,6 +82,7 @@ public:
                                  simtime_picosec timestamp);
     void observeClassifiedAck(simtime_picosec timestamp, simtime_picosec residual_ps,
                               bool ecn, bool genuine, uint64_t acked_bytes);
+    void setOutcomeBaseRtt(simtime_picosec base_rtt);
     bool outcomeReplacementsValidated() const;
     std::optional<PrismOutcome> takeOutcome();
     PrismCoordinationResult closeEpoch(const PrismCoordinationEpoch& epoch);

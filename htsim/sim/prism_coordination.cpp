@@ -101,6 +101,18 @@ void PrismResidualCoordinator::observeClassifiedAck(simtime_picosec timestamp,
     }
 }
 
+void PrismResidualCoordinator::setOutcomeBaseRtt(simtime_picosec base_rtt) {
+    if (!outcomeEnabled() || base_rtt == 0) {
+        return;
+    }
+    const simtime_picosec window_ps = base_rtt * 4;
+    if (_outcome_window_ps == window_ps) {
+        return;
+    }
+    _outcome_window_ps = window_ps;
+    resetOutcomeState();
+}
+
 bool PrismResidualCoordinator::outcomeReplacementsValidated() const {
     return _outcome_replacements_validated;
 }

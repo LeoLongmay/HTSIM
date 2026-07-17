@@ -1499,19 +1499,44 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     //assert(_in_flight >= 0);
 
 
+    const bool outcome_recycle =
+        _prism_coordination_mode == PrismCoordinationMode::OUTCOME_RECYCLE;
+    const simtime_picosec outcome_threshold =
+        _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
+    const simtime_picosec outcome_residual =
+        (_prism_genuine_sample && _prism_epoch_samples > 0 && delay >= _prism_epoch_min)
+            ? delay - _prism_epoch_min
+            : 0;
+    const bool outcome_harmful = pkt.ecn_echo() ||
+        (_prism_genuine_sample && outcome_residual >= outcome_threshold);
+    if (outcome_recycle && _base_rtt > 0) {
+        _prism_coordinator.setOutcomeBaseRtt(_base_rtt);
+    }
+    if (outcome_recycle) {
+        _prism_coordinator.observeClassifiedAck(eventlist().now(), outcome_residual,
+                                                pkt.ecn_echo(), _prism_genuine_sample,
+                                                newly_recvd_bytes);
+        if (ack_selection.source == UecMpSelection::RECYCLED) {
+            _prism_coordinator.observeReplacementReuse(
+                ack_selection.cache_slot, ack_selection.cache_generation, outcome_residual,
+                pkt.ecn_echo(), _prism_genuine_sample, eventlist().now());
+        }
+    }
+
     const uint64_t ack_event_seq =
         motivationLogAck(pkt, raw_rtt, delay, _prism_genuine_sample, ack_selection,
                          newly_recvd_bytes, _motivation_new_data_bytes_sent_total,
                          static_cast<uint64_t>(_cwnd));
     const bool reject_high_residual =
-        _motivation_residual_recycle &&
+        (_motivation_residual_recycle || outcome_recycle) &&
         _sender_cc_algo == PRISM &&
         _prism_region == prism::HOLD &&
         _prism_genuine_sample &&
         !pkt.ecn_echo() &&
         _prism_epoch_samples > 0 &&
         delay >= _prism_epoch_min &&
-        delay - _prism_epoch_min >= _motivation_residual_threshold;
+        delay - _prism_epoch_min >=
+            (outcome_recycle ? outcome_threshold : _motivation_residual_threshold);
     if (_prism_coordination_mode != PrismCoordinationMode::DISABLED &&
         pkt.ecn_echo() && _prism_genuine_sample) {
         for (const UecMpCacheSlot& slot : _mp->cacheSlots()) {
@@ -1532,6 +1557,23 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         if (_prism_genuine_sample && admission.written) {
             _prism_coordinator.observeAck(_prism_epoch_id, admission.cache_slot,
                                           admission.cache_generation, delay, false, true);
+            if (outcome_recycle && !outcome_harmful) {
+                _prism_coordinator.observeReplacementAdmission(admission.cache_slot,
+                                                                admission.cache_generation);
+            }
+        }
+    }
+    if (outcome_recycle) {
+        if (const std::optional<PrismOutcome> outcome = _prism_coordinator.takeOutcome();
+            outcome && _motivation_trace_writer.enabledFor(flowId())) {
+            _motivation_trace_writer.logOutcome({
+                _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                outcome->round_id, outcome->window_ps,
+                outcome->pre.classified_bytes, outcome->pre.harmful_bytes, outcome->pre.exposure,
+                outcome->post1.classified_bytes, outcome->post1.harmful_bytes,
+                outcome->post1.exposure, outcome->post2.classified_bytes,
+                outcome->post2.harmful_bytes, outcome->post2.exposure,
+            });
         }
     }
 
@@ -2180,6 +2222,8 @@ void UecSrc::prismOracleLog(simtime_picosec est_raw_cc, simtime_picosec est_raw_
 }
 
 void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
+    const bool outcome_recycle =
+        _prism_coordination_mode == PrismCoordinationMode::OUTCOME_RECYCLE;
     if (!_prism_engaged_init) {
         _prism_engaged = (prismEngageThresh() == 0);
         _prism_engaged_init = true;
@@ -2295,7 +2339,11 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         for (const PrismCoordinationSlotAction& slot_action :
              coordination_result.slot_actions) {
             if (slot_action.action == PrismCoordinationAction::INVALIDATE) {
-                _mp->invalidateCacheSlot(slot_action.slot, slot_action.generation);
+                const bool invalidated =
+                    _mp->invalidateCacheSlot(slot_action.slot, slot_action.generation);
+                if (outcome_recycle && invalidated) {
+                    _mp->reserveCacheSlot(slot_action.slot, slot_action.generation);
+                }
             }
             if (_motivation_trace_writer.enabledFor(flowId())) {
                 _motivation_trace_writer.logCoordination({
@@ -2344,6 +2392,9 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             }
         }
         _prism_region = region;
+        if (outcome_recycle && _prism_region != prism::HOLD) {
+            _mp->clearReservedCacheSlots();
+        }
         _prism_ccc = f_cc;
         _prism_cspray = f_spray;
         if (region != prism::INCREASE) {
