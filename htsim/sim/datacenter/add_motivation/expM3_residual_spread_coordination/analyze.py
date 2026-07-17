@@ -249,6 +249,8 @@ def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -
             raise ValueError(
                 f"{bundle.run_id}: terminal evidence incomplete for round {row['round_id']}"
             )
+        if row["time_ps"] < start_ps:
+            continue
         rounds.append({
             "run_id": bundle.run_id,
             "scenario": scenario,

@@ -64,8 +64,10 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                   foreground_flows=2, completed_spread_ps=6_000_000,
                   pathmap_resolution="resolved", duplicate_pathmap=False,
                   ack_flow_ids=None, ack_physical_path_ids=None,
+                  ack_event_seq=1, ack_epoch_id=1,
                   observer_epoch_id=1, coordination_epoch_id=1,
                   coordination_time_ps=2_200_000_000,
+                  coordination_record_start_time_ps=2_100_000_000,
                   observer_epoch_start_ps=1_000_000_000,
                   observer_epoch_end_ps=2_000_000_000,
                   coordination_event_seq=5, observer_event_seq=3,
@@ -76,16 +78,16 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
     ack_flow_ids = ack_flow_ids or (1, 2)
     ack_physical_path_ids = ack_physical_path_ids or (10, 20)
     ack_rows = [
-        _row("ack", **run_id_values, seed=seed, scenario=scenario, event_seq=1,
-             time_ps=2_000_000_000, flow_id=ack_flow_ids[0], epoch_id=1, acked_psn=1,
+        _row("ack", **run_id_values, seed=seed, scenario=scenario, event_seq=ack_event_seq,
+             time_ps=2_000_000_000, flow_id=ack_flow_ids[0], epoch_id=ack_epoch_id, acked_psn=1,
              entropy=0, physical_path_id=ack_physical_path_ids[0], raw_rtt_ps=18_000_000,
              base_rtt_ps=14_000_000, qdelay_ps=4_000_000, ecn=0,
              genuine_sample=1, retransmitted=0,
              selection_source="recycled" if recycled else "fresh",
              newly_acked_bytes=throttled_bytes,
              new_data_bytes_sent_total=throttled_bytes, cwnd_bytes=12000),
-        _row("ack", **run_id_values, seed=seed, scenario=scenario, event_seq=2,
-             time_ps=2_000_000_000, flow_id=ack_flow_ids[1], epoch_id=1, acked_psn=1,
+        _row("ack", **run_id_values, seed=seed, scenario=scenario, event_seq=ack_event_seq + 1,
+             time_ps=2_000_000_000, flow_id=ack_flow_ids[1], epoch_id=ack_epoch_id, acked_psn=1,
              entropy=0, physical_path_id=ack_physical_path_ids[1], raw_rtt_ps=16_000_000,
              base_rtt_ps=14_000_000, qdelay_ps=2_000_000, ecn=0,
              genuine_sample=1, retransmitted=0, selection_source="fresh",
@@ -101,7 +103,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                 continue
             coordination_rows.append(_row(
                 "coordination", **run_id_values, event_seq=5 + slot,
-                time_ps=2_100_000_000 + slot * 10_000_000, flow_id=1, epoch_id=1,
+                time_ps=coordination_record_start_time_ps + slot * 10_000_000, flow_id=1, epoch_id=1,
                 round_id=1, cache_slot=slot, cache_generation=10 + slot,
                 floor_ps=2_000_000, spread_ps=6_000_000, spread_ref_ps=8_000_000,
                 residual_ps=4_000_000, action="retain", reason="slot_low_residual",
@@ -111,7 +113,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
         if clean_scan == "pending_after_retain":
             coordination_rows.append(_row(
                 "coordination", **run_id_values, event_seq=13,
-                time_ps=2_190_000_000, flow_id=1, epoch_id=1, round_id=1,
+                time_ps=coordination_record_start_time_ps + 90_000_000, flow_id=1, epoch_id=1, round_id=1,
                 cache_slot=7, cache_generation=17, floor_ps=2_000_000,
                 spread_ps=6_000_000, spread_ref_ps=8_000_000, residual_ps=4_000_000,
                 action="pending", reason="awaiting_observation", refresh_complete=0,
@@ -121,7 +123,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
         elif clean_scan in {"invalidate_after_retain", "invalidate_out_of_range_after_retain"}:
             coordination_rows.append(_row(
                 "coordination", **run_id_values, event_seq=13,
-                time_ps=2_190_000_000, flow_id=1, epoch_id=1, round_id=1,
+                time_ps=coordination_record_start_time_ps + 90_000_000, flow_id=1, epoch_id=1, round_id=1,
                 cache_slot=8 if clean_scan == "invalidate_out_of_range_after_retain" else 7,
                 cache_generation=18 if clean_scan == "invalidate_out_of_range_after_retain" else 17,
                 floor_ps=2_000_000,
@@ -750,6 +752,46 @@ class AnalyzeTests(unittest.TestCase):
             round_row = next(row for row in results["rounds"] if row["mode"] == "prism_recycle")
             self.assertEqual(round_row["epoch_id"], 91)
             self.assertEqual(round_row["plot_epoch_index"], 4)
+
+    def test_valid_pre_warmup_terminal_is_validated_without_round_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_bundle(
+                root,
+                "persistent",
+                "prism_recycle",
+                clean_scan="complete",
+                ack_event_seq=14, ack_epoch_id=2,
+                coordination_record_start_time_ps=860_000_000,
+                coordination_time_ps=950_000_000,
+                observer_event_seq=1,
+                observer_epoch_start_ps=700_000_000,
+                observer_epoch_end_ps=850_000_000,
+            )
+
+            results = analyze_data(root)
+
+            self.assertEqual(results["rounds"], [])
+            self.assertEqual(results["per_seed_metrics"][0]["completed_rounds"], 0)
+
+    def test_malformed_pre_warmup_terminal_still_fails_evidence_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_bundle(
+                root,
+                "persistent",
+                "prism_recycle",
+                clean_scan="missing_slot",
+                ack_event_seq=14, ack_epoch_id=2,
+                coordination_record_start_time_ps=860_000_000,
+                coordination_time_ps=950_000_000,
+                observer_event_seq=1,
+                observer_epoch_start_ps=700_000_000,
+                observer_epoch_end_ps=850_000_000,
+            )
+
+            with self.assertRaisesRegex(ValueError, "terminal evidence"):
+                analyze_data(root)
 
     def test_rejects_terminal_round_without_completed_same_flow_observer_epoch(self):
         with tempfile.TemporaryDirectory() as directory:

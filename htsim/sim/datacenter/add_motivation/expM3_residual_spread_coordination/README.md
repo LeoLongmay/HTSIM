@@ -36,7 +36,10 @@ physical cache slot, followed by a later same-round retain for that replacement
 generation. A clean scan has no such invalidations and requires the latest
 same-flow, same-round pre-terminal action for every physical cache slot 0
 through 7 to be `retain`. A terminal satisfying neither predicate is rejected
-as invalid trace evidence.
+as invalid trace evidence. Terminal semantics are validated across the entire
+trace, but only terminals at or after the fixed 1 ms warm-up boundary become
+`rounds.csv` evidence, figure markers, or verifier input; earlier terminals
+remain validated startup-control observations.
 
 The aggregate-only verifier reads `data/aggregate/per_seed_metrics.csv` and
 `data/aggregate/rounds.csv`, first checking the exact 18-run matrix and run-ID
