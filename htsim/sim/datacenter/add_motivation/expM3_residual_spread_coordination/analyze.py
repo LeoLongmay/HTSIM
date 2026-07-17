@@ -35,9 +35,9 @@ TABLE_FIELDS = {
 }
 RECURRENCE_FIELDS = (
     "run_id", "scenario", "mode", "seed", "flow_id", "round_id", "cache_slot",
-    "invalidation_generation", "replacement_generation", "terminal_event_seq",
+    "invalidation_event_seq", "invalidation_generation", "replacement_generation", "terminal_event_seq",
     "terminal_time_ps", "later_invalidation", "later_invalidation_generation",
-    "later_invalidation_reason", "later_invalidation_time_ps",
+    "later_invalidation_event_seq", "later_invalidation_reason", "later_invalidation_time_ps",
 )
 
 MATRIX_PREDICATE = (
@@ -162,13 +162,20 @@ def _completed_replacement_chains(bundle, terminal: dict) -> list[tuple[dict, di
     if not terminal["refresh_complete"]:
         return None
 
-    invalidations = [
-        row for row in bundle.coordination
-        if row["action"] == "invalidate"
-        and row["flow_id"] == terminal["flow_id"]
-        and row["round_id"] == terminal["round_id"]
-        and row["event_seq"] < terminal_seq
-    ]
+    invalidations_by_identity = {}
+    for row in bundle.coordination:
+        if not (
+            row["action"] == "invalidate"
+            and row["flow_id"] == terminal["flow_id"]
+            and row["round_id"] == terminal["round_id"]
+            and row["event_seq"] < terminal_seq
+        ):
+            continue
+        identity = (
+            row["flow_id"], row["round_id"], row["cache_slot"], row["cache_generation"],
+        )
+        invalidations_by_identity.setdefault(identity, row)
+    invalidations = list(invalidations_by_identity.values())
     if not invalidations:
         return None
 
@@ -465,7 +472,7 @@ def analyze_recurrence(data_root: Path | str, output_root: Path | str) -> list[d
                         and row["event_seq"] > terminal["event_seq"]
                         and row["flow_id"] == invalidation["flow_id"]
                         and row["cache_slot"] == invalidation["cache_slot"]
-                        and row["cache_generation"] > admission["cache_generation"]
+                        and row["cache_generation"] >= admission["cache_generation"]
                     ),
                     None,
                 )
@@ -477,12 +484,14 @@ def analyze_recurrence(data_root: Path | str, output_root: Path | str) -> list[d
                     "flow_id": invalidation["flow_id"],
                     "round_id": invalidation["round_id"],
                     "cache_slot": invalidation["cache_slot"],
+                    "invalidation_event_seq": invalidation["event_seq"],
                     "invalidation_generation": invalidation["cache_generation"],
                     "replacement_generation": admission["cache_generation"],
                     "terminal_event_seq": terminal["event_seq"],
                     "terminal_time_ps": terminal["time_ps"],
                     "later_invalidation": int(later is not None),
                     "later_invalidation_generation": "" if later is None else later["cache_generation"],
+                    "later_invalidation_event_seq": "" if later is None else later["event_seq"],
                     "later_invalidation_reason": "" if later is None else later["reason"],
                     "later_invalidation_time_ps": "" if later is None else later["time_ps"],
                 })

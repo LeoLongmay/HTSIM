@@ -894,6 +894,109 @@ class AnalyzeTests(unittest.TestCase):
 
         self.assertEqual(rows, [])
 
+    def test_recurrence_detects_later_invalidation_of_replacement_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "raw"
+            output_root = Path(directory) / "recurrence"
+            root.mkdir()
+            _write_bundle(root, "recoverable", "full_prism", replacement_chain="complete")
+            _append_coordination_row(
+                root,
+                "recoverable",
+                "full_prism",
+                13,
+                event_seq=10,
+                time_ps=2_300_000_000,
+                flow_id=1,
+                epoch_id=3,
+                round_id=2,
+                cache_slot=3,
+                cache_generation=11,
+                floor_ps=2_000_000,
+                spread_ps=8_000_000,
+                spread_ref_ps=8_000_000,
+                residual_ps=6_000_000,
+                action="invalidate",
+                reason="ecn_marked",
+                refresh_complete=0,
+                progress=0,
+                handoff=0,
+                cwnd_bytes=12000,
+                control_state="hold",
+            )
+
+            self.assertEqual(
+                main([
+                    "--data-root", str(root),
+                    "--recurrence-only",
+                    "--output-root", str(output_root),
+                ]),
+                0,
+            )
+
+            with (output_root / "replacement_recurrence.csv").open(newline="", encoding="ascii") as stream:
+                rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["replacement_generation"], "11")
+        self.assertEqual(rows[0]["later_invalidation"], "1")
+        self.assertEqual(rows[0]["later_invalidation_generation"], "11")
+        self.assertEqual(rows[0]["later_invalidation_event_seq"], "10")
+
+    def test_recurrence_collapses_duplicate_invalidation_observations_before_admission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "raw"
+            output_root = Path(directory) / "recurrence"
+            root.mkdir()
+            _write_bundle(
+                root,
+                "recoverable",
+                "full_prism",
+                replacement_chain="complete",
+                observer_event_seq=20,
+                observer_epoch_start_ps=2_250_000_000,
+                observer_epoch_end_ps=2_300_000_000,
+            )
+            _append_coordination_row(
+                root,
+                "recoverable",
+                "full_prism",
+                13,
+                event_seq=4,
+                time_ps=2_090_000_000,
+                flow_id=1,
+                epoch_id=1,
+                round_id=1,
+                cache_slot=3,
+                cache_generation=10,
+                floor_ps=2_000_000,
+                spread_ps=8_000_000,
+                spread_ref_ps=8_000_000,
+                residual_ps=6_000_000,
+                action="invalidate",
+                reason="slot_high_residual",
+                refresh_complete=0,
+                progress=0,
+                handoff=0,
+                cwnd_bytes=12000,
+                control_state="hold",
+            )
+
+            self.assertEqual(
+                main([
+                    "--data-root", str(root),
+                    "--recurrence-only",
+                    "--output-root", str(output_root),
+                ]),
+                0,
+            )
+
+            with (output_root / "replacement_recurrence.csv").open(newline="", encoding="ascii") as stream:
+                rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["invalidation_event_seq"], "4")
+
     def test_counts_retry_terminal_with_replacement_evidence_without_progress_or_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
