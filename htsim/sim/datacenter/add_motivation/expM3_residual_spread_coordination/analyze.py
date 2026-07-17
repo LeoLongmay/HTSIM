@@ -44,7 +44,7 @@ ROUND_MATRIX_PREDICATE = (
 )
 CAUSAL_PREDICATES = (
     "at least two recoverable/prism_recycle seeds have a chain-backed progress round",
-    "at least two recoverable/full_prism seeds have a chain-backed progress round without handoff",
+    "at least two recoverable/full_prism seeds have a chain-backed progress round and no applied handoff",
     "at least two persistent/full_prism seeds have a chain-backed no-progress applied-handoff round",
     "no persistent/original_prism seed has a handoff round",
     "no persistent/prism_recycle seed has a handoff round",
@@ -156,6 +156,9 @@ def _replacement_chain_complete(bundle, terminal: dict) -> bool:
         and row["round_id"] == terminal["round_id"]
         and row["event_seq"] < terminal_seq
     ]
+    if not invalidations:
+        return False
+
     ack_by_event_seq = {row["event_seq"]: row for row in bundle.ack}
     retains = [
         row for row in bundle.coordination
@@ -423,6 +426,10 @@ def _is_true(row: dict, field: str) -> bool:
     return isinstance(value, str) and value.strip().lower() in {"1", "true"}
 
 
+def _is_chain_backed_terminal(row: dict) -> bool:
+    return _is_true(row, "refresh_complete") and _is_true(row, "replacement_chain_complete")
+
+
 def _rounds_belong_to_matrix(rounds: list[dict], matrix: dict[tuple[str, str, int], dict]) -> bool:
     run_id_coordinates = defaultdict(list)
     for coordinate, row in matrix.items():
@@ -471,7 +478,7 @@ def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
     recoverable_recycle = {seed: selected_rounds("recoverable", "prism_recycle", seed) for seed in SEEDS}
     recoverable_recycle_successes = sum(
         any(
-            _is_true(row, "replacement_chain_complete")
+            _is_chain_backed_terminal(row)
             and _is_true(row, "progress")
             for row in seed_rounds
         )
@@ -481,11 +488,11 @@ def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
         return f"not_supported: {CAUSAL_PREDICATES[0]}"
     recoverable_successes = sum(
         any(
-            _is_true(row, "replacement_chain_complete")
+            _is_chain_backed_terminal(row)
             and _is_true(row, "progress")
-            and not _is_true(row, "handoff")
             for row in seed_rounds
         )
+        and not any(_is_true(row, "handoff") for row in seed_rounds)
         for seed_rounds in recoverable_full.values()
     )
     if recoverable_successes < 2:
@@ -494,7 +501,7 @@ def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
     persistent_full = {seed: selected_rounds("persistent", "full_prism", seed) for seed in SEEDS}
     persistent_successes = sum(
         any(
-            _is_true(row, "replacement_chain_complete")
+            _is_chain_backed_terminal(row)
             and _is_true(row, "handoff")
             and not _is_true(row, "progress")
             for row in seed_rounds

@@ -69,7 +69,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                   observer_epoch_start_ps=1_000_000_000,
                   observer_epoch_end_ps=2_000_000_000,
                   coordination_event_seq=5, observer_event_seq=3,
-                  replacement_chain=None):
+                  replacement_chain=None, emit_terminal=True):
     run_id = f"fixture_{scenario}_{mode}_s{seed}"
     prefix = root / run_id
     run_id_values = {"run_id": run_id}
@@ -192,7 +192,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
         _row("linkmap", **run_id_values, queue_id=2, queue_name="healthy",
              rate_gbps=100, reduced_speed=0),
     ])
-    if not replacement_chain:
+    if not replacement_chain and emit_terminal:
         action = "invalidate" if coordination_recycle else ("round_complete_handoff" if handoff else "round_complete_progress")
         coordination_rows.append(_row(
             "coordination", **run_id_values, event_seq=coordination_event_seq, time_ps=coordination_time_ps,
@@ -237,6 +237,7 @@ class AnalyzeTests(unittest.TestCase):
                 "mode": "prism_recycle",
                 "seed": seed,
                 "round_index": 1,
+                "refresh_complete": 1,
                 "progress": 1,
                 "handoff": 0,
                 "replacement_chain_complete": 1,
@@ -247,6 +248,7 @@ class AnalyzeTests(unittest.TestCase):
                 "mode": "full_prism",
                 "seed": seed,
                 "round_index": 1,
+                "refresh_complete": 1,
                 "progress": 1,
                 "handoff": 0,
                 "replacement_chain_complete": 1,
@@ -257,6 +259,7 @@ class AnalyzeTests(unittest.TestCase):
                 "mode": "full_prism",
                 "seed": seed,
                 "round_index": 1,
+                "refresh_complete": 1,
                 "progress": 0,
                 "handoff": 1,
                 "replacement_chain_complete": 1,
@@ -336,6 +339,46 @@ class AnalyzeTests(unittest.TestCase):
             self.assertFalse(_is_true({"progress": None}, "progress"))
             self.assertFalse(_is_true({"progress": 1}, "progress"))
 
+    def test_verify_only_requires_refresh_completion_for_every_counted_terminal(self):
+        for refresh_complete in ("", None, "0"):
+            with self.subTest(refresh_complete=refresh_complete), tempfile.TemporaryDirectory() as directory:
+                metrics, rounds = self._supported_verifier_rows()
+                for row in (
+                    row for row in rounds
+                    if row["scenario"] == "recoverable" and row["mode"] == "prism_recycle"
+                ):
+                    if refresh_complete is None:
+                        del row["refresh_complete"]
+                    else:
+                        row["refresh_complete"] = refresh_complete
+                self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+                self.assertEqual(
+                    self._verdict(Path(directory)),
+                    "not_supported: at least two recoverable/prism_recycle seeds have a chain-backed progress round\n",
+                )
+
+    def test_verify_only_rejects_recoverable_progress_with_coexisting_applied_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            rounds.append({
+                "run_id": "formal_recoverable_full_prism_s13",
+                "scenario": "recoverable",
+                "mode": "full_prism",
+                "seed": 13,
+                "round_index": 2,
+                "refresh_complete": 1,
+                "replacement_chain_complete": 1,
+                "progress": 0,
+                "handoff": 1,
+            })
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: at least two recoverable/full_prism seeds have a chain-backed progress round and no applied handoff\n",
+            )
+
     def test_verify_only_rejects_duplicate_metric_run_id(self):
         with tempfile.TemporaryDirectory() as directory:
             metrics, rounds = self._supported_verifier_rows()
@@ -383,7 +426,7 @@ class AnalyzeTests(unittest.TestCase):
 
             self.assertEqual(
                 self._verdict(Path(directory)),
-                "not_supported: at least two recoverable/full_prism seeds have a chain-backed progress round without handoff\n",
+                "not_supported: at least two recoverable/full_prism seeds have a chain-backed progress round and no applied handoff\n",
             )
 
     def test_verify_only_keeps_descriptive_metrics_out_of_support_gates(self):
@@ -446,7 +489,13 @@ class AnalyzeTests(unittest.TestCase):
 
     def _all_modes(self, root, scenario, **changes):
         for mode in MODES:
-            _write_bundle(root, scenario, mode, **changes.get(mode, {}))
+            options = dict(changes.get(mode, {}))
+            if mode == "original_prism":
+                if not options.get("coordination_recycle"):
+                    options.setdefault("emit_terminal", False)
+            else:
+                options.setdefault("replacement_chain", "complete")
+            _write_bundle(root, scenario, mode, **options)
 
     def test_rejects_handoff_before_refresh_completion(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -466,6 +515,14 @@ class AnalyzeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _write_bundle(root, "persistent", "prism_recycle", replacement_chain="without_admission")
+
+            with self.assertRaisesRegex(ValueError, "replacement chain"):
+                analyze_data(root)
+
+    def test_rejects_terminal_without_invalidations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_bundle(root, "persistent", "prism_recycle", replacement_chain=None)
 
             with self.assertRaisesRegex(ValueError, "replacement chain"):
                 analyze_data(root)
@@ -581,7 +638,7 @@ class AnalyzeTests(unittest.TestCase):
     def test_maps_terminal_round_to_latest_same_flow_observer_epoch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._all_modes(root, "persistent", original_prism={
+            self._all_modes(root, "persistent", prism_recycle={
                 "observer_epoch_id": 4,
                 "coordination_epoch_id": 91,
                 "coordination_time_ps": 2_200_000_000,
@@ -589,17 +646,16 @@ class AnalyzeTests(unittest.TestCase):
 
             results = analyze_data(root)
 
-            round_row = next(row for row in results["rounds"] if row["mode"] == "original_prism")
+            round_row = next(row for row in results["rounds"] if row["mode"] == "prism_recycle")
             self.assertEqual(round_row["epoch_id"], 91)
             self.assertEqual(round_row["plot_epoch_index"], 4)
 
     def test_rejects_terminal_round_without_completed_same_flow_observer_epoch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._all_modes(root, "persistent", original_prism={
+            self._all_modes(root, "persistent", prism_recycle={
                 "coordination_time_ps": 2_200_000_000,
-                "coordination_event_seq": 3,
-                "observer_event_seq": 4,
+                "observer_event_seq": 10,
                 "observer_epoch_start_ps": 2_100_000_000,
                 "observer_epoch_end_ps": 3_000_000_000,
             })
