@@ -28,7 +28,7 @@ MODES = ("original_prism", "prism_recycle", "full_prism")
 SCENARIOS = ("recoverable", "persistent")
 TABLE_FIELDS = {
     "epoch_series": ("run_id", "scenario", "mode", "seed", "epoch_index", "floor_ps", "spread_ps", "cwnd_bytes", "hold_fraction"),
-    "rounds": ("run_id", "scenario", "mode", "seed", "round_index", "epoch_id", "floor_ps", "spread_ps", "spread_ref_ps", "spread_change_ps", "refresh_complete", "progress", "handoff", "cwnd_bytes", "control_state"),
+    "rounds": ("run_id", "scenario", "mode", "seed", "round_index", "epoch_id", "plot_epoch_index", "floor_ps", "spread_ps", "spread_ref_ps", "spread_change_ps", "refresh_complete", "progress", "handoff", "cwnd_bytes", "control_state"),
     "per_seed_metrics": ("run_id", "scenario", "mode", "seed", "window_start_ps", "window_end_ps", "foreground_acked_bytes", "healthy_acked_bytes", "throttled_acked_bytes", "healthy_to_throttled_ratio", "throttled_traffic_ratio", "goodput_gbps", "p99_genuine_qdelay_ps", "completed_rounds", "progress_rounds", "handoff_rounds"),
     "summary": ("scenario", "mode", "seed_count", "mean_healthy_to_throttled_ratio", "mean_throttled_traffic_ratio", "mean_goodput_gbps", "mean_p99_genuine_qdelay_ps", "mean_progress_rounds", "mean_handoff_rounds"),
 }
@@ -104,7 +104,29 @@ def _path_attribution(bundle) -> dict[tuple[int, int], tuple[bool, int]]:
     return attribution
 
 
-def _validate_coordination(bundle, *, scenario: str, mode: str) -> list[dict]:
+def _observer_epoch_index(bundle, coordination: dict, *, start_ps: int) -> int:
+    candidates = [
+        epoch for epoch in bundle.epoch
+        if epoch["flow_id"] == coordination["flow_id"]
+        and epoch["end_ps"] >= start_ps
+        and epoch["end_ps"] <= coordination["time_ps"]
+    ]
+    if not candidates:
+        raise ValueError(
+            f"{bundle.run_id}: no completed observer epoch for flow {coordination['flow_id']} "
+            f"at coordination time {coordination['time_ps']}"
+        )
+    latest_end_ps = max(epoch["end_ps"] for epoch in candidates)
+    latest = [epoch for epoch in candidates if epoch["end_ps"] == latest_end_ps]
+    if len(latest) != 1:
+        raise ValueError(
+            f"{bundle.run_id}: ambiguous completed observer epoch for flow {coordination['flow_id']} "
+            f"at coordination time {coordination['time_ps']}"
+        )
+    return latest[0]["epoch_id"]
+
+
+def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -> list[dict]:
     rounds = []
     completed = [row for row in bundle.coordination if row["action"].startswith("round_complete_")]
     for row in completed:
@@ -123,6 +145,7 @@ def _validate_coordination(bundle, *, scenario: str, mode: str) -> list[dict]:
             "seed": "",
             "round_index": row["round_id"],
             "epoch_id": row["epoch_id"],
+            "plot_epoch_index": _observer_epoch_index(bundle, row, start_ps=start_ps),
             "floor_ps": row["floor_ps"],
             "spread_ps": row["spread_ps"],
             "spread_ref_ps": row["spread_ref_ps"],
@@ -187,7 +210,7 @@ def _analyze_bundle(manifest_path: Path) -> tuple[dict, list[dict], list[dict]]:
         raise ValueError(f"{bundle.run_id}: no ACKed foreground bytes in common window")
     duration_ps = end_ps - start_ps
     goodput_gbps = foreground_bytes * 8_000 / duration_ps
-    rounds = _validate_coordination(bundle, scenario=scenario, mode=mode)
+    rounds = _validate_coordination(bundle, scenario=scenario, mode=mode, start_ps=start_ps)
     for row in rounds:
         row["seed"] = seed
 

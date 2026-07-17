@@ -25,6 +25,7 @@ LABELS = {"original_prism": "original", "prism_recycle": "recycle", "full_prism"
 EPOCH_SERIES_FIELDS = {
     "scenario", "mode", "seed", "epoch_index", "floor_ps", "spread_ps", "cwnd_bytes", "hold_fraction",
 }
+ROUND_FIELDS = {"scenario", "mode", "handoff", "plot_epoch_index", "floor_ps"}
 
 
 def _read(name: str, required: set[str], *, allow_empty: bool = False) -> list[dict]:
@@ -64,6 +65,17 @@ def _aggregate_epochs(epochs: list[dict], scenario: str, mode: str) -> list[dict
     ]
 
 
+def _handoff_marker_coordinates(rounds: list[dict], scenario: str, mode: str) -> tuple[list[int], list[float]]:
+    handoffs = [
+        row for row in rounds
+        if row["scenario"] == scenario and row["mode"] == mode and row["handoff"] == "True"
+    ]
+    return (
+        [int(row["plot_epoch_index"]) for row in handoffs],
+        [_number(row, "floor_ps") / 1e6 for row in handoffs],
+    )
+
+
 def _render(scenario: str, summaries: list[dict], epochs: list[dict], rounds: list[dict], metrics: list[dict]) -> None:
     scenario_summaries = {row["mode"]: row for row in summaries if row["scenario"] == scenario}
     modes = [mode for mode in COLORS if mode in scenario_summaries]
@@ -91,9 +103,9 @@ def _render(scenario: str, summaries: list[dict], epochs: list[dict], rounds: li
             axis.plot(epoch_indices, [_number(row, "spread_ps") / 1e6 for row in rows], color=COLORS[mode], linewidth=1.0, linestyle="--", label=f"{LABELS[mode]} spread")
             cwnd_axis.plot(epoch_indices, [_number(row, "cwnd_bytes") / 1000 for row in rows], color=COLORS[mode], linewidth=0.9, linestyle=":", label=f"{LABELS[mode]} cwnd")
             state_axis.plot(epoch_indices, [_number(row, "hold_fraction") for row in rows], color=COLORS[mode], linewidth=0.9, linestyle="-.", marker="s", markersize=2.5, label=f"{LABELS[mode]} hold share")
-        handoffs = [row for row in rounds if row["scenario"] == scenario and row["mode"] == mode and row["handoff"] == "True"]
-        if handoffs:
-            axis.scatter([int(row["epoch_id"]) for row in handoffs], [_number(row, "floor_ps") / 1e6 for row in handoffs], color=COLORS[mode], marker="x", zorder=3, label=f"{LABELS[mode]} handoff")
+        handoff_x, handoff_y = _handoff_marker_coordinates(rounds, scenario, mode)
+        if handoff_x:
+            axis.scatter(handoff_x, handoff_y, color=COLORS[mode], marker="x", zorder=3, label=f"{LABELS[mode]} handoff")
     axis.set_xlabel("epoch index")
     axis.set_ylabel("delay (us)")
     cwnd_axis.set_ylabel("cwnd (KB)")
@@ -135,7 +147,7 @@ def _render(scenario: str, summaries: list[dict], epochs: list[dict], rounds: li
 def main() -> int:
     summaries = _read("summary.csv", {"scenario", "mode", "mean_healthy_to_throttled_ratio"})
     epochs = _read("epoch_series.csv", EPOCH_SERIES_FIELDS)
-    rounds = _read("rounds.csv", {"scenario", "mode", "handoff", "epoch_id", "floor_ps"}, allow_empty=True)
+    rounds = _read("rounds.csv", ROUND_FIELDS, allow_empty=True)
     metrics = _read("per_seed_metrics.csv", {"scenario", "mode", "seed", "goodput_gbps", "p99_genuine_qdelay_ps"})
     for scenario in ("recoverable", "persistent"):
         _render(scenario, summaries, epochs, rounds, metrics)

@@ -57,7 +57,12 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                   coordination_recycle=False, throttled_bytes=100, healthy_bytes=900,
                   foreground_flows=2, completed_spread_ps=6_000_000,
                   pathmap_resolution="resolved", duplicate_pathmap=False,
-                  ack_flow_ids=None, ack_physical_path_ids=None):
+                  ack_flow_ids=None, ack_physical_path_ids=None,
+                  observer_epoch_id=1, coordination_epoch_id=1,
+                  coordination_time_ps=2_200_000_000,
+                  observer_epoch_start_ps=1_000_000_000,
+                  observer_epoch_end_ps=2_000_000_000,
+                  coordination_event_seq=5, observer_event_seq=3):
     run_id = f"fixture_{scenario}_{mode}_s{seed}"
     prefix = root / run_id
     run_id_values = {"run_id": run_id}
@@ -82,16 +87,16 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
     ])
     _write_csv(prefix.with_suffix(".token.csv"), "token", [])
     _write_csv(prefix.with_suffix(".epoch.csv"), "epoch", [
-        _row("epoch", **run_id_values, event_seq=3, flow_id=1, epoch_id=1,
-             start_ps=1_000_000_000, end_ps=2_000_000_000, sample_count=3,
+        _row("epoch", **run_id_values, event_seq=observer_event_seq, flow_id=1, epoch_id=observer_epoch_id,
+             start_ps=observer_epoch_start_ps, end_ps=observer_epoch_end_ps, sample_count=3,
              raw_floor_ps=2_000_000, raw_spread_ps=8_000_000,
              smooth_floor_ps=2_000_000, smooth_spread_ps=8_000_000,
              observed_region="hold", actual_region="hold", engaged=1,
              entropy_coverage=8, physical_path_coverage=2,
              new_data_bytes_sent_total=throttled_bytes,
              acked_bytes_total=throttled_bytes, cwnd_bytes=12000),
-        _row("epoch", **run_id_values, event_seq=4, flow_id=2, epoch_id=1,
-             start_ps=1_000_000_000, end_ps=2_000_000_000, sample_count=3,
+        _row("epoch", **run_id_values, event_seq=observer_event_seq + 1, flow_id=2, epoch_id=observer_epoch_id,
+             start_ps=observer_epoch_start_ps, end_ps=observer_epoch_end_ps, sample_count=3,
              raw_floor_ps=2_000_000, raw_spread_ps=6_000_000,
              smooth_floor_ps=2_000_000, smooth_spread_ps=6_000_000,
              observed_region="hold", actual_region="hold", engaged=1,
@@ -120,8 +125,8 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
     ])
     action = "invalidate" if coordination_recycle else ("round_complete_handoff" if handoff else "round_complete_progress")
     _write_csv(prefix.with_suffix(".coordination.csv"), "coordination", [
-        _row("coordination", **run_id_values, event_seq=5, time_ps=2_200_000_000,
-             flow_id=1, epoch_id=1, round_id=1, cache_slot=4294967295,
+        _row("coordination", **run_id_values, event_seq=coordination_event_seq, time_ps=coordination_time_ps,
+             flow_id=1, epoch_id=coordination_epoch_id, round_id=1, cache_slot=4294967295,
              cache_generation=18446744073709551615, floor_ps=2_000_000,
              spread_ps=completed_spread_ps, spread_ref_ps=8_000_000, residual_ps=0,
              action=action, reason="slot_high_residual" if coordination_recycle else ("spread_not_reduced" if handoff else "spread_reduced"),
@@ -227,6 +232,34 @@ class AnalyzeTests(unittest.TestCase):
             self.assertFalse(handoff["progress"])
             self.assertTrue(handoff["handoff"])
 
+    def test_maps_terminal_round_to_latest_same_flow_observer_epoch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", original_prism={
+                "observer_epoch_id": 4,
+                "coordination_epoch_id": 91,
+                "coordination_time_ps": 2_200_000_000,
+            })
+
+            results = analyze_data(root)
+
+            round_row = next(row for row in results["rounds"] if row["mode"] == "original_prism")
+            self.assertEqual(round_row["epoch_id"], 91)
+            self.assertEqual(round_row["plot_epoch_index"], 4)
+
+    def test_rejects_terminal_round_without_completed_same_flow_observer_epoch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", original_prism={
+                "coordination_time_ps": 2_200_000_000,
+                "coordination_event_seq": 3,
+                "observer_event_seq": 4,
+                "observer_epoch_start_ps": 2_100_000_000,
+                "observer_epoch_end_ps": 3_000_000_000,
+            })
+            with self.assertRaisesRegex(ValueError, "no completed observer epoch"):
+                analyze_data(root)
+
     def test_epoch_aggregation_aligns_seed_rows_by_epoch_index(self):
         rows = [
             {"scenario": "persistent", "mode": "full_prism", "seed": "13", "epoch_index": "1", "floor_ps": "2", "spread_ps": "6", "cwnd_bytes": "12000", "hold_fraction": "1"},
@@ -252,6 +285,23 @@ class AnalyzeTests(unittest.TestCase):
             with patch.object(make_figs, "AGGREGATE", root):
                 with self.assertRaisesRegex(ValueError, "hold_fraction"):
                     make_figs._read("epoch_series.csv", make_figs.EPOCH_SERIES_FIELDS)
+
+    def test_handoff_markers_use_mapped_plot_epoch_index(self):
+        x, y = make_figs._handoff_marker_coordinates(
+            [{
+                "scenario": "persistent",
+                "mode": "full_prism",
+                "handoff": "True",
+                "epoch_id": "91",
+                "plot_epoch_index": "4",
+                "floor_ps": "2000000",
+            }],
+            "persistent",
+            "full_prism",
+        )
+
+        self.assertEqual(x, [4])
+        self.assertEqual(y, [2.0])
 
 
 if __name__ == "__main__":
