@@ -26,6 +26,27 @@ writes `data/aggregate/epoch_series.csv`, `rounds.csv`, `per_seed_metrics.csv`,
 and `summary.csv`. `make_figs.py` reads only those aggregate files and renders
 `figs/m3_recoverable.{pdf,png}` and `figs/m3_persistent.{pdf,png}`.
 
+## Fixed-Matrix Result
+
+The final reproduction command was:
+
+```bash
+bash htsim/sim/datacenter/add_motivation/expM3_residual_spread_coordination/repro.sh full
+```
+
+It produced the locked 18 manifests, 18 coordination traces, and four aggregate
+CSVs. The retained figures are
+`figs/m3_recoverable.pdf` and `figs/m3_persistent.pdf` (with matching PNGs).
+Every trial fixes the same capacity relation: eight degraded links at 25 Gbps,
+against the 100 Gbps normal-link capacity.
+
+Verifier status: `python3 analyze.py --verify-only` is currently rejected
+because this analyzer does not implement that option. It therefore emits neither
+`supported` nor `not_supported`; this run is **not verified** by the required
+causal-status interface, and no support claim is made by selecting individual
+seeds. M3 is a mechanism-validation experiment, not a substitute for a full
+performance evaluation.
+
 Remove generated traces and aggregate data while retaining local figures:
 
 ```bash
