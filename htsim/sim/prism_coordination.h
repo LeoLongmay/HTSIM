@@ -42,12 +42,15 @@ struct PrismCoordinationResult {
     std::vector<uint16_t> pending_slots;
     bool round_complete = false;
     bool progress = false;
-    bool handoff = false;
+    bool handoff_requested = false;
 };
+
+bool applyPrismNoProgressHandoff(mem_b& cwnd, mem_b min_cwnd);
 
 class PrismResidualCoordinator {
 public:
-    PrismResidualCoordinator(PrismCoordinationMode mode, simtime_picosec threshold);
+    PrismResidualCoordinator(PrismCoordinationMode mode, simtime_picosec t_cc,
+                             simtime_picosec t_spray);
 
     void observeAck(uint64_t epoch_id, uint16_t slot, uint64_t generation,
                     simtime_picosec qdelay, bool ecn, bool genuine);
@@ -85,11 +88,14 @@ private:
                        const char* reason) const;
 
     PrismCoordinationMode _mode;
-    simtime_picosec _threshold;
+    simtime_picosec _t_cc;
+    simtime_picosec _t_spray;
     bool _round_active = false;
     uint64_t _round_id = 0;
     simtime_picosec _spread_ref = 0;
-    std::set<SlotGeneration> _completed;
+    std::set<uint16_t> _round_slots;
+    std::set<uint16_t> _completed_slots;
+    std::map<uint16_t, uint64_t> _invalidated_generations;
     std::map<ObservationKey, Observation> _observations;
 };
 

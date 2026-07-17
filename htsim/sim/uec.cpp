@@ -634,7 +634,8 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                bool rts)
         : EventSource(eventList, "uecSrc"), 
           _mp(move(mp)),
-          _prism_coordinator(_prism_coordination_mode, _motivation_residual_threshold),
+          _prism_coordinator(_prism_coordination_mode, _target_Qdelay,
+                             _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay),
           _motivation_epoch_observer(_prism_kappa, _prism_n_min, _prism_smooth_beta,
                                      _prism_hysteresis),
           _nic(nic), 
@@ -1509,6 +1510,16 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         _prism_epoch_samples > 0 &&
         delay >= _prism_epoch_min &&
         delay - _prism_epoch_min >= _motivation_residual_threshold;
+    if (_prism_coordination_mode != PrismCoordinationMode::DISABLED &&
+        pkt.ecn_echo() && _prism_genuine_sample) {
+        for (const UecMpCacheSlot& slot : _mp->cacheSlots()) {
+            if (ack_selection.cache_slot == slot.slot &&
+                ack_selection.cache_generation == slot.generation) {
+                _prism_coordinator.observeAck(_prism_epoch_id, slot.slot, slot.generation,
+                                              delay, true, true);
+            }
+        }
+    }
     _mp->setFeedbackTraceContext(ack_event_seq);
     _mp->processEv(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN :
                    (reject_high_residual ? UecMultipath::PATH_GOOD_HIGH_RESIDUAL
@@ -1516,9 +1527,10 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     if (_prism_coordination_mode != PrismCoordinationMode::DISABLED &&
         !pkt.ecn_echo()) {
         const UecMpAdmission admission = _mp->lastAdmission();
-        _prism_coordinator.observeAck(_prism_epoch_id, admission.cache_slot,
-                                      admission.cache_generation, delay, pkt.ecn_echo(),
-                                      _prism_genuine_sample && admission.written);
+        if (_prism_genuine_sample && admission.written) {
+            _prism_coordinator.observeAck(_prism_epoch_id, admission.cache_slot,
+                                          admission.cache_generation, delay, false, true);
+        }
     }
 
     if(_flow.flow_id() == _debug_flowid ){
@@ -2295,10 +2307,10 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
                     motivationRegionName(static_cast<prism::Region>(region))});
             }
         }
-        if (coordination_result.handoff) {
-            const mem_b before = _cwnd;
-            multiplicative_decrease();
-            cut = (_cwnd < before);
+        const bool handoff_applied = coordination_result.handoff_requested &&
+            applyPrismNoProgressHandoff(_cwnd, _min_cwnd);
+        if (coordination_result.handoff_requested) {
+            cut = handoff_applied;
             region = prism::DECREASE;
         } else if (region == prism::DECREASE && f_cc > _target_Qdelay
                 && eventlist().now() - _last_dec_time > _base_rtt) {
@@ -2322,7 +2334,7 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
                     action == PrismCoordinationAction::ROUND_COMPLETE_PROGRESS
                         ? "spread_reduced"
                         : "spread_not_reduced",
-                    true, coordination_result.progress, coordination_result.handoff,
+                    true, coordination_result.progress, handoff_applied,
                     static_cast<uint64_t>(_cwnd),
                     motivationRegionName(static_cast<prism::Region>(region))});
             }

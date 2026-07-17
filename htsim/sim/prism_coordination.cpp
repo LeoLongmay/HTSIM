@@ -2,9 +2,16 @@
 
 #include <algorithm>
 
+bool applyPrismNoProgressHandoff(mem_b& cwnd, mem_b min_cwnd) {
+    const mem_b before = cwnd;
+    cwnd = std::max(min_cwnd, static_cast<mem_b>(cwnd * 0.9));
+    return cwnd < before;
+}
+
 PrismResidualCoordinator::PrismResidualCoordinator(PrismCoordinationMode mode,
-                                                   simtime_picosec threshold)
-    : _mode(mode), _threshold(threshold) {}
+                                                   simtime_picosec t_cc,
+                                                   simtime_picosec t_spray)
+    : _mode(mode), _t_cc(t_cc), _t_spray(t_spray) {}
 
 void PrismResidualCoordinator::observeAck(uint64_t epoch_id, uint16_t slot,
                                           uint64_t generation, simtime_picosec qdelay,
@@ -29,7 +36,7 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
         return result;
     }
 
-    const bool eligible = epoch.floor < _threshold && epoch.spread >= _threshold;
+    const bool eligible = epoch.floor < _t_cc && epoch.spread >= _t_spray;
     if (!eligible) {
         resetRound();
         _observations.clear();
@@ -40,7 +47,12 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
         _round_active = true;
         ++_round_id;
         _spread_ref = epoch.spread;
-        _completed.clear();
+        _round_slots.clear();
+        _completed_slots.clear();
+        _invalidated_generations.clear();
+        for (const UecMpCacheSlot& slot : epoch.slots) {
+            _round_slots.insert(slot.slot);
+        }
     }
     result.round_id = _round_id;
     result.spread_ref_ps = _spread_ref;
@@ -50,64 +62,67 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
         return lhs.slot < rhs.slot;
     });
 
-    std::set<SlotGeneration> current_slots;
     for (const UecMpCacheSlot& slot : slots) {
-        if (slot.valid && slot.ack_validated) {
-            current_slots.insert({slot.slot, slot.generation});
+        if (_round_slots.find(slot.slot) == _round_slots.end()) {
+            continue;
         }
-    }
-    for (auto it = _completed.begin(); it != _completed.end();) {
-        if (current_slots.find(*it) == current_slots.end()) {
-            it = _completed.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    for (const UecMpCacheSlot& slot : slots) {
         const SlotGeneration key{slot.slot, slot.generation};
         const auto observation = _observations.find({epoch.epoch_id, key});
+        const bool completed = _completed_slots.find(slot.slot) != _completed_slots.end();
+        if (observation == _observations.end() && completed) {
+            continue;
+        }
+        simtime_picosec residual = 0;
+        if (observation != _observations.end()) {
+            residual = observation->second.qdelay > epoch.floor
+                           ? observation->second.qdelay - epoch.floor
+                           : 0;
+            if (observation->second.ecn) {
+                _completed_slots.erase(slot.slot);
+                _invalidated_generations[slot.slot] = slot.generation;
+                addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
+                              "ecn_marked");
+                continue;
+            }
+            if (residual >= _t_spray) {
+                _completed_slots.erase(slot.slot);
+                _invalidated_generations[slot.slot] = slot.generation;
+                addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
+                              "residual_threshold");
+                continue;
+            }
+        }
         if (!slot.valid || !slot.ack_validated) {
-            _completed.erase(key);
-            addSlotAction(result, slot, PrismCoordinationAction::PENDING, 0,
-                          "slot_not_refreshable");
+            if (!completed) {
+                addSlotAction(result, slot, PrismCoordinationAction::PENDING, 0,
+                              "slot_not_refreshable");
+            }
             continue;
         }
         if (observation == _observations.end()) {
-            _completed.erase(key);
             addSlotAction(result, slot, PrismCoordinationAction::PENDING, 0,
                           "missing_epoch_observation");
             continue;
         }
 
-        const simtime_picosec residual = observation->second.qdelay > epoch.floor
-                                             ? observation->second.qdelay - epoch.floor
-                                             : 0;
-        if (observation->second.ecn) {
-            _completed.erase(key);
-            addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
-                          "ecn_marked");
-            continue;
-        }
-        if (residual >= _threshold) {
-            _completed.erase(key);
-            addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
-                          "residual_threshold");
+        const auto invalidated = _invalidated_generations.find(slot.slot);
+        if (invalidated != _invalidated_generations.end() &&
+            slot.generation <= invalidated->second) {
+            addSlotAction(result, slot, PrismCoordinationAction::PENDING, residual,
+                          "awaiting_replacement");
             continue;
         }
 
-        _completed.insert(key);
+        _completed_slots.insert(slot.slot);
+        _invalidated_generations.erase(slot.slot);
         addSlotAction(result, slot, PrismCoordinationAction::RETAIN, residual,
                       "residual_below_threshold");
     }
 
     _observations.clear();
 
-    const bool all_complete = !slots.empty() && std::all_of(
-        slots.begin(), slots.end(), [this](const UecMpCacheSlot& slot) {
-            return slot.valid && slot.ack_validated &&
-                   _completed.find({slot.slot, slot.generation}) != _completed.end();
-        });
+    const bool all_complete = !_round_slots.empty() &&
+        _completed_slots.size() == _round_slots.size();
     if (!all_complete) {
         return result;
     }
@@ -117,13 +132,11 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
     if (result.progress) {
         result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_PROGRESS);
     } else if (_mode == PrismCoordinationMode::FULL_PRISM) {
-        result.handoff = true;
+        result.handoff_requested = true;
         result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_HANDOFF);
     }
 
-    _spread_ref = epoch.spread;
-    _completed.clear();
-    ++_round_id;
+    resetRound();
     return result;
 }
 
@@ -135,7 +148,9 @@ bool PrismResidualCoordinator::enabled() const {
 void PrismResidualCoordinator::resetRound() {
     _round_active = false;
     _spread_ref = 0;
-    _completed.clear();
+    _round_slots.clear();
+    _completed_slots.clear();
+    _invalidated_generations.clear();
 }
 
 void PrismResidualCoordinator::addSlotAction(PrismCoordinationResult& result,
