@@ -65,3 +65,58 @@ exit 0
 None. Full-window eligibility uses the post-warm-up lower bound and the latest
 post-warm-up ACK timestamp; a trace ending before a following window completes
 intentionally produces blank effect ratios rather than an inferred value.
+
+## Task 2 Findings Fix Report
+
+### Changes
+
+- `analyze_distribution` now validates all discovered manifests before loading
+  trace data or writing figure inputs. The required keys are exactly
+  `original_prism` and `prism_recycle` crossed with `recoverable` and
+  `persistent`, for seeds `13`, `14`, and `15`, each exactly once. Missing,
+  duplicate, and unexpected scenario/seed keys raise `ValueError`.
+- Analysis fixtures now build the complete locked matrix. Focused regressions
+  cover missing manifests, duplicate manifest bundles, unexpected scenarios and
+  seeds, and independently zero-byte complete pre and post refresh-effect
+  windows. Zero-byte windows retain their complete flag but write blank ratio
+  and ratio-change fields.
+
+### TDD Evidence
+
+Red command, after adding the malformed-matrix tests and before the manifest
+validator:
+
+```text
+$ python3 -m unittest htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.tests.test_distribution
+...FF.....
+======================================================================
+FAIL: test_rejects_duplicate_manifest_from_locked_trial_matrix
+FAIL: test_rejects_missing_manifest_from_locked_trial_matrix
+FAIL: test_rejects_unexpected_manifest_scenario_or_seed (field='scenario')
+FAIL: test_rejects_unexpected_manifest_scenario_or_seed (field='seed')
+
+Ran 11 tests in 0.216s
+
+FAILED (failures=4)
+```
+
+Green command, after the manifest validator and zero-byte regressions:
+
+```text
+$ python3 -m unittest htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.tests.test_distribution
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 0.227s
+
+OK
+```
+
+Additional verification:
+
+```text
+$ python3 -m py_compile htsim/sim/datacenter/add_motivation/expM3_residual_spread_coordination/analyze_distribution.py htsim/sim/datacenter/add_motivation/expM3_residual_spread_coordination/tests/test_distribution.py
+exit 0
+
+$ git diff --check
+exit 0
+```

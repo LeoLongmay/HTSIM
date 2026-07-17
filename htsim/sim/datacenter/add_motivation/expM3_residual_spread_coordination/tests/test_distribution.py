@@ -1,4 +1,6 @@
 import csv
+import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +22,9 @@ from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.test
 WARMUP_PS = 1_000_000_000
 BASE_RTT_PS = 14_000_000
 BIN_WIDTH_PS = 4 * BASE_RTT_PS
+MODES = ("original_prism", "prism_recycle")
+SCENARIOS = ("recoverable", "persistent")
+SEEDS = (13, 14, 15)
 
 
 def _read_csv(path):
@@ -27,10 +32,11 @@ def _read_csv(path):
         return list(csv.DictReader(stream))
 
 
-def _write_distribution_bundle(root, *, mode="prism_recycle", complete_post_window=True):
+def _write_distribution_bundle(root, *, scenario="recoverable", mode="prism_recycle",
+                               seed=13, complete_post_window=True):
     """Write one trace with terminal windows [t-width, t) and [t, t+width)."""
-    _write_bundle(root, "recoverable", mode, replacement_chain="complete")
-    run_id = f"fixture_recoverable_{mode}_s13"
+    _write_bundle(root, scenario, mode, seed=seed, replacement_chain="complete")
+    run_id = f"fixture_{scenario}_{mode}_s{seed}"
     prefix = root / run_id
 
     with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
@@ -43,7 +49,7 @@ def _write_distribution_bundle(root, *, mode="prism_recycle", complete_post_wind
         row["base_rtt_ps"] = str(BASE_RTT_PS)
     ack_rows.extend([
         _row(
-            "ack", run_id=run_id, seed=13, scenario="recoverable", event_seq=9,
+            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=9,
             time_ps=2_150_000_000, flow_id=1, epoch_id=2, acked_psn=3, entropy=0,
             physical_path_id=10, raw_rtt_ps=18_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=4_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -51,7 +57,7 @@ def _write_distribution_bundle(root, *, mode="prism_recycle", complete_post_wind
             new_data_bytes_sent_total=200, cwnd_bytes=12_000,
         ),
         _row(
-            "ack", run_id=run_id, seed=13, scenario="recoverable", event_seq=10,
+            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=10,
             time_ps=2_160_000_000, flow_id=2, epoch_id=2, acked_psn=2, entropy=0,
             physical_path_id=20, raw_rtt_ps=16_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=2_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -59,7 +65,7 @@ def _write_distribution_bundle(root, *, mode="prism_recycle", complete_post_wind
             new_data_bytes_sent_total=1_000, cwnd_bytes=13_000,
         ),
         _row(
-            "ack", run_id=run_id, seed=13, scenario="recoverable", event_seq=21,
+            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=21,
             time_ps=2_220_000_000, flow_id=1, epoch_id=2, acked_psn=4, entropy=0,
             physical_path_id=10, raw_rtt_ps=18_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=4_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -67,7 +73,7 @@ def _write_distribution_bundle(root, *, mode="prism_recycle", complete_post_wind
             new_data_bytes_sent_total=280, cwnd_bytes=12_000,
         ),
         _row(
-            "ack", run_id=run_id, seed=13, scenario="recoverable", event_seq=22,
+            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=22,
             time_ps=2_230_000_000, flow_id=2, epoch_id=2, acked_psn=3, entropy=0,
             physical_path_id=20, raw_rtt_ps=16_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=2_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -77,7 +83,7 @@ def _write_distribution_bundle(root, *, mode="prism_recycle", complete_post_wind
     ])
     if complete_post_window:
         ack_rows.append(_row(
-            "ack", run_id=run_id, seed=13, scenario="recoverable", event_seq=23,
+            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=23,
             time_ps=2_256_000_000, flow_id=2, epoch_id=2, acked_psn=4, entropy=0,
             physical_path_id=20, raw_rtt_ps=16_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=2_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -101,6 +107,21 @@ def _write_distribution_bundle(root, *, mode="prism_recycle", complete_post_wind
     ))
     _write_csv(prefix.with_suffix(".pathmap.csv"), "pathmap", pathmap_rows)
     return prefix
+
+
+def _write_locked_distribution_matrix(root, *, complete_post_window=True):
+    target = None
+    for mode in MODES:
+        for scenario in SCENARIOS:
+            for seed in SEEDS:
+                if (mode, scenario, seed) == ("prism_recycle", "recoverable", 13):
+                    target = _write_distribution_bundle(
+                        root, scenario=scenario, mode=mode, seed=seed,
+                        complete_post_window=complete_post_window,
+                    )
+                else:
+                    _write_bundle(root, scenario, mode, seed=seed)
+    return target
 
 
 class DistributionRunnerTests(unittest.TestCase):
@@ -174,7 +195,7 @@ class DistributionAnalysisTests(unittest.TestCase):
     def test_writes_resolved_post_warmup_bins_and_terminal_anchored_effect(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            _write_distribution_bundle(root)
+            _write_locked_distribution_matrix(root)
             output = root / "aggregate"
 
             result = analyze_distribution(root, output)
@@ -184,44 +205,47 @@ class DistributionAnalysisTests(unittest.TestCase):
             summary = _read_csv(output / "summary.csv")
 
         self.assertEqual(len(result["distribution_bins"]), len(bins))
-        self.assertEqual(len(effects), 1)
-        self.assertEqual(effects[0]["terminal_time_ps"], "2200000000")
-        self.assertEqual(effects[0]["pre_window_start_ps"], "2144000000")
-        self.assertEqual(effects[0]["pre_window_end_ps"], "2200000000")
-        self.assertEqual(effects[0]["post_window_start_ps"], "2200000000")
-        self.assertEqual(effects[0]["post_window_end_ps"], "2256000000")
-        self.assertEqual(effects[0]["pre_throttled_ratio"], "0.5")
-        self.assertEqual(effects[0]["post_throttled_ratio"], "0.2")
-        self.assertEqual(effects[0]["throttled_ratio_change"], "-0.3")
+        effect = next(row for row in effects if row["run_id"] == "fixture_recoverable_prism_recycle_s13")
+        self.assertEqual(effect["terminal_time_ps"], "2200000000")
+        self.assertEqual(effect["pre_window_start_ps"], "2144000000")
+        self.assertEqual(effect["pre_window_end_ps"], "2200000000")
+        self.assertEqual(effect["post_window_start_ps"], "2200000000")
+        self.assertEqual(effect["post_window_end_ps"], "2256000000")
+        self.assertEqual(effect["pre_throttled_ratio"], "0.5")
+        self.assertEqual(effect["post_throttled_ratio"], "0.2")
+        self.assertEqual(effect["throttled_ratio_change"], "-0.3")
 
-        aligned_bin = next(row for row in bins if row["bin_start_ps"] == "2120000000")
+        target_bins = [row for row in bins if row["run_id"] == "fixture_recoverable_prism_recycle_s13"]
+        aligned_bin = next(row for row in target_bins if row["bin_start_ps"] == "2120000000")
         self.assertEqual(aligned_bin["bin_width_ps"], str(BIN_WIDTH_PS))
         self.assertEqual(aligned_bin["throttled_acked_bytes"], "100")
         self.assertEqual(aligned_bin["healthy_acked_bytes"], "100")
         self.assertEqual(aligned_bin["throttled_ratio"], "0.5")
-        self.assertEqual(sum(int(row["throttled_acked_bytes"]) for row in bins), 180)
-        self.assertEqual(sum(int(row["healthy_acked_bytes"]) for row in bins), 1_320)
-        self.assertEqual(summary[0]["base_rtt_ps"], str(BASE_RTT_PS))
-        self.assertEqual(summary[0]["bin_width_ps"], str(BIN_WIDTH_PS))
-        self.assertEqual(summary[0]["refresh_effect_count"], "1")
+        self.assertEqual(sum(int(row["throttled_acked_bytes"]) for row in target_bins), 180)
+        self.assertEqual(sum(int(row["healthy_acked_bytes"]) for row in target_bins), 1_320)
+        target_summary = next(row for row in summary if row["run_id"] == "fixture_recoverable_prism_recycle_s13")
+        self.assertEqual(target_summary["base_rtt_ps"], str(BASE_RTT_PS))
+        self.assertEqual(target_summary["bin_width_ps"], str(BIN_WIDTH_PS))
+        self.assertEqual(target_summary["refresh_effect_count"], "1")
 
     def test_refresh_effect_blanks_ratio_for_partial_observation_window(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            _write_distribution_bundle(root, complete_post_window=False)
+            _write_locked_distribution_matrix(root, complete_post_window=False)
 
             analyze_distribution(root, root / "aggregate")
             effects = _read_csv(root / "aggregate" / "refresh_effects.csv")
 
-        self.assertEqual(effects[0]["pre_throttled_ratio"], "0.5")
-        self.assertEqual(effects[0]["post_window_complete"], "0")
-        self.assertEqual(effects[0]["post_throttled_ratio"], "")
-        self.assertEqual(effects[0]["throttled_ratio_change"], "")
+        effect = next(row for row in effects if row["run_id"] == "fixture_recoverable_prism_recycle_s13")
+        self.assertEqual(effect["pre_throttled_ratio"], "0.5")
+        self.assertEqual(effect["post_window_complete"], "0")
+        self.assertEqual(effect["post_throttled_ratio"], "")
+        self.assertEqual(effect["throttled_ratio_change"], "")
 
     def test_rejects_mixed_ack_base_rtt_in_one_run(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            prefix = _write_distribution_bundle(root)
+            prefix = _write_locked_distribution_matrix(root)
             with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
                 rows = list(csv.DictReader(stream))
             rows[-1]["base_rtt_ps"] = "15000000"
@@ -233,7 +257,7 @@ class DistributionAnalysisTests(unittest.TestCase):
     def test_rejects_ack_path_that_disagrees_with_resolved_pathmap(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            prefix = _write_distribution_bundle(root)
+            prefix = _write_locked_distribution_matrix(root)
             with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
                 rows = list(csv.DictReader(stream))
             rows[-1]["physical_path_id"] = "99"
@@ -241,6 +265,63 @@ class DistributionAnalysisTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "physical path ID mismatch"):
                 analyze_distribution(root, root / "aggregate")
+
+    def test_rejects_missing_manifest_from_locked_trial_matrix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_distribution_bundle(root)
+
+            with self.assertRaisesRegex(ValueError, "locked 12-case manifest set"):
+                analyze_distribution(root, root / "aggregate")
+
+    def test_rejects_duplicate_manifest_from_locked_trial_matrix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_locked_distribution_matrix(root)
+            duplicate_root = root / "duplicate"
+            duplicate_root.mkdir()
+            for source in root.glob("fixture_recoverable_prism_recycle_s13.*"):
+                shutil.copyfile(source, duplicate_root / source.name)
+
+            with self.assertRaisesRegex(ValueError, "locked 12-case manifest set"):
+                analyze_distribution(root, root / "aggregate")
+
+    def test_rejects_unexpected_manifest_scenario_or_seed(self):
+        for field, value in (("scenario", "unexpected"), ("seed", 16)):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                _write_locked_distribution_matrix(root)
+                manifest_path = root / "fixture_recoverable_prism_recycle_s13.manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+                manifest["analysis_config"][field] = value
+                manifest_path.write_text(json.dumps(manifest), encoding="ascii")
+
+                with self.assertRaisesRegex(ValueError, "locked 12-case manifest set"):
+                    analyze_distribution(root, root / "aggregate")
+
+    def test_complete_zero_acked_byte_effect_windows_blank_ratios_and_change(self):
+        windows = {
+            "pre": (2_144_000_000, 2_200_000_000),
+            "post": (2_200_000_000, 2_256_000_000),
+        }
+        for name, (start_ps, end_ps) in windows.items():
+            with self.subTest(window=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                prefix = _write_locked_distribution_matrix(root)
+                with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
+                    rows = list(csv.DictReader(stream))
+                for row in rows:
+                    if start_ps <= int(row["time_ps"]) < end_ps:
+                        row["newly_acked_bytes"] = "0"
+                _write_csv(prefix.with_suffix(".ack.csv"), "ack", rows)
+
+                analyze_distribution(root, root / "aggregate")
+                effects = _read_csv(root / "aggregate" / "refresh_effects.csv")
+
+            effect = next(row for row in effects if row["run_id"] == "fixture_recoverable_prism_recycle_s13")
+            self.assertEqual(effect[f"{name}_window_complete"], "1")
+            self.assertEqual(effect[f"{name}_throttled_ratio"], "")
+            self.assertEqual(effect["throttled_ratio_change"], "")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,14 @@ from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.anal
 
 WARMUP_PS = 1_000_000_000
 MODES = ("original_prism", "prism_recycle")
+SCENARIOS = ("recoverable", "persistent")
+SEEDS = (13, 14, 15)
+LOCKED_CASES = frozenset(
+    (mode, scenario, seed)
+    for mode in MODES
+    for scenario in SCENARIOS
+    for seed in SEEDS
+)
 BIN_FIELDS = (
     "run_id", "scenario", "mode", "seed", "base_rtt_ps", "bin_width_ps",
     "bin_start_ps", "bin_end_ps", "healthy_acked_bytes", "throttled_acked_bytes",
@@ -61,6 +69,22 @@ def _load_manifest(manifest_path: Path) -> tuple[str, str, int, str]:
     if not isinstance(scenario, str) or not scenario:
         raise ValueError(f"{manifest_path}: invalid scenario")
     return run_id, scenario, seed, mode
+
+
+def _validate_locked_manifest_set(manifest_paths: list[Path]) -> None:
+    cases = []
+    for manifest_path in manifest_paths:
+        _run_id, scenario, seed, mode = _load_manifest(manifest_path)
+        cases.append((mode, scenario, seed))
+    actual_cases = set(cases)
+    duplicates = sorted(case for case in actual_cases if cases.count(case) > 1)
+    missing = sorted(LOCKED_CASES - actual_cases)
+    unexpected = sorted(actual_cases - LOCKED_CASES)
+    if len(cases) != len(LOCKED_CASES) or duplicates or missing or unexpected:
+        raise ValueError(
+            "require locked 12-case manifest set "
+            f"(missing={missing}, duplicate={duplicates}, unexpected={unexpected})"
+        )
 
 
 def _resolved_attribution(bundle) -> dict[tuple[int, int], tuple[bool, int]]:
@@ -261,6 +285,7 @@ def analyze_distribution(data_root: Path | str, output_root: Path | str) -> dict
     )
     if not manifests:
         raise ValueError(f"no distribution manifests below {data_root}")
+    _validate_locked_manifest_set(manifests)
     bins, effects, summaries = [], [], []
     for manifest_path in manifests:
         run_bins, run_effects, summary = _analyze_bundle(manifest_path)
