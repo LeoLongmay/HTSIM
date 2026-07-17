@@ -37,6 +37,7 @@ def _write_csv(path, kind, rows):
 
 
 def _manifest(run_id, scenario, mode, seed, foreground_flows):
+    degraded_links = 2 if scenario == "recoverable" else 8
     return {
         "run_id": run_id,
         "seed": seed,
@@ -46,16 +47,25 @@ def _manifest(run_id, scenario, mode, seed, foreground_flows):
             "cc": "prism",
             "load_balancing_algo": "reps_actual",
             "prism_coordination_mode": mode,
-            "degraded_links": 8,
+            "degraded_links": degraded_links,
             "degraded_capacity_gbps": 25.0,
         },
         "analysis_config": {
             "scenario": scenario,
             "foreground_flows": foreground_flows,
+            "degraded_links": degraded_links,
             "offered_load_gbps": 744.0 if scenario == "recoverable" else 931.0,
             "seed": seed,
         },
     }
+
+
+def _set_manifest_degraded_links(root, scenario, mode, *, section, degraded_links, seed=13):
+    run_id = f"fixture_{scenario}_{mode}_s{seed}"
+    manifest_path = root / f"{run_id}.manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+    manifest[section]["degraded_links"] = degraded_links
+    manifest_path.write_text(json.dumps(manifest), encoding="ascii")
 
 
 def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
@@ -265,6 +275,29 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
 
 
 class AnalyzeTests(unittest.TestCase):
+    def test_rejects_manifest_with_wrong_scenario_degraded_link_count(self):
+        for scenario, expected_links, wrong_links in (
+            ("recoverable", 2, 8),
+            ("persistent", 8, 2),
+        ):
+            for section in ("config", "analysis_config"):
+                with self.subTest(scenario=scenario, section=section), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    _write_bundle(root, scenario, "prism_recycle", replacement_chain="complete")
+                    _set_manifest_degraded_links(
+                        root,
+                        scenario,
+                        "prism_recycle",
+                        section=section,
+                        degraded_links=wrong_links,
+                    )
+
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        f"{scenario} requires {expected_links} degraded links",
+                    ):
+                        analyze_data(root)
+
     def test_recoverable_full_prism_pre_warmup_handoff_emits_no_round_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -285,6 +318,26 @@ class AnalyzeTests(unittest.TestCase):
             result = analyze_data(root)
 
         self.assertEqual(result["rounds"], [])
+
+    def test_recoverable_full_prism_pre_warmup_handoff_with_incomplete_evidence_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_bundle(
+                root,
+                "recoverable",
+                "full_prism",
+                handoff=True,
+                progress=False,
+                clean_scan="missing_slot",
+                coordination_time_ps=950_000_000,
+                coordination_record_start_time_ps=850_000_000,
+                completed_spread_ps=8_000_000,
+                ack_event_seq=20,
+                observer_event_seq=30,
+            )
+
+            with self.assertRaisesRegex(ValueError, "terminal evidence"):
+                analyze_data(root)
 
     def _supported_verifier_rows(self):
         metrics = []

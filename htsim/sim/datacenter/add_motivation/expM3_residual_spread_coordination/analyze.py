@@ -82,6 +82,13 @@ def _load_manifest(manifest_path: Path) -> dict:
         raise ValueError(f"{manifest_path}: invalid prism coordination mode {mode!r}")
     if scenario not in SCENARIOS:
         raise ValueError(f"{manifest_path}: invalid M3 scenario {scenario!r}")
+    expected_degraded_links = 2 if scenario == "recoverable" else 8
+    for section, values in (("config", config), ("analysis_config", analysis)):
+        if values.get("degraded_links") != expected_degraded_links:
+            raise ValueError(
+                f"{manifest_path}: {scenario} requires {expected_degraded_links} degraded links "
+                f"in {section}"
+            )
     if config.get("cc") != "prism" or config.get("load_balancing_algo") != "reps_actual":
         raise ValueError(f"{manifest_path}: M3 requires prism with reps_actual")
     if float(config.get("degraded_capacity_gbps", 0)) != 25.0:
