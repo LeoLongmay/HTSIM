@@ -426,12 +426,6 @@ def _validate_admission_provenance(prefix: Path, admissions_by_ack, selected_ack
                     "entropy",
                     f"value {admission.entropy} differs from ACK entropy {ack['entropy']}",
                 )
-            if not ack["genuine_sample"]:
-                raise _trace_error(
-                    ack_path,
-                    "genuine_sample",
-                    f"ACK event {ack_event_seq} must be genuine",
-                )
             if ack["ecn"]:
                 raise _trace_error(
                     ack_path,

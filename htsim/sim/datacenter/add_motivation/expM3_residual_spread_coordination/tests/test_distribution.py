@@ -288,11 +288,19 @@ class DistributionAnalysisTests(unittest.TestCase):
             r"ack\.csv: ecn: ACK event 6 must not be ECN-marked",
         )
 
-    def test_rejects_written_admission_with_non_genuine_ack(self):
-        self._assert_rejects_written_admission_mutation(
-            lambda _tokens, acks: acks[2].update(genuine_sample="0"),
-            r"ack\.csv: genuine_sample: ACK event 6 must be genuine",
-        )
+    def test_accepts_written_admission_with_non_genuine_unmarked_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = _write_locked_distribution_matrix(root)
+            with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
+                ack_rows = list(csv.DictReader(stream))
+            ack_rows[2].update(genuine_sample="0", ecn="0")
+            _write_csv(prefix.with_suffix(".ack.csv"), "ack", ack_rows)
+
+            analyze_distribution(root, root / "aggregate")
+            summary = _read_csv(root / "aggregate" / "summary.csv")
+
+        self.assertEqual(len(summary), 12)
 
     def test_rejects_written_admission_with_unsupported_operation(self):
         self._assert_rejects_written_admission_mutation(
