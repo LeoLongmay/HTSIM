@@ -77,10 +77,11 @@ def _common_window(bundle, foreground_flows: int) -> tuple[int, int]:
     for ack in bundle.ack:
         if ack["time_ps"] >= WARMUP_PS:
             by_flow[ack["flow_id"]].append(ack["time_ps"])
-    if len(by_flow) != foreground_flows:
+    expected_flow_ids = set(range(1, foreground_flows + 1))
+    if set(by_flow) != expected_flow_ids:
         raise ValueError(
-            f"{bundle.run_id}: foreground ACK coverage has {len(by_flow)} flows; "
-            f"manifest requires {foreground_flows}"
+            f"{bundle.run_id}: foreground ACK coverage; foreground ACK flow IDs are {sorted(by_flow)}; "
+            f"manifest requires {sorted(expected_flow_ids)}"
         )
     end_ps = min(max(times) for times in by_flow.values())
     if end_ps <= WARMUP_PS:
@@ -91,7 +92,7 @@ def _common_window(bundle, foreground_flows: int) -> tuple[int, int]:
     return WARMUP_PS, end_ps
 
 
-def _path_attribution(bundle) -> dict[tuple[int, int], bool]:
+def _path_attribution(bundle) -> dict[tuple[int, int], tuple[bool, int]]:
     attribution = {}
     for row in bundle.pathmap:
         key = (row["flow_id"], row["entropy"])
@@ -99,7 +100,7 @@ def _path_attribution(bundle) -> dict[tuple[int, int], bool]:
             raise ValueError(f"{bundle.run_id}: unresolved pathmap attribution for {key}")
         if key in attribution:
             raise ValueError(f"{bundle.run_id}: duplicate pathmap mapping for {key}")
-        attribution[key] = row["contains_reduced_link"]
+        attribution[key] = (row["contains_reduced_link"], row["physical_path_id"])
     return attribution
 
 
@@ -170,7 +171,13 @@ def _analyze_bundle(manifest_path: Path) -> tuple[dict, list[dict], list[dict]]:
             raise ValueError(f"{bundle.run_id}: ACK lacks pathmap attribution for {key}")
         acked = ack["newly_acked_bytes"]
         foreground_bytes += acked
-        if path_reduced[key]:
+        contains_reduced_link, physical_path_id = path_reduced[key]
+        if ack["physical_path_id"] != physical_path_id:
+            raise ValueError(
+                f"{bundle.run_id}: ACK physical path ID mismatch for {key}: "
+                f"ACK has {ack['physical_path_id']}, pathmap has {physical_path_id}"
+            )
+        if contains_reduced_link:
             throttled_bytes += acked
         else:
             healthy_bytes += acked

@@ -56,22 +56,25 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                   refresh_complete=True, recycled=False, progress=True,
                   coordination_recycle=False, throttled_bytes=100, healthy_bytes=900,
                   foreground_flows=2, completed_spread_ps=6_000_000,
-                  pathmap_resolution="resolved", duplicate_pathmap=False):
+                  pathmap_resolution="resolved", duplicate_pathmap=False,
+                  ack_flow_ids=None, ack_physical_path_ids=None):
     run_id = f"fixture_{scenario}_{mode}_s{seed}"
     prefix = root / run_id
     run_id_values = {"run_id": run_id}
+    ack_flow_ids = ack_flow_ids or (1, 2)
+    ack_physical_path_ids = ack_physical_path_ids or (10, 20)
     _write_csv(prefix.with_suffix(".ack.csv"), "ack", [
         _row("ack", **run_id_values, seed=seed, scenario=scenario, event_seq=1,
-             time_ps=2_000_000_000, flow_id=1, epoch_id=1, acked_psn=1,
-             entropy=0, physical_path_id=10, raw_rtt_ps=18_000_000,
+             time_ps=2_000_000_000, flow_id=ack_flow_ids[0], epoch_id=1, acked_psn=1,
+             entropy=0, physical_path_id=ack_physical_path_ids[0], raw_rtt_ps=18_000_000,
              base_rtt_ps=14_000_000, qdelay_ps=4_000_000, ecn=0,
              genuine_sample=1, retransmitted=0,
              selection_source="recycled" if recycled else "fresh",
              newly_acked_bytes=throttled_bytes,
              new_data_bytes_sent_total=throttled_bytes, cwnd_bytes=12000),
         _row("ack", **run_id_values, seed=seed, scenario=scenario, event_seq=2,
-             time_ps=2_000_000_000, flow_id=2, epoch_id=1, acked_psn=1,
-             entropy=0, physical_path_id=20, raw_rtt_ps=16_000_000,
+             time_ps=2_000_000_000, flow_id=ack_flow_ids[1], epoch_id=1, acked_psn=1,
+             entropy=0, physical_path_id=ack_physical_path_ids[1], raw_rtt_ps=16_000_000,
              base_rtt_ps=14_000_000, qdelay_ps=2_000_000, ecn=0,
              genuine_sample=1, retransmitted=0, selection_source="fresh",
              newly_acked_bytes=healthy_bytes,
@@ -169,6 +172,20 @@ class AnalyzeTests(unittest.TestCase):
             root = Path(directory)
             self._all_modes(root, "persistent", original_prism={"foreground_flows": 3})
             with self.assertRaisesRegex(ValueError, "foreground ACK coverage"):
+                analyze_data(root)
+
+    def test_rejects_substituted_foreground_ack_flow_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", original_prism={"ack_flow_ids": (1, 3)})
+            with self.assertRaisesRegex(ValueError, "foreground ACK flow IDs"):
+                analyze_data(root)
+
+    def test_rejects_ack_pathmap_physical_path_id_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", original_prism={"ack_physical_path_ids": (11, 20)})
+            with self.assertRaisesRegex(ValueError, "physical path ID mismatch"):
                 analyze_data(root)
 
     def test_rejects_unresolved_pathmap_attribution(self):
