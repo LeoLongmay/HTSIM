@@ -208,15 +208,16 @@ def _clean_scan_complete(bundle, terminal: dict) -> bool:
     if not terminal["refresh_complete"]:
         return False
 
-    slot_records = [
+    round_records = [
         row for row in bundle.coordination
         if row["flow_id"] == terminal["flow_id"]
         and row["round_id"] == terminal["round_id"]
         and row["event_seq"] < terminal_seq
-        and 0 <= row["cache_slot"] < 8
     ]
-    if any(row["action"] == "invalidate" for row in slot_records):
+    if any(row["action"] == "invalidate" for row in round_records):
         return False
+
+    slot_records = [row for row in round_records if 0 <= row["cache_slot"] < 8]
 
     latest_by_slot = {}
     for row in slot_records:

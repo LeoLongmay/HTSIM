@@ -118,11 +118,13 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                 progress=0, handoff=0, cwnd_bytes=12000, control_state="hold",
             ))
             terminal_event_seq = 14
-        elif clean_scan == "invalidate_after_retain":
+        elif clean_scan in {"invalidate_after_retain", "invalidate_out_of_range_after_retain"}:
             coordination_rows.append(_row(
                 "coordination", **run_id_values, event_seq=13,
                 time_ps=2_190_000_000, flow_id=1, epoch_id=1, round_id=1,
-                cache_slot=7, cache_generation=17, floor_ps=2_000_000,
+                cache_slot=8 if clean_scan == "invalidate_out_of_range_after_retain" else 7,
+                cache_generation=18 if clean_scan == "invalidate_out_of_range_after_retain" else 17,
+                floor_ps=2_000_000,
                 spread_ps=6_000_000, spread_ref_ps=8_000_000, residual_ps=4_000_000,
                 action="invalidate", reason="slot_high_residual", refresh_complete=0,
                 progress=0, handoff=0, cwnd_bytes=12000, control_state="hold",
@@ -613,7 +615,12 @@ class AnalyzeTests(unittest.TestCase):
                 self.assertIn("clean_scan_complete", csv.DictReader(stream).fieldnames)
 
     def test_rejects_clean_scan_with_missing_or_replaced_latest_slot(self):
-        for clean_scan in ("missing_slot", "pending_after_retain", "invalidate_after_retain"):
+        for clean_scan in (
+            "missing_slot",
+            "pending_after_retain",
+            "invalidate_after_retain",
+            "invalidate_out_of_range_after_retain",
+        ):
             with self.subTest(clean_scan=clean_scan), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 _write_bundle(root, "persistent", "prism_recycle", clean_scan=clean_scan)
