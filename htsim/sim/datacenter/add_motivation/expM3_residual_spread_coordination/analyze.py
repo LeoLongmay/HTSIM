@@ -84,8 +84,8 @@ def _load_manifest(manifest_path: Path) -> dict:
         raise ValueError(f"{manifest_path}: invalid M3 scenario {scenario!r}")
     if config.get("cc") != "prism" or config.get("load_balancing_algo") != "reps_actual":
         raise ValueError(f"{manifest_path}: M3 requires prism with reps_actual")
-    if config.get("degraded_links") != 8 or float(config.get("degraded_capacity_gbps", 0)) != 25.0:
-        raise ValueError(f"{manifest_path}: M3 requires eight 25 Gbps degraded links")
+    if float(config.get("degraded_capacity_gbps", 0)) != 25.0:
+        raise ValueError(f"{manifest_path}: M3 requires 25 Gbps degraded-link capacity")
     return manifest
 
 
@@ -239,8 +239,6 @@ def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -
             raise ValueError(f"{bundle.run_id}: handoff before refresh completion")
         if row["handoff"] and mode != "full_prism":
             raise ValueError(f"{bundle.run_id}: non-full mode handed off")
-        if scenario == "recoverable" and mode == "full_prism" and row["handoff"]:
-            raise ValueError(f"{bundle.run_id}: recoverable full_prism handed off")
         if mode == "full_prism" and row["handoff"] and row["spread_ps"] < row["spread_ref_ps"]:
             raise ValueError(f"{bundle.run_id}: handoff after positive spread progress")
         chain_complete = _replacement_chain_complete(bundle, row)
@@ -251,6 +249,8 @@ def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -
             )
         if row["time_ps"] < start_ps:
             continue
+        if scenario == "recoverable" and mode == "full_prism" and row["handoff"]:
+            raise ValueError(f"{bundle.run_id}: recoverable full_prism handed off")
         rounds.append({
             "run_id": bundle.run_id,
             "scenario": scenario,

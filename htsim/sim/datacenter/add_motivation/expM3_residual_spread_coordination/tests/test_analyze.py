@@ -265,6 +265,27 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
 
 
 class AnalyzeTests(unittest.TestCase):
+    def test_recoverable_full_prism_pre_warmup_handoff_emits_no_round_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_bundle(
+                root,
+                "recoverable",
+                "full_prism",
+                handoff=True,
+                progress=False,
+                clean_scan=True,
+                coordination_time_ps=950_000_000,
+                coordination_record_start_time_ps=850_000_000,
+                completed_spread_ps=8_000_000,
+                ack_event_seq=20,
+                observer_event_seq=30,
+            )
+
+            result = analyze_data(root)
+
+        self.assertEqual(result["rounds"], [])
+
     def _supported_verifier_rows(self):
         metrics = []
         rounds = []
@@ -667,7 +688,15 @@ class AnalyzeTests(unittest.TestCase):
     def test_rejects_recoverable_full_prism_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._all_modes(root, "recoverable", full_prism={"handoff": True, "progress": False})
+            self._all_modes(
+                root,
+                "recoverable",
+                full_prism={
+                    "handoff": True,
+                    "progress": False,
+                    "completed_spread_ps": 8_000_000,
+                },
+            )
             with self.assertRaisesRegex(ValueError, "recoverable full_prism handed off"):
                 analyze_data(root)
 

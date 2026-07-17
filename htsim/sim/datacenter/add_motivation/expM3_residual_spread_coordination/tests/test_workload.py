@@ -7,12 +7,25 @@ from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.gen_
     generate_workload,
 )
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.run import (
+    _formal_rows,
     add_workload_capacity,
     scenario_capacity,
 )
 
 
 class WorkloadCapacityTests(unittest.TestCase):
+    def test_scenarios_lock_distinct_degraded_link_counts(self):
+        self.assertEqual(scenario_capacity("recoverable").degraded_links, 2)
+        self.assertEqual(scenario_capacity("persistent").degraded_links, 8)
+
+    def test_formal_rows_use_the_locked_scenario_degradation(self):
+        rows = _formal_rows()
+
+        self.assertEqual(
+            {(row["scenario"], int(row["degraded_links"])) for row in rows},
+            {("recoverable", 2), ("persistent", 8)},
+        )
+
     def test_capacity_metadata_round_trips_exactly_in_manifest(self):
         capacity = scenario_capacity("recoverable")
         with tempfile.TemporaryDirectory() as temp_dir:

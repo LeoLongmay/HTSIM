@@ -6,8 +6,10 @@ recoverable and persistent target-pod scenarios at seeds 13, 14, and 15.
 
 Each scenario/seed pair creates one deterministic, long-lived foreground-only
 target-pod traffic matrix. The matrix is shared unchanged by all three modes.
-All runs use PRISM, `reps_actual`, eight degraded links, and 25 Gbps degraded
-capacity. No background traffic, link events, or traffic grids are used.
+All runs use PRISM, `reps_actual`, and 25 Gbps degraded-link capacity. The
+recoverable and persistent scenarios intentionally use two and eight degraded
+links respectively. No background traffic, link events, or traffic grids are
+used.
 
 The target pod has 800 Gbps healthy ingress. Recoverable traffic uses six
 distinct 100 Gbps source NICs (a 600 Gbps source-NIC ceiling), strictly below
@@ -79,8 +81,9 @@ It produced the locked 18 manifests, 18 coordination traces, and four aggregate
 CSVs before admission-slot provenance and chain reconstruction were introduced.
 The retained figures are
 `figs/m3_recoverable.pdf` and `figs/m3_persistent.pdf` (with matching PNGs).
-Every trial fixes the same capacity relation: eight degraded links at 25 Gbps,
-against the 100 Gbps normal-link capacity.
+Every trial fixes the scenario-specific capacity relation: recoverable trials
+use two degraded links and persistent trials use eight, each at 25 Gbps against
+the 100 Gbps normal-link capacity.
 
 Those historical traces do not contain the required admission provenance and
 must not be used for a chain-backed verdict. Regenerate the fixed matrix before

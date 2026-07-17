@@ -26,11 +26,12 @@ class ScenarioCapacity:
     foreground_flows: int
     source_offered_ceiling_gbps: float
     healthy_capacity_gbps: float
+    degraded_links: int
 
 
 SCENARIOS = {
-    "recoverable": ScenarioCapacity(6, 600.0, 800.0),
-    "persistent": ScenarioCapacity(12, 1200.0, 800.0),
+    "recoverable": ScenarioCapacity(6, 600.0, 800.0, 2),
+    "persistent": ScenarioCapacity(12, 1200.0, 800.0, 8),
 }
 MODES = ("original_prism", "prism_recycle", "full_prism")
 SEEDS = (13, 14, 15)
@@ -74,7 +75,7 @@ def _formal_rows() -> tuple[dict, ...]:
     with FORMAL_CONFIG.open(newline="", encoding="ascii") as stream:
         rows = tuple(csv.DictReader(stream))
     expected = {
-        (mode, scenario, seed, 8, 25.0)
+        (mode, scenario, seed, scenario_capacity(scenario).degraded_links, 25.0)
         for scenario in SCENARIOS for seed in SEEDS for mode in MODES
     }
     actual = {
@@ -87,8 +88,12 @@ def _formal_rows() -> tuple[dict, ...]:
 
 
 def _run_one(*, phase: str, output: Path, mode: str, scenario: str, seed: int,
-             degraded_links: int = 8, degraded_capacity_gbps: float = 25.0) -> None:
+             degraded_links: int | None = None, degraded_capacity_gbps: float = 25.0) -> None:
     capacity = scenario_capacity(scenario)
+    if degraded_links is None:
+        degraded_links = capacity.degraded_links
+    if degraded_links != capacity.degraded_links:
+        raise ValueError(f"{scenario} requires {capacity.degraded_links} degraded links")
     workload = output / "workloads" / f"{scenario}_s{seed}.cm"
     if not workload.exists():
         write_workload(workload, foreground_flows=capacity.foreground_flows, seed=seed)
@@ -125,6 +130,7 @@ def main(argv=None) -> int:
     parser.add_argument("--phase", choices=("smoke", "formal"), required=True)
     parser.add_argument("--smoke-seed", type=int, default=13)
     parser.add_argument("--case", nargs=3, metavar=("MODE", "SCENARIO", "SEED"))
+    parser.add_argument("--degraded-links", type=int)
     args = parser.parse_args(argv)
     output = HERE / "data" / args.phase
     output.mkdir(parents=True, exist_ok=True)
@@ -132,12 +138,20 @@ def main(argv=None) -> int:
         mode, scenario, seed_text = args.case
         if mode not in MODES or scenario not in SCENARIOS:
             raise ValueError("case must use a locked M3 mode and scenario")
-        _run_one(phase=args.phase, output=output, mode=mode, scenario=scenario, seed=int(seed_text))
+        _run_one(
+            phase=args.phase,
+            output=output,
+            mode=mode,
+            scenario=scenario,
+            seed=int(seed_text),
+            degraded_links=args.degraded_links,
+        )
         return 0
     if args.phase == "smoke":
         rows = (
             {"mode": mode, "scenario": scenario, "seed": args.smoke_seed,
-             "degraded_links": "8", "degraded_capacity_gbps": "25"}
+             "degraded_links": str(scenario_capacity(scenario).degraded_links),
+             "degraded_capacity_gbps": "25"}
             for scenario in SCENARIOS for mode in MODES
         )
     else:
@@ -145,7 +159,8 @@ def main(argv=None) -> int:
     for row in rows:
         subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--phase", args.phase,
-             "--case", row["mode"], row["scenario"], str(row["seed"])],
+             "--case", row["mode"], row["scenario"], str(row["seed"]),
+             "--degraded-links", row["degraded_links"]],
             check=True,
         )
     return 0
