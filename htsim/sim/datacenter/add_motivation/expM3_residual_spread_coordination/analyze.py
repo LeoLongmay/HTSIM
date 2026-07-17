@@ -336,8 +336,13 @@ def _matrix_rows(rows: list[dict] | None) -> dict[tuple[str, str, int], dict] | 
     if rows is None or len(rows) != len(SCENARIOS) * len(MODES) * len(SEEDS):
         return None
     matrix = {}
+    run_ids = set()
     try:
         for row in rows:
+            run_id = row["run_id"]
+            if not isinstance(run_id, str) or not run_id or run_id in run_ids:
+                return None
+            run_ids.add(run_id)
             key = (row["scenario"], row["mode"], int(row["seed"]))
             if key in matrix:
                 return None
@@ -349,7 +354,8 @@ def _matrix_rows(rows: list[dict] | None) -> dict[tuple[str, str, int], dict] | 
 
 
 def _is_true(row: dict, field: str) -> bool:
-    return row.get(field, "").strip().lower() in {"1", "true"}
+    value = row.get(field)
+    return isinstance(value, str) and value.strip().lower() in {"1", "true"}
 
 
 def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
@@ -364,9 +370,13 @@ def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
         rounds = []
 
     def selected_rounds(scenario: str, mode: str, seed: int) -> list[dict]:
+        run_id = matrix[(scenario, mode, seed)]["run_id"]
         return [
             row for row in rounds
-            if row.get("scenario") == scenario and row.get("mode") == mode and row.get("seed") == str(seed)
+            if row.get("run_id") == run_id
+            and row.get("scenario") == scenario
+            and row.get("mode") == mode
+            and row.get("seed") == str(seed)
         ]
 
     recoverable_full = {seed: selected_rounds("recoverable", "full_prism", seed) for seed in SEEDS}

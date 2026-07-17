@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.analyze import (
     TABLE_FIELDS,
+    _is_true,
     analyze_data,
     main,
 )
@@ -222,6 +223,43 @@ class AnalyzeTests(unittest.TestCase):
                 "not_supported: every recoverable/full_prism seed has a completed progress round\n",
             )
 
+    def test_verify_only_treats_missing_boolean_cell_as_false(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            progress_row = next(row for row in rounds if row["scenario"] == "recoverable")
+            del progress_row["progress"]
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: every recoverable/full_prism seed has a completed progress round\n",
+            )
+            self.assertFalse(_is_true({}, "progress"))
+            self.assertFalse(_is_true({"progress": None}, "progress"))
+            self.assertFalse(_is_true({"progress": 1}, "progress"))
+
+    def test_verify_only_rejects_duplicate_metric_run_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            metrics[-1]["run_id"] = metrics[0]["run_id"]
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: fixed complete 18-run matrix (scenarios recoverable/persistent, modes original_prism/prism_recycle/full_prism, seeds 13/14/15)\n",
+            )
+
+    def test_verify_only_rejects_rounds_from_foreign_run_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            next(row for row in rounds if row["scenario"] == "recoverable")["run_id"] = "foreign-run"
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: every recoverable/full_prism seed has a completed progress round\n",
+            )
+
     def test_verify_only_rejects_recoverable_full_prism_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
             metrics, rounds = self._supported_verifier_rows()
@@ -258,7 +296,14 @@ class AnalyzeTests(unittest.TestCase):
     def test_verify_only_rejects_persistent_original_prism_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
             metrics, rounds = self._supported_verifier_rows()
-            rounds.append({"scenario": "persistent", "mode": "original_prism", "seed": 13, "handoff": 1, "progress": 0})
+            rounds.append({
+                "run_id": "formal_persistent_original_prism_s13",
+                "scenario": "persistent",
+                "mode": "original_prism",
+                "seed": 13,
+                "handoff": 1,
+                "progress": 0,
+            })
             self._write_verifier_aggregate(Path(directory), metrics, rounds)
 
             self.assertEqual(
@@ -269,7 +314,14 @@ class AnalyzeTests(unittest.TestCase):
     def test_verify_only_rejects_persistent_prism_recycle_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
             metrics, rounds = self._supported_verifier_rows()
-            rounds.append({"scenario": "persistent", "mode": "prism_recycle", "seed": 13, "handoff": 1, "progress": 0})
+            rounds.append({
+                "run_id": "formal_persistent_prism_recycle_s13",
+                "scenario": "persistent",
+                "mode": "prism_recycle",
+                "seed": 13,
+                "handoff": 1,
+                "progress": 0,
+            })
             self._write_verifier_aggregate(Path(directory), metrics, rounds)
 
             self.assertEqual(
