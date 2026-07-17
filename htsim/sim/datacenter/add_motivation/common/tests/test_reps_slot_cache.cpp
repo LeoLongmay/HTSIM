@@ -116,6 +116,23 @@ void reserved_invalid_slot_is_refilled_before_the_circular_head() {
     assert(reps.lastAdmission().cache_slot == 0);
 }
 
+void reserved_head_slot_advances_after_replacement_admission() {
+    UecMpReps reps(16, false, true);
+    fill_cache(reps);
+
+    const auto original = reps.cacheSlots()[0];
+    assert(reps.invalidateCacheSlot(original.slot, original.generation));
+    assert(reps.reserveCacheSlot(original.slot, original.generation));
+
+    reps.processEv(32, UecMultipath::PATH_GOOD);
+    const UecMpAdmission replacement = reps.lastAdmission();
+    assert(replacement.cache_slot == 0);
+
+    reps.processEv(33, UecMultipath::PATH_GOOD);
+    assert(reps.lastAdmission().cache_slot == 1);
+    assert(reps.cacheSlots()[0].generation == replacement.cache_generation);
+}
+
 void reset_buffer_clears_reserved_slot_before_path_good_admission() {
     EventList& eventlist = EventList::getTheEventList();
     NoopEventSource timer(eventlist);
@@ -147,5 +164,6 @@ int main() {
     stale_generation_cannot_invalidate_a_replacement();
     non_good_feedback_clears_last_admission();
     reserved_invalid_slot_is_refilled_before_the_circular_head();
+    reserved_head_slot_advances_after_replacement_admission();
     reset_buffer_clears_reserved_slot_before_path_good_admission();
 }

@@ -40,7 +40,7 @@ template <typename T> typename CircularBufferREPS<T>::Admission CircularBufferRE
     buffer[slot].usable_lifetime = repsMaxLifetimeEntropy;
     buffer[slot].generation++;
     buffer[slot].ack_validated = true;
-    if (!reserved_slot) {
+    if (!reserved_slot || slot == head) {
         head = (head + 1) % max_size;
     }
 
