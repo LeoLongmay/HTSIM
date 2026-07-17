@@ -31,11 +31,27 @@ BIN_WIDTH_PS = 4 * BASE_RTT_PS
 MODES = ("original_prism", "prism_recycle")
 SCENARIOS = ("recoverable", "persistent")
 SEEDS = (13, 14, 15)
+TRACE_SCENARIO = "M3_residual_spread_coordination"
 
 
 def _read_csv(path):
     with path.open(newline="", encoding="ascii") as stream:
         return list(csv.DictReader(stream))
+
+
+def _set_trace_scenario(prefix):
+    with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
+        rows = list(csv.DictReader(stream))
+    for row in rows:
+        row["scenario"] = TRACE_SCENARIO
+    _write_csv(prefix.with_suffix(".ack.csv"), "ack", rows)
+
+
+def _set_distribution_manifest_config(prefix):
+    manifest_path = prefix.with_suffix(".manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+    manifest["analysis_config"]["degraded_capacity_gbps"] = 25.0
+    manifest_path.write_text(json.dumps(manifest), encoding="ascii")
 
 
 def _write_distribution_bundle(root, *, scenario="recoverable", mode="prism_recycle",
@@ -44,6 +60,8 @@ def _write_distribution_bundle(root, *, scenario="recoverable", mode="prism_recy
     _write_bundle(root, scenario, mode, seed=seed, replacement_chain="complete")
     run_id = f"fixture_{scenario}_{mode}_s{seed}"
     prefix = root / run_id
+    _set_trace_scenario(prefix)
+    _set_distribution_manifest_config(prefix)
 
     with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
         ack_rows = list(csv.DictReader(stream))
@@ -55,7 +73,7 @@ def _write_distribution_bundle(root, *, scenario="recoverable", mode="prism_recy
         row["base_rtt_ps"] = str(BASE_RTT_PS)
     ack_rows.extend([
         _row(
-            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=9,
+            "ack", run_id=run_id, seed=seed, scenario=TRACE_SCENARIO, event_seq=9,
             time_ps=2_150_000_000, flow_id=1, epoch_id=2, acked_psn=3, entropy=0,
             physical_path_id=10, raw_rtt_ps=18_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=4_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -63,7 +81,7 @@ def _write_distribution_bundle(root, *, scenario="recoverable", mode="prism_recy
             new_data_bytes_sent_total=200, cwnd_bytes=12_000,
         ),
         _row(
-            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=10,
+            "ack", run_id=run_id, seed=seed, scenario=TRACE_SCENARIO, event_seq=10,
             time_ps=2_160_000_000, flow_id=2, epoch_id=2, acked_psn=2, entropy=0,
             physical_path_id=20, raw_rtt_ps=16_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=2_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -71,7 +89,7 @@ def _write_distribution_bundle(root, *, scenario="recoverable", mode="prism_recy
             new_data_bytes_sent_total=1_000, cwnd_bytes=13_000,
         ),
         _row(
-            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=21,
+            "ack", run_id=run_id, seed=seed, scenario=TRACE_SCENARIO, event_seq=21,
             time_ps=2_220_000_000, flow_id=1, epoch_id=2, acked_psn=4, entropy=0,
             physical_path_id=10, raw_rtt_ps=18_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=4_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -79,7 +97,7 @@ def _write_distribution_bundle(root, *, scenario="recoverable", mode="prism_recy
             new_data_bytes_sent_total=280, cwnd_bytes=12_000,
         ),
         _row(
-            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=22,
+            "ack", run_id=run_id, seed=seed, scenario=TRACE_SCENARIO, event_seq=22,
             time_ps=2_230_000_000, flow_id=2, epoch_id=2, acked_psn=3, entropy=0,
             physical_path_id=20, raw_rtt_ps=16_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=2_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -89,7 +107,7 @@ def _write_distribution_bundle(root, *, scenario="recoverable", mode="prism_recy
     ])
     if complete_post_window:
         ack_rows.append(_row(
-            "ack", run_id=run_id, seed=seed, scenario=scenario, event_seq=23,
+            "ack", run_id=run_id, seed=seed, scenario=TRACE_SCENARIO, event_seq=23,
             time_ps=2_256_000_000, flow_id=2, epoch_id=2, acked_psn=4, entropy=0,
             physical_path_id=20, raw_rtt_ps=16_000_000, base_rtt_ps=BASE_RTT_PS,
             qdelay_ps=2_000_000, ecn=0, genuine_sample=1, retransmitted=0,
@@ -127,10 +145,18 @@ def _write_locked_distribution_matrix(root, *, complete_post_window=True):
                     )
                 else:
                     _write_bundle(root, scenario, mode, seed=seed)
+                    prefix = root / f"fixture_{scenario}_{mode}_s{seed}"
+                    _set_trace_scenario(prefix)
+                    _set_distribution_manifest_config(prefix)
     return target
 
 
 class DistributionRunnerTests(unittest.TestCase):
+    def test_runner_allows_distribution_phase_without_caller_mutation(self):
+        from htsim.sim.datacenter.add_motivation.common import run_case
+
+        self.assertIn("distribution", run_case.VALID_PHASES)
+
     def test_distribution_rows_are_the_locked_twelve_trial_matrix(self):
         rows = run_distribution._distribution_rows()
 
@@ -288,7 +314,7 @@ class DistributionAnalysisTests(unittest.TestCase):
             r"ack\.csv: ecn: ACK event 6 must not be ECN-marked",
         )
 
-    def test_accepts_written_admission_with_non_genuine_unmarked_ack(self):
+    def test_rejects_replacement_admission_with_non_genuine_ack(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             prefix = _write_locked_distribution_matrix(root)
@@ -297,10 +323,8 @@ class DistributionAnalysisTests(unittest.TestCase):
             ack_rows[2].update(genuine_sample="0", ecn="0")
             _write_csv(prefix.with_suffix(".ack.csv"), "ack", ack_rows)
 
-            analyze_distribution(root, root / "aggregate")
-            summary = _read_csv(root / "aggregate" / "summary.csv")
-
-        self.assertEqual(len(summary), 12)
+            with self.assertRaisesRegex(ValueError, "incomplete replacement evidence"):
+                analyze_distribution(root, root / "aggregate")
 
     def test_rejects_written_admission_with_unsupported_operation(self):
         self._assert_rejects_written_admission_mutation(
@@ -380,7 +404,7 @@ class DistributionAnalysisTests(unittest.TestCase):
             for event_seq in range(24, 1_024):
                 ack_rows.append(_row(
                     "ack", run_id="fixture_recoverable_prism_recycle_s13", seed=13,
-                    scenario="recoverable", event_seq=event_seq,
+                    scenario=TRACE_SCENARIO, event_seq=event_seq,
                     time_ps=2_300_000_000 + event_seq, flow_id=1, epoch_id=2,
                     acked_psn=event_seq, entropy=0, physical_path_id=10,
                     raw_rtt_ps=18_000_000, base_rtt_ps=BASE_RTT_PS,
@@ -470,6 +494,64 @@ class DistributionAnalysisTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "identical ACK base RTT"):
                 analyze_distribution(root, root / "aggregate")
 
+    def test_rejects_trace_seed_or_scenario_that_disagrees_with_manifest(self):
+        for field, value, error in (
+            ("seed", "16", r"ack\.csv: seed: expected 13, got 16"),
+            ("scenario", "other", r"ack\.csv: scenario: expected 'M3_residual_spread_coordination', got 'other'"),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                prefix = _write_locked_distribution_matrix(root)
+                with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
+                    rows = list(csv.DictReader(stream))
+                rows[0][field] = value
+                _write_csv(prefix.with_suffix(".ack.csv"), "ack", rows)
+
+                with self.assertRaisesRegex(ValueError, error):
+                    analyze_distribution(root, root / "aggregate")
+
+    def test_rejects_manifest_without_locked_m3_prism_reps_or_degradation_config(self):
+        mutations = (
+            ("config", "cc", "dctcp", "config cc must be 'prism'"),
+            ("config", "load_balancing_algo", "reps", "config load_balancing_algo must be 'reps_actual'"),
+            ("config", "degraded_links", 8, "recoverable requires 2 degraded links"),
+            ("analysis_config", "degraded_capacity_gbps", 50.0, "requires 25 Gbps degraded capacity"),
+        )
+        for section, field, value, error in mutations:
+            with self.subTest(section=section, field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                _write_locked_distribution_matrix(root)
+                manifest_path = root / "fixture_recoverable_prism_recycle_s13.manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+                manifest[section][field] = value
+                manifest_path.write_text(json.dumps(manifest), encoding="ascii")
+
+                with self.assertRaisesRegex(ValueError, error):
+                    analyze_distribution(root, root / "aggregate")
+
+    def test_rejects_duplicate_written_admissions_referencing_one_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = _write_locked_distribution_matrix(root)
+            with prefix.with_suffix(".token.csv").open(newline="", encoding="ascii") as stream:
+                rows = list(csv.DictReader(stream))
+            duplicate = dict(rows[0])
+            duplicate["event_seq"] = "9"
+            rows.append(duplicate)
+            _write_csv(prefix.with_suffix(".token.csv"), "token", rows)
+
+            with self.assertRaisesRegex(ValueError, r"token\.csv: related_ack_event_seq: ACK event 6 has duplicate written admissions"):
+                analyze_distribution(root, root / "aggregate")
+
+    def test_rejects_recycle_terminal_with_incomplete_replacement_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = _write_locked_distribution_matrix(root)
+            _write_csv(prefix.with_suffix(".token.csv"), "token", [])
+
+            with self.assertRaisesRegex(ValueError, "incomplete replacement evidence"):
+                analyze_distribution(root, root / "aggregate")
+
     def test_rejects_ack_path_that_disagrees_with_resolved_pathmap(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -512,7 +594,10 @@ class DistributionAnalysisTests(unittest.TestCase):
                 manifest["analysis_config"][field] = value
                 manifest_path.write_text(json.dumps(manifest), encoding="ascii")
 
-                with self.assertRaisesRegex(ValueError, "locked 12-case manifest set"):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "invalid distribution scenario|manifest and analysis_config seeds must agree",
+                ):
                     analyze_distribution(root, root / "aggregate")
 
     def test_complete_zero_acked_byte_effect_windows_blank_ratios_and_change(self):

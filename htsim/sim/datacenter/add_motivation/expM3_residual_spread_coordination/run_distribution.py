@@ -12,12 +12,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[4]))
 
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination import run
+from htsim.sim.datacenter.add_motivation.common import run_case
 
 
 MODES = ("original_prism", "prism_recycle")
 SEEDS = (13, 14, 15)
 CONFIG = HERE / "configs" / "distribution.csv"
 OUTPUT = HERE / "data" / "distribution"
+
+# This fixed matrix owns its additional phase label; callers need not mutate common state.
+run_case.VALID_PHASES.add("distribution")
 
 
 def _validate_distribution_rows(rows: list[dict[str, str]]) -> tuple[dict[str, str], ...]:

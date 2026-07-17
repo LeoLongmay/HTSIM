@@ -22,6 +22,9 @@ WARMUP_PS = 1_000_000_000
 MODES = ("original_prism", "prism_recycle")
 SCENARIOS = ("recoverable", "persistent")
 SEEDS = (13, 14, 15)
+EXPERIMENT = "M3_residual_spread_coordination"
+DEGRADED_LINKS = {"recoverable": 2, "persistent": 8}
+DEGRADED_CAPACITY_GBPS = 25.0
 LOCKED_CASES = frozenset(
     (mode, scenario, seed)
     for mode in MODES
@@ -85,15 +88,38 @@ def _load_manifest(manifest_path: Path) -> tuple[str, str, int, str]:
         run_id = manifest["run_id"]
         scenario = analysis["scenario"]
         mode = config["prism_coordination_mode"]
-        seed = int(analysis.get("seed", manifest["seed"]))
-    except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as exc:
+        seed = manifest["seed"]
+        analysis_seed = analysis["seed"]
+        experiment = manifest["experiment"]
+    except (KeyError, TypeError, OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid distribution manifest {manifest_path}: {exc}") from exc
     if not isinstance(run_id, str) or not run_id:
         raise ValueError(f"{manifest_path}: invalid run_id")
+    if experiment != EXPERIMENT:
+        raise ValueError(f"{manifest_path}: experiment must be {EXPERIMENT!r}")
     if mode not in MODES:
         raise ValueError(f"{manifest_path}: invalid distribution mode {mode!r}")
-    if not isinstance(scenario, str) or not scenario:
-        raise ValueError(f"{manifest_path}: invalid scenario")
+    if scenario not in SCENARIOS:
+        raise ValueError(f"{manifest_path}: invalid distribution scenario {scenario!r}")
+    if type(seed) is not int or type(analysis_seed) is not int or seed != analysis_seed:
+        raise ValueError(f"{manifest_path}: manifest and analysis_config seeds must agree")
+    if config.get("cc") != "prism":
+        raise ValueError(f"{manifest_path}: config cc must be 'prism'")
+    if config.get("load_balancing_algo") != "reps_actual":
+        raise ValueError(f"{manifest_path}: config load_balancing_algo must be 'reps_actual'")
+    expected_links = DEGRADED_LINKS[scenario]
+    for section_name, section in (("config", config), ("analysis_config", analysis)):
+        if section.get("degraded_links") != expected_links:
+            raise ValueError(
+                f"{manifest_path}: {scenario} requires {expected_links} degraded links in {section_name}"
+            )
+        capacity = section.get("degraded_capacity_gbps")
+        if isinstance(capacity, bool) or not isinstance(capacity, (int, float)) or (
+            float(capacity) != DEGRADED_CAPACITY_GBPS
+        ):
+            raise ValueError(
+                f"{manifest_path}: {scenario} requires 25 Gbps degraded capacity in {section_name}"
+            )
     return run_id, scenario, seed, mode
 
 
@@ -353,7 +379,8 @@ def _ratio(healthy_bytes: int, throttled_bytes: int) -> float | str:
     return throttled_bytes / total if total else ""
 
 
-def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admissions_by_ack):
+def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admissions_by_ack,
+                           expected_seed: int, expected_scenario: str):
     selected_event_seqs = set(admissions_by_ack)
     selected_acks = {}
     base_rtt_ps = None
@@ -365,9 +392,19 @@ def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admissions_by
         (
             "event_seq", "time_ps", "flow_id", "entropy", "physical_path_id",
             "base_rtt_ps", "genuine_sample", "ecn", "newly_acked_bytes",
+            "seed", "scenario",
         ),
         run_id,
     ):
+        ack_path = Path(f"{prefix}.ack.csv")
+        if row["seed"] != expected_seed:
+            raise _trace_error(
+                ack_path, "seed", f"expected {expected_seed}, got {row['seed']}"
+            )
+        if row["scenario"] != expected_scenario:
+            raise _trace_error(
+                ack_path, "scenario", f"expected {expected_scenario!r}, got {row['scenario']!r}"
+            )
         if base_rtt_ps is None:
             base_rtt_ps = row["base_rtt_ps"]
         elif row["base_rtt_ps"] != base_rtt_ps:
@@ -400,6 +437,12 @@ def _validate_admission_provenance(prefix: Path, admissions_by_ack, selected_ack
     token_path = Path(f"{prefix}.token.csv")
     ack_path = Path(f"{prefix}.ack.csv")
     for ack_event_seq, admissions in admissions_by_ack.items():
+        if len(admissions) != 1:
+            raise _trace_error(
+                token_path,
+                "related_ack_event_seq",
+                f"ACK event {ack_event_seq} has duplicate written admissions",
+            )
         ack = selected_acks.get(ack_event_seq)
         if ack is None:
             raise _trace_error(
@@ -589,14 +632,17 @@ def _analyze_bundle(manifest_path: Path) -> tuple[list[dict], list[dict], dict]:
     specs = _load_coordination(prefix, run_id, mode)
     admissions_by_slot, admissions_by_ack = _stream_candidate_admissions(prefix, run_id, specs)
     base_rtt_ps, last_ack_ps, counts, selected_acks = _stream_ack_aggregates(
-        prefix, run_id, attribution, admissions_by_ack
+        prefix, run_id, attribution, admissions_by_ack, seed, EXPERIMENT
     )
     _validate_admission_provenance(prefix, admissions_by_ack, selected_acks)
-    complete_specs = [
-        spec
-        for spec in specs
-        if _replacement_chain_complete(spec, admissions_by_slot, selected_acks)
-    ]
+    complete_specs = []
+    for spec in specs:
+        if not _replacement_chain_complete(spec, admissions_by_slot, selected_acks):
+            terminal = spec["terminal"]
+            raise ValueError(
+                f"{run_id}: recycle terminal event {terminal['event_seq']} has incomplete replacement evidence"
+            )
+        complete_specs.append(spec)
     _stream_effect_windows(prefix, run_id, attribution, complete_specs, base_rtt_ps)
     bins = _distribution_bins(
         run_id=run_id,
