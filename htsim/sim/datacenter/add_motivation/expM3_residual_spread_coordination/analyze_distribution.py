@@ -282,8 +282,7 @@ def _stream_candidate_admissions(prefix: Path, run_id: str, specs: list[dict]):
         for cache_slot in slots:
             specs_by_slot[(spec["terminal"]["flow_id"], cache_slot)].append(spec)
     admissions_by_slot = defaultdict(list)
-    if not specs_by_slot:
-        return admissions_by_slot
+    admission_entropies = defaultdict(set)
     for row in _stream_rows(
         prefix,
         "token",
@@ -295,6 +294,7 @@ def _stream_candidate_admissions(prefix: Path, run_id: str, specs: list[dict]):
     ):
         if row["operation"] not in {"enqueue_good_ack", "overwrite_good_ack"} or not row["admission_written"]:
             continue
+        admission_entropies[row["related_ack_event_seq"]].add(row["entropy"])
         for spec in specs_by_slot.get((row["flow_id"], row["cache_slot"]), ()):
             terminal_seq = spec["terminal"]["event_seq"]
             if any(
@@ -306,7 +306,7 @@ def _stream_candidate_admissions(prefix: Path, run_id: str, specs: list[dict]):
             ):
                 admissions_by_slot[(row["flow_id"], row["cache_slot"])].append(row)
                 break
-    return admissions_by_slot
+    return admissions_by_slot, admission_entropies
 
 
 def _ratio(healthy_bytes: int, throttled_bytes: int) -> float | str:
@@ -314,11 +314,9 @@ def _ratio(healthy_bytes: int, throttled_bytes: int) -> float | str:
     return throttled_bytes / total if total else ""
 
 
-def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admissions_by_slot):
+def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admission_entropies):
     selected_event_seqs = {
-        admission["related_ack_event_seq"]
-        for admissions in admissions_by_slot.values()
-        for admission in admissions
+        ack_event_seq for ack_event_seq in admission_entropies
     }
     selected_acks = {}
     base_rtt_ps = None
@@ -361,22 +359,22 @@ def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, admissions_by
     return base_rtt_ps, last_ack_ps, counts, selected_acks
 
 
-def _validate_admission_entropies(prefix: Path, admissions_by_slot, selected_acks: dict) -> None:
+def _validate_admission_entropies(prefix: Path, admission_entropies, selected_acks: dict) -> None:
     token_path = Path(f"{prefix}.token.csv")
-    for admissions in admissions_by_slot.values():
-        for admission in admissions:
-            ack = selected_acks.get(admission["related_ack_event_seq"])
-            if ack is None:
-                raise _trace_error(
-                    token_path,
-                    "related_ack_event_seq",
-                    f"ACK event {admission['related_ack_event_seq']} does not exist",
-                )
-            if admission["entropy"] != ack["entropy"]:
+    for ack_event_seq, entropies in admission_entropies.items():
+        ack = selected_acks.get(ack_event_seq)
+        if ack is None:
+            raise _trace_error(
+                token_path,
+                "related_ack_event_seq",
+                f"ACK event {ack_event_seq} does not exist",
+            )
+        for entropy in sorted(entropies):
+            if entropy != ack["entropy"]:
                 raise _trace_error(
                     token_path,
                     "entropy",
-                    f"value {admission['entropy']} differs from ACK entropy {ack['entropy']}",
+                    f"value {entropy} differs from ACK entropy {ack['entropy']}",
                 )
 
 
@@ -533,11 +531,11 @@ def _analyze_bundle(manifest_path: Path) -> tuple[list[dict], list[dict], dict]:
     prefix = _trace_prefix(manifest_path)
     attribution = _load_attribution(prefix, run_id)
     specs = _load_coordination(prefix, run_id, mode)
-    admissions_by_slot = _stream_candidate_admissions(prefix, run_id, specs)
+    admissions_by_slot, admission_entropies = _stream_candidate_admissions(prefix, run_id, specs)
     base_rtt_ps, last_ack_ps, counts, selected_acks = _stream_ack_aggregates(
-        prefix, run_id, attribution, admissions_by_slot
+        prefix, run_id, attribution, admission_entropies
     )
-    _validate_admission_entropies(prefix, admissions_by_slot, selected_acks)
+    _validate_admission_entropies(prefix, admission_entropies, selected_acks)
     complete_specs = [
         spec
         for spec in specs

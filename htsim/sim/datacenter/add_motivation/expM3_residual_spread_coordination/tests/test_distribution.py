@@ -255,6 +255,44 @@ class DistributionAnalysisTests(unittest.TestCase):
             ):
                 analyze_distribution(root, root / "aggregate")
 
+    def test_rejects_original_prism_admission_entropy_that_differs_from_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_locked_distribution_matrix(root)
+            prefix = root / "fixture_recoverable_original_prism_s13"
+            _write_csv(prefix.with_suffix(".token.csv"), "token", [_row(
+                "token", run_id="fixture_recoverable_original_prism_s13", event_seq=3,
+                time_ps=2_010_000_000, flow_id=1, operation="overwrite_good_ack",
+                reason="admit", token_id=1, entropy=2, queue_depth_before=0,
+                queue_depth_after=1, related_ack_event_seq=1, cache_slot=3,
+                cache_generation=11, admission_written=1,
+            )])
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"token\.csv: entropy: value 2 differs from ACK entropy 0",
+            ):
+                analyze_distribution(root, root / "aggregate")
+
+    def test_rejects_original_prism_admission_with_missing_referenced_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_locked_distribution_matrix(root)
+            prefix = root / "fixture_recoverable_original_prism_s13"
+            _write_csv(prefix.with_suffix(".token.csv"), "token", [_row(
+                "token", run_id="fixture_recoverable_original_prism_s13", event_seq=3,
+                time_ps=2_010_000_000, flow_id=1, operation="enqueue_good_ack",
+                reason="admit", token_id=1, entropy=0, queue_depth_before=0,
+                queue_depth_after=1, related_ack_event_seq=999, cache_slot=3,
+                cache_generation=11, admission_written=1,
+            )])
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"token\.csv: related_ack_event_seq: ACK event 999 does not exist",
+            ):
+                analyze_distribution(root, root / "aggregate")
+
     def test_validates_coordination_rows_for_original_prism_runs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
