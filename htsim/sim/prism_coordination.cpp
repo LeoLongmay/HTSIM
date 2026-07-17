@@ -135,8 +135,7 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
     if (result.progress) {
         result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_PROGRESS);
     } else if (_round_had_invalidation && _mode == PrismCoordinationMode::FULL_PRISM) {
-        result.handoff_requested = true;
-        result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_HANDOFF);
+        result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_RETRY);
     } else {
         result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_CLEAN);
     }
@@ -178,6 +177,7 @@ void PrismResidualCoordinator::addSlotAction(PrismCoordinationResult& result,
         break;
     case PrismCoordinationAction::ROUND_COMPLETE_PROGRESS:
     case PrismCoordinationAction::ROUND_COMPLETE_HANDOFF:
+    case PrismCoordinationAction::ROUND_COMPLETE_RETRY:
     case PrismCoordinationAction::ROUND_COMPLETE_CLEAN:
         break;
     }

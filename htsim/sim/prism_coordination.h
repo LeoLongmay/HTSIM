@@ -14,7 +14,7 @@
 enum class PrismCoordinationMode { DISABLED, ORIGINAL_PRISM, PRISM_RECYCLE, FULL_PRISM };
 enum class PrismCoordinationAction { RETAIN, INVALIDATE, PENDING,
                                     ROUND_COMPLETE_PROGRESS, ROUND_COMPLETE_HANDOFF,
-                                    ROUND_COMPLETE_CLEAN };
+                                    ROUND_COMPLETE_RETRY, ROUND_COMPLETE_CLEAN };
 
 struct PrismCoordinationEpoch {
     uint64_t epoch_id;

@@ -33,7 +33,7 @@ bool has_action(const PrismCoordinationResult& result, PrismCoordinationAction a
     return std::find(result.actions.begin(), result.actions.end(), action) != result.actions.end();
 }
 
-void full_prism_invalidates_before_handoffing_a_completed_round() {
+void full_prism_retries_after_replacement_without_progress() {
     PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
     auto slots = four_slots();
 
@@ -54,9 +54,9 @@ void full_prism_invalidates_before_handoffing_a_completed_round() {
     coordinator.observeAck(2, 3, 2, 2, false, true);
     auto second = coordinator.closeEpoch(hold_epoch(2, 2, 17, slots));
     assert(second.round_complete);
-    assert(second.handoff_requested);
     assert(!second.progress);
-    assert(has_action(second, PrismCoordinationAction::ROUND_COMPLETE_HANDOFF));
+    assert(!second.handoff_requested);
+    assert(has_action(second, PrismCoordinationAction::ROUND_COMPLETE_RETRY));
 }
 
 void stale_or_pending_slots_do_not_complete_a_round() {
@@ -291,7 +291,8 @@ void invalidated_slot_requires_a_clean_new_generation() {
     coordinator.observeAck(3, 3, 2, 3, false, true);
     const auto replacement = coordinator.closeEpoch(hold_epoch(3, 2, 16, slots));
     assert(replacement.round_complete);
-    assert(replacement.handoff_requested);
+    assert(!replacement.handoff_requested);
+    assert(has_action(replacement, PrismCoordinationAction::ROUND_COMPLETE_RETRY));
 }
 
 void late_ack_for_an_invalidated_consumed_token_remains_pending() {
@@ -375,7 +376,7 @@ void no_progress_handoff_applies_one_gentle_cut() {
 }  // namespace
 
 int main() {
-    full_prism_invalidates_before_handoffing_a_completed_round();
+    full_prism_retries_after_replacement_without_progress();
     stale_or_pending_slots_do_not_complete_a_round();
     ecn_and_non_genuine_observations_are_not_admitted();
     lower_ending_spread_completes_with_progress_without_handoff();
