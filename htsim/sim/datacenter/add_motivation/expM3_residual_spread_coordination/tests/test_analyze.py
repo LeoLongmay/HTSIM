@@ -285,6 +285,15 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
     )
 
 
+def _append_coordination_row(root, scenario, mode, seed, **values):
+    run_id = f"fixture_{scenario}_{mode}_s{seed}"
+    path = root / f"{run_id}.coordination.csv"
+    with path.open(newline="", encoding="ascii") as stream:
+        rows = list(csv.DictReader(stream))
+    rows.append(_row("coordination", run_id=run_id, **values))
+    _write_csv(path, "coordination", sorted(rows, key=lambda row: int(row["event_seq"])))
+
+
 class AnalyzeTests(unittest.TestCase):
     def test_rejects_manifest_with_wrong_scenario_degraded_link_count(self):
         for scenario, expected_links, wrong_links in (
@@ -748,6 +757,107 @@ class AnalyzeTests(unittest.TestCase):
 
             terminal = results["rounds"][0]
             self.assertTrue(terminal["replacement_chain_complete"])
+
+    def test_recurrence_only_writes_completed_chains_without_causal_verdict_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "raw"
+            output_root = Path(directory) / "recurrence"
+            root.mkdir()
+            _write_bundle(
+                root,
+                "recoverable",
+                "full_prism",
+                replacement_chain="complete",
+                handoff=True,
+                progress=False,
+                completed_spread_ps=8_000_000,
+            )
+            _append_coordination_row(
+                root,
+                "recoverable",
+                "full_prism",
+                13,
+                event_seq=10,
+                time_ps=2_300_000_000,
+                flow_id=1,
+                epoch_id=3,
+                round_id=2,
+                cache_slot=3,
+                cache_generation=12,
+                floor_ps=2_000_000,
+                spread_ps=8_000_000,
+                spread_ref_ps=8_000_000,
+                residual_ps=6_000_000,
+                action="invalidate",
+                reason="ecn_marked",
+                refresh_complete=0,
+                progress=0,
+                handoff=0,
+                cwnd_bytes=12000,
+                control_state="hold",
+            )
+            _append_coordination_row(
+                root,
+                "recoverable",
+                "full_prism",
+                13,
+                event_seq=11,
+                time_ps=2_400_000_000,
+                flow_id=1,
+                epoch_id=4,
+                round_id=3,
+                cache_slot=3,
+                cache_generation=13,
+                floor_ps=2_000_000,
+                spread_ps=8_000_000,
+                spread_ref_ps=8_000_000,
+                residual_ps=6_000_000,
+                action="invalidate",
+                reason="residual_threshold",
+                refresh_complete=0,
+                progress=0,
+                handoff=0,
+                cwnd_bytes=12000,
+                control_state="hold",
+            )
+            _write_bundle(
+                root,
+                "persistent",
+                "full_prism",
+                seed=14,
+                replacement_chain="complete",
+                retry=True,
+            )
+
+            with self.assertRaisesRegex(ValueError, "recoverable full_prism handed off"):
+                analyze_data(root)
+
+            self.assertEqual(
+                main([
+                    "--data-root", str(root),
+                    "--recurrence-only",
+                    "--output-root", str(output_root),
+                ]),
+                0,
+            )
+
+            self.assertEqual(sorted(path.name for path in output_root.iterdir()), ["replacement_recurrence.csv"])
+            with (output_root / "replacement_recurrence.csv").open(newline="", encoding="ascii") as stream:
+                rows = {row["seed"]: row for row in csv.DictReader(stream)}
+
+        self.assertEqual(set(rows), {"13", "14"})
+        self.assertEqual(rows["13"]["flow_id"], "1")
+        self.assertEqual(rows["13"]["cache_slot"], "3")
+        self.assertEqual(rows["13"]["replacement_generation"], "11")
+        self.assertEqual(rows["13"]["later_invalidation"], "1")
+        self.assertEqual(rows["13"]["later_invalidation_generation"], "12")
+        self.assertEqual(rows["13"]["later_invalidation_reason"], "ecn_marked")
+        self.assertEqual(rows["13"]["later_invalidation_time_ps"], "2300000000")
+        self.assertEqual(rows["14"]["replacement_generation"], "11")
+        self.assertEqual(rows["14"]["later_invalidation"], "0")
+        self.assertEqual(rows["14"]["later_invalidation_generation"], "")
+        self.assertEqual(rows["14"]["later_invalidation_reason"], "")
+        self.assertEqual(rows["14"]["later_invalidation_time_ps"], "")
 
     def test_counts_retry_terminal_with_replacement_evidence_without_progress_or_handoff(self):
         with tempfile.TemporaryDirectory() as directory:

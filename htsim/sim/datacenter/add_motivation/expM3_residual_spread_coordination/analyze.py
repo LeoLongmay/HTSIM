@@ -33,6 +33,12 @@ TABLE_FIELDS = {
     "per_seed_metrics": ("run_id", "scenario", "mode", "seed", "window_start_ps", "window_end_ps", "foreground_acked_bytes", "healthy_acked_bytes", "throttled_acked_bytes", "healthy_to_throttled_ratio", "throttled_traffic_ratio", "goodput_gbps", "p99_genuine_qdelay_ps", "completed_rounds", "progress_rounds", "handoff_rounds"),
     "summary": ("scenario", "mode", "seed_count", "mean_healthy_to_throttled_ratio", "mean_throttled_traffic_ratio", "mean_goodput_gbps", "mean_p99_genuine_qdelay_ps", "mean_progress_rounds", "mean_handoff_rounds"),
 }
+RECURRENCE_FIELDS = (
+    "run_id", "scenario", "mode", "seed", "flow_id", "round_id", "cache_slot",
+    "invalidation_generation", "replacement_generation", "terminal_event_seq",
+    "terminal_time_ps", "later_invalidation", "later_invalidation_generation",
+    "later_invalidation_reason", "later_invalidation_time_ps",
+)
 
 MATRIX_PREDICATE = (
     "fixed complete 18-run matrix (scenarios recoverable/persistent, "
@@ -150,11 +156,11 @@ def _observer_epoch_index(bundle, coordination: dict, *, start_ps: int) -> int:
     return latest[0]["epoch_id"]
 
 
-def _replacement_chain_complete(bundle, terminal: dict) -> bool:
-    """Return whether every invalidated slot has an ordered replacement chain."""
+def _completed_replacement_chains(bundle, terminal: dict) -> list[tuple[dict, dict]] | None:
+    """Return completed invalidation-to-admission chains for one terminal."""
     terminal_seq = terminal["event_seq"]
     if not terminal["refresh_complete"]:
-        return False
+        return None
 
     invalidations = [
         row for row in bundle.coordination
@@ -164,7 +170,7 @@ def _replacement_chain_complete(bundle, terminal: dict) -> bool:
         and row["event_seq"] < terminal_seq
     ]
     if not invalidations:
-        return False
+        return None
 
     ack_by_event_seq = {row["event_seq"]: row for row in bundle.ack}
     retains = [
@@ -175,8 +181,8 @@ def _replacement_chain_complete(bundle, terminal: dict) -> bool:
         and row["event_seq"] < terminal_seq
     ]
 
+    chains = []
     for invalidation in invalidations:
-        replacement_found = False
         for admission in bundle.token:
             if not (
                 invalidation["event_seq"] < admission["event_seq"] < terminal_seq
@@ -202,11 +208,16 @@ def _replacement_chain_complete(bundle, terminal: dict) -> bool:
                 and retain["cache_generation"] == admission["cache_generation"]
                 for retain in retains
             ):
-                replacement_found = True
+                chains.append((invalidation, admission))
                 break
-        if not replacement_found:
-            return False
-    return True
+        else:
+            return None
+    return chains
+
+
+def _replacement_chain_complete(bundle, terminal: dict) -> bool:
+    """Return whether every invalidated slot has an ordered replacement chain."""
+    return _completed_replacement_chains(bundle, terminal) is not None
 
 
 def _clean_scan_complete(bundle, terminal: dict) -> bool:
@@ -421,6 +432,66 @@ def analyze_data(data_root: Path | str = DATA_ROOT, *, write: bool = False) -> d
     return result
 
 
+def analyze_recurrence(data_root: Path | str, output_root: Path | str) -> list[dict]:
+    """Write completed replacement chains without aggregate causal validation."""
+    data_root = Path(data_root)
+    output_root = Path(output_root)
+    manifests = sorted(path for path in data_root.rglob("*.manifest.json") if "aggregate" not in path.parts)
+    if not manifests:
+        raise ValueError(f"no M3 manifests below {data_root}")
+
+    rows = []
+    for manifest_path in manifests:
+        manifest = _load_manifest(manifest_path)
+        config = manifest["config"]
+        analysis = manifest["analysis_config"]
+        bundle = load_trace_compact(_trace_prefix(manifest_path))
+        if bundle.run_id != manifest.get("run_id"):
+            raise ValueError(f"{manifest_path}: manifest and trace run IDs differ")
+        for terminal in bundle.coordination:
+            if not terminal["action"].startswith("round_complete_"):
+                continue
+            chains = _completed_replacement_chains(bundle, terminal)
+            if chains is None:
+                continue
+            for invalidation, admission in chains:
+                later = next(
+                    (
+                        row for row in bundle.coordination
+                        if row["action"] == "invalidate"
+                        and row["event_seq"] > terminal["event_seq"]
+                        and row["flow_id"] == invalidation["flow_id"]
+                        and row["cache_slot"] == invalidation["cache_slot"]
+                        and row["cache_generation"] > admission["cache_generation"]
+                    ),
+                    None,
+                )
+                rows.append({
+                    "run_id": bundle.run_id,
+                    "scenario": analysis["scenario"],
+                    "mode": config["prism_coordination_mode"],
+                    "seed": int(analysis.get("seed", manifest.get("seed"))),
+                    "flow_id": invalidation["flow_id"],
+                    "round_id": invalidation["round_id"],
+                    "cache_slot": invalidation["cache_slot"],
+                    "invalidation_generation": invalidation["cache_generation"],
+                    "replacement_generation": admission["cache_generation"],
+                    "terminal_event_seq": terminal["event_seq"],
+                    "terminal_time_ps": terminal["time_ps"],
+                    "later_invalidation": int(later is not None),
+                    "later_invalidation_generation": "" if later is None else later["cache_generation"],
+                    "later_invalidation_reason": "" if later is None else later["reason"],
+                    "later_invalidation_time_ps": "" if later is None else later["time_ps"],
+                })
+    rows.sort(key=lambda row: (
+        row["scenario"], row["mode"], row["seed"], row["run_id"], row["flow_id"],
+        row["round_id"], row["cache_slot"], row["invalidation_generation"],
+    ))
+    output_root.mkdir(parents=True, exist_ok=True)
+    _write_csv(output_root / "replacement_recurrence.csv", rows, RECURRENCE_FIELDS)
+    return rows
+
+
 def _write_csv(path: Path, rows: list[dict], fallback_fields: tuple[str, ...]) -> None:
     with path.open("w", newline="", encoding="ascii") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]) if rows else fallback_fields, lineterminator="\n")
@@ -567,10 +638,18 @@ def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
-    parser.add_argument("--verify-only", action="store_true", help="verify existing aggregate CSV causal evidence")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--verify-only", action="store_true", help="verify existing aggregate CSV causal evidence")
+    mode.add_argument("--recurrence-only", action="store_true", help="write replacement recurrence evidence from raw traces")
+    parser.add_argument("--output-root", type=Path, help="output directory for --recurrence-only")
     args = parser.parse_args(argv)
     if args.verify_only:
         print(verify_aggregate(args.data_root))
+        return 0
+    if args.recurrence_only:
+        if args.output_root is None:
+            parser.error("--recurrence-only requires --output-root")
+        analyze_recurrence(args.data_root, args.output_root)
         return 0
     analyze_data(args.data_root, write=True)
     return 0
