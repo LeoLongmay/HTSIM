@@ -69,7 +69,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                   observer_epoch_start_ps=1_000_000_000,
                   observer_epoch_end_ps=2_000_000_000,
                   coordination_event_seq=5, observer_event_seq=3,
-                  replacement_chain=None, emit_terminal=True):
+                  replacement_chain=None, clean_scan=None, emit_terminal=True):
     run_id = f"fixture_{scenario}_{mode}_s{seed}"
     prefix = root / run_id
     run_id_values = {"run_id": run_id}
@@ -94,7 +94,53 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
     ]
     token_rows = []
     coordination_rows = []
-    if replacement_chain:
+    if clean_scan:
+        terminal_event_seq = 13
+        for slot in range(8):
+            if clean_scan == "missing_slot" and slot == 7:
+                continue
+            coordination_rows.append(_row(
+                "coordination", **run_id_values, event_seq=5 + slot,
+                time_ps=2_100_000_000 + slot * 10_000_000, flow_id=1, epoch_id=1,
+                round_id=1, cache_slot=slot, cache_generation=10 + slot,
+                floor_ps=2_000_000, spread_ps=6_000_000, spread_ref_ps=8_000_000,
+                residual_ps=4_000_000, action="retain", reason="slot_low_residual",
+                refresh_complete=0, progress=0, handoff=0, cwnd_bytes=12000,
+                control_state="hold",
+            ))
+        if clean_scan == "pending_after_retain":
+            coordination_rows.append(_row(
+                "coordination", **run_id_values, event_seq=13,
+                time_ps=2_190_000_000, flow_id=1, epoch_id=1, round_id=1,
+                cache_slot=7, cache_generation=17, floor_ps=2_000_000,
+                spread_ps=6_000_000, spread_ref_ps=8_000_000, residual_ps=4_000_000,
+                action="pending", reason="awaiting_observation", refresh_complete=0,
+                progress=0, handoff=0, cwnd_bytes=12000, control_state="hold",
+            ))
+            terminal_event_seq = 14
+        elif clean_scan == "invalidate_after_retain":
+            coordination_rows.append(_row(
+                "coordination", **run_id_values, event_seq=13,
+                time_ps=2_190_000_000, flow_id=1, epoch_id=1, round_id=1,
+                cache_slot=7, cache_generation=17, floor_ps=2_000_000,
+                spread_ps=6_000_000, spread_ref_ps=8_000_000, residual_ps=4_000_000,
+                action="invalidate", reason="slot_high_residual", refresh_complete=0,
+                progress=0, handoff=0, cwnd_bytes=12000, control_state="hold",
+            ))
+            terminal_event_seq = 14
+        action = "round_complete_handoff" if handoff else "round_complete_progress"
+        coordination_rows.append(_row(
+            "coordination", **run_id_values, event_seq=terminal_event_seq,
+            time_ps=coordination_time_ps, flow_id=1, epoch_id=coordination_epoch_id,
+            round_id=1, cache_slot=4294967295, cache_generation=18446744073709551615,
+            floor_ps=2_000_000, spread_ps=completed_spread_ps, spread_ref_ps=8_000_000,
+            residual_ps=0, action=action,
+            reason="spread_not_reduced" if handoff else "spread_reduced",
+            refresh_complete=int(refresh_complete), progress=int(progress and not handoff),
+            handoff=int(handoff), cwnd_bytes=12000,
+            control_state="decrease" if handoff else "hold",
+        ))
+    elif replacement_chain:
         invalidation = _row(
             "coordination", **run_id_values, event_seq=5, time_ps=2_100_000_000,
             flow_id=1, epoch_id=1, round_id=1, cache_slot=3, cache_generation=10,
@@ -192,7 +238,7 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
         _row("linkmap", **run_id_values, queue_id=2, queue_name="healthy",
              rate_gbps=100, reduced_speed=0),
     ])
-    if not replacement_chain and emit_terminal:
+    if not replacement_chain and not clean_scan and emit_terminal:
         action = "invalidate" if coordination_recycle else ("round_complete_handoff" if handoff else "round_complete_progress")
         coordination_rows.append(_row(
             "coordination", **run_id_values, event_seq=coordination_event_seq, time_ps=coordination_time_ps,
@@ -288,6 +334,32 @@ class AnalyzeTests(unittest.TestCase):
             self._write_verifier_aggregate(Path(directory), metrics, rounds)
 
             self.assertEqual(self._verdict(Path(directory)), "supported\n")
+
+    def test_verify_only_supports_persistent_clean_scan_handoff_majority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            for row in (row for row in rounds if row["scenario"] == "persistent"):
+                row["replacement_chain_complete"] = 0
+                row["clean_scan_complete"] = 1
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(self._verdict(Path(directory)), "supported\n")
+
+    def test_verify_only_does_not_count_clean_scans_as_recoverable_recycling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            for row in (
+                row for row in rounds
+                if row["scenario"] == "recoverable" and row["mode"] == "prism_recycle"
+            ):
+                row["replacement_chain_complete"] = 0
+                row["clean_scan_complete"] = 1
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: at least two recoverable/prism_recycle seeds have a chain-backed progress round\n",
+            )
 
     def test_verify_only_does_not_select_success_from_one_recoverable_seed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -448,7 +520,7 @@ class AnalyzeTests(unittest.TestCase):
 
             self.assertEqual(
                 self._verdict(Path(directory)),
-                "not_supported: at least two persistent/full_prism seeds have a chain-backed no-progress applied-handoff round\n",
+                "not_supported: at least two persistent/full_prism seeds have an evidence-backed no-progress applied-handoff round\n",
             )
 
     def test_verify_only_rejects_persistent_original_prism_handoff(self):
@@ -516,23 +588,45 @@ class AnalyzeTests(unittest.TestCase):
             root = Path(directory)
             _write_bundle(root, "persistent", "prism_recycle", replacement_chain="without_admission")
 
-            with self.assertRaisesRegex(ValueError, "replacement chain"):
+            with self.assertRaisesRegex(ValueError, "terminal evidence"):
                 analyze_data(root)
 
-    def test_rejects_terminal_without_invalidations(self):
+    def test_rejects_terminal_only_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _write_bundle(root, "persistent", "prism_recycle", replacement_chain=None)
 
-            with self.assertRaisesRegex(ValueError, "replacement chain"):
+            with self.assertRaisesRegex(ValueError, "terminal evidence"):
                 analyze_data(root)
+
+    def test_accepts_complete_clean_scan_and_emits_distinct_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_bundle(root, "persistent", "prism_recycle", clean_scan="complete")
+
+            results = analyze_data(root, write=True)
+
+            terminal = results["rounds"][0]
+            self.assertFalse(terminal["replacement_chain_complete"])
+            self.assertTrue(terminal["clean_scan_complete"])
+            with (root / "aggregate" / "rounds.csv").open(newline="", encoding="ascii") as stream:
+                self.assertIn("clean_scan_complete", csv.DictReader(stream).fieldnames)
+
+    def test_rejects_clean_scan_with_missing_or_replaced_latest_slot(self):
+        for clean_scan in ("missing_slot", "pending_after_retain", "invalidate_after_retain"):
+            with self.subTest(clean_scan=clean_scan), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                _write_bundle(root, "persistent", "prism_recycle", clean_scan=clean_scan)
+
+                with self.assertRaisesRegex(ValueError, "terminal evidence"):
+                    analyze_data(root)
 
     def test_rejects_replacement_admission_with_stale_generation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _write_bundle(root, "persistent", "prism_recycle", replacement_chain="stale_generation")
 
-            with self.assertRaisesRegex(ValueError, "replacement chain"):
+            with self.assertRaisesRegex(ValueError, "terminal evidence"):
                 analyze_data(root)
 
     def test_rejects_replacement_admission_after_terminal(self):
@@ -540,7 +634,7 @@ class AnalyzeTests(unittest.TestCase):
             root = Path(directory)
             _write_bundle(root, "persistent", "prism_recycle", replacement_chain="admission_after_terminal")
 
-            with self.assertRaisesRegex(ValueError, "replacement chain"):
+            with self.assertRaisesRegex(ValueError, "terminal evidence"):
                 analyze_data(root)
 
     def test_rejects_replacement_admission_without_later_retain(self):
@@ -548,7 +642,7 @@ class AnalyzeTests(unittest.TestCase):
             root = Path(directory)
             _write_bundle(root, "persistent", "prism_recycle", replacement_chain="without_retain")
 
-            with self.assertRaisesRegex(ValueError, "replacement chain"):
+            with self.assertRaisesRegex(ValueError, "terminal evidence"):
                 analyze_data(root)
 
     def test_accepts_ordered_replacement_admission_retain_and_terminal(self):

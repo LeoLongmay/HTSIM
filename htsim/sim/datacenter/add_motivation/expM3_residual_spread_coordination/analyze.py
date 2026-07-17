@@ -29,7 +29,7 @@ SCENARIOS = ("recoverable", "persistent")
 SEEDS = (13, 14, 15)
 TABLE_FIELDS = {
     "epoch_series": ("run_id", "scenario", "mode", "seed", "epoch_index", "floor_ps", "spread_ps", "cwnd_bytes", "hold_fraction"),
-    "rounds": ("run_id", "scenario", "mode", "seed", "round_index", "epoch_id", "plot_epoch_index", "floor_ps", "spread_ps", "spread_ref_ps", "spread_change_ps", "refresh_complete", "replacement_chain_complete", "progress", "handoff", "cwnd_bytes", "control_state"),
+    "rounds": ("run_id", "scenario", "mode", "seed", "round_index", "epoch_id", "plot_epoch_index", "floor_ps", "spread_ps", "spread_ref_ps", "spread_change_ps", "refresh_complete", "replacement_chain_complete", "clean_scan_complete", "progress", "handoff", "cwnd_bytes", "control_state"),
     "per_seed_metrics": ("run_id", "scenario", "mode", "seed", "window_start_ps", "window_end_ps", "foreground_acked_bytes", "healthy_acked_bytes", "throttled_acked_bytes", "healthy_to_throttled_ratio", "throttled_traffic_ratio", "goodput_gbps", "p99_genuine_qdelay_ps", "completed_rounds", "progress_rounds", "handoff_rounds"),
     "summary": ("scenario", "mode", "seed_count", "mean_healthy_to_throttled_ratio", "mean_throttled_traffic_ratio", "mean_goodput_gbps", "mean_p99_genuine_qdelay_ps", "mean_progress_rounds", "mean_handoff_rounds"),
 }
@@ -45,7 +45,7 @@ ROUND_MATRIX_PREDICATE = (
 CAUSAL_PREDICATES = (
     "at least two recoverable/prism_recycle seeds have a chain-backed progress round",
     "at least two recoverable/full_prism seeds have a chain-backed progress round and no applied handoff",
-    "at least two persistent/full_prism seeds have a chain-backed no-progress applied-handoff round",
+    "at least two persistent/full_prism seeds have an evidence-backed no-progress applied-handoff round",
     "no persistent/original_prism seed has a handoff round",
     "no persistent/prism_recycle seed has a handoff round",
 )
@@ -202,6 +202,34 @@ def _replacement_chain_complete(bundle, terminal: dict) -> bool:
     return True
 
 
+def _clean_scan_complete(bundle, terminal: dict) -> bool:
+    """Return whether every physical cache slot was last retained before terminal."""
+    terminal_seq = terminal["event_seq"]
+    if not terminal["refresh_complete"]:
+        return False
+
+    slot_records = [
+        row for row in bundle.coordination
+        if row["flow_id"] == terminal["flow_id"]
+        and row["round_id"] == terminal["round_id"]
+        and row["event_seq"] < terminal_seq
+        and 0 <= row["cache_slot"] < 8
+    ]
+    if any(row["action"] == "invalidate" for row in slot_records):
+        return False
+
+    latest_by_slot = {}
+    for row in slot_records:
+        slot = row["cache_slot"]
+        previous = latest_by_slot.get(slot)
+        if previous is None or row["event_seq"] > previous["event_seq"]:
+            latest_by_slot[slot] = row
+    return all(
+        slot in latest_by_slot and latest_by_slot[slot]["action"] == "retain"
+        for slot in range(8)
+    )
+
+
 def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -> list[dict]:
     rounds = []
     completed = [row for row in bundle.coordination if row["action"].startswith("round_complete_")]
@@ -215,9 +243,10 @@ def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -
         if mode == "full_prism" and row["handoff"] and row["spread_ps"] < row["spread_ref_ps"]:
             raise ValueError(f"{bundle.run_id}: handoff after positive spread progress")
         chain_complete = _replacement_chain_complete(bundle, row)
-        if not chain_complete:
+        clean_scan_complete = _clean_scan_complete(bundle, row)
+        if not chain_complete and not clean_scan_complete:
             raise ValueError(
-                f"{bundle.run_id}: replacement chain incomplete for terminal round {row['round_id']}"
+                f"{bundle.run_id}: terminal evidence incomplete for round {row['round_id']}"
             )
         rounds.append({
             "run_id": bundle.run_id,
@@ -233,6 +262,7 @@ def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -
             "spread_change_ps": row["spread_ref_ps"] - row["spread_ps"],
             "refresh_complete": row["refresh_complete"],
             "replacement_chain_complete": chain_complete,
+            "clean_scan_complete": clean_scan_complete,
             "progress": row["progress"],
             "handoff": row["handoff"],
             "cwnd_bytes": row["cwnd_bytes"],
@@ -430,6 +460,10 @@ def _is_chain_backed_terminal(row: dict) -> bool:
     return _is_true(row, "refresh_complete") and _is_true(row, "replacement_chain_complete")
 
 
+def _is_clean_scan_backed_terminal(row: dict) -> bool:
+    return _is_true(row, "refresh_complete") and _is_true(row, "clean_scan_complete")
+
+
 def _rounds_belong_to_matrix(rounds: list[dict], matrix: dict[tuple[str, str, int], dict]) -> bool:
     run_id_coordinates = defaultdict(list)
     for coordinate, row in matrix.items():
@@ -501,7 +535,7 @@ def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
     persistent_full = {seed: selected_rounds("persistent", "full_prism", seed) for seed in SEEDS}
     persistent_successes = sum(
         any(
-            _is_chain_backed_terminal(row)
+            (_is_chain_backed_terminal(row) or _is_clean_scan_backed_terminal(row))
             and _is_true(row, "handoff")
             and not _is_true(row, "progress")
             for row in seed_rounds
