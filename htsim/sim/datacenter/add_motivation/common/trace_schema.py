@@ -194,6 +194,7 @@ _COORDINATION_ACTIONS = frozenset({
     "round_complete_progress",
     "round_complete_handoff",
     "round_complete_clean",
+    "round_complete_retry",
 })
 
 
@@ -206,16 +207,17 @@ def _validate_coordination_row(path: Path, row: dict) -> None:
         raise _error(path, "action", f"unknown coordination action {row['action']!r}")
     if row["action"] == "invalidate" and row["refresh_complete"]:
         raise _error(path, "refresh_complete", "invalidate action cannot mark refresh complete")
-    if row["action"] == "round_complete_clean":
+    if row["action"] in ("round_complete_clean", "round_complete_retry"):
+        action = row["action"]
         if not row["refresh_complete"]:
             raise _error(
                 path, "refresh_complete",
-                "round_complete_clean requires completed refresh",
+                f"{action} requires completed refresh",
             )
         if row["progress"]:
-            raise _error(path, "progress", "round_complete_clean requires no progress")
+            raise _error(path, "progress", f"{action} requires no progress")
         if row["handoff"]:
-            raise _error(path, "handoff", "round_complete_clean requires no handoff")
+            raise _error(path, "handoff", f"{action} requires no handoff")
     if row["handoff"] and row["action"] != "round_complete_handoff":
         raise _error(path, "action", "handoff requires round_complete_handoff action")
     if row["action"] == "round_complete_handoff" and not row["handoff"]:

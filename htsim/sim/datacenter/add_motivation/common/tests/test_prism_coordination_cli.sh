@@ -52,12 +52,20 @@ with Path(f"{prefix}.coordination.csv").open(newline="", encoding="utf-8") as st
     rows = list(reader)
 
 assert fieldnames is not None
-terminal_actions = {"round_complete_progress", "round_complete_handoff"}
+terminal_actions = {
+    "round_complete_progress",
+    "round_complete_handoff",
+    "round_complete_retry",
+}
 for index, row in enumerate(rows):
     if row["action"] not in terminal_actions:
         continue
     if row["action"] == "round_complete_progress":
         assert row["progress"] == "1"
+    if row["action"] == "round_complete_retry":
+        assert row["refresh_complete"] == "1"
+        assert row["progress"] == "0"
+        assert row["handoff"] == "0"
     if row["action"] != "round_complete_handoff":
         continue
     assert row["refresh_complete"] == "1"

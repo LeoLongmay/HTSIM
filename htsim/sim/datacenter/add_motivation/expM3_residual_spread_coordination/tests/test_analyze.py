@@ -70,6 +70,7 @@ def _set_manifest_degraded_links(root, scenario, mode, *, section, degraded_link
 
 def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                   refresh_complete=True, recycled=False, progress=True,
+                  retry=False,
                   coordination_recycle=False, throttled_bytes=100, healthy_bytes=900,
                   foreground_flows=2, completed_spread_ps=6_000_000,
                   pathmap_resolution="resolved", duplicate_pathmap=False,
@@ -142,16 +143,18 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                 progress=0, handoff=0, cwnd_bytes=12000, control_state="hold",
             ))
             terminal_event_seq = 14
-        action = "round_complete_handoff" if handoff else "round_complete_progress"
+        action = "round_complete_retry" if retry else (
+            "round_complete_handoff" if handoff else "round_complete_progress"
+        )
         coordination_rows.append(_row(
             "coordination", **run_id_values, event_seq=terminal_event_seq,
             time_ps=coordination_time_ps, flow_id=1, epoch_id=coordination_epoch_id,
             round_id=1, cache_slot=4294967295, cache_generation=18446744073709551615,
             floor_ps=2_000_000, spread_ps=completed_spread_ps, spread_ref_ps=8_000_000,
             residual_ps=0, action=action,
-            reason="spread_not_reduced" if handoff else "spread_reduced",
-            refresh_complete=int(refresh_complete), progress=int(progress and not handoff),
-            handoff=int(handoff), cwnd_bytes=12000,
+            reason="refresh_retry" if retry else ("spread_not_reduced" if handoff else "spread_reduced"),
+            refresh_complete=int(refresh_complete), progress=int(progress and not handoff and not retry),
+            handoff=int(handoff and not retry), cwnd_bytes=12000,
             control_state="decrease" if handoff else "hold",
         ))
     elif replacement_chain:
@@ -201,16 +204,18 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                 ))
                 if replacement_chain != "admission_after_terminal":
                     terminal_event_seq += 1
-        action = "round_complete_handoff" if handoff else "round_complete_progress"
+        action = "round_complete_retry" if retry else (
+            "round_complete_handoff" if handoff else "round_complete_progress"
+        )
         coordination_rows.append(_row(
             "coordination", **run_id_values, event_seq=terminal_event_seq,
             time_ps=coordination_time_ps, flow_id=1, epoch_id=coordination_epoch_id,
             round_id=1, cache_slot=4294967295, cache_generation=18446744073709551615,
             floor_ps=2_000_000, spread_ps=completed_spread_ps, spread_ref_ps=8_000_000,
             residual_ps=0, action=action,
-            reason="spread_not_reduced" if handoff else "spread_reduced",
-            refresh_complete=int(refresh_complete), progress=int(progress and not handoff),
-            handoff=int(handoff), cwnd_bytes=12000,
+            reason="refresh_retry" if retry else ("spread_not_reduced" if handoff else "spread_reduced"),
+            refresh_complete=int(refresh_complete), progress=int(progress and not handoff and not retry),
+            handoff=int(handoff and not retry), cwnd_bytes=12000,
             control_state="decrease" if handoff else "hold",
         ))
     _write_csv(prefix.with_suffix(".ack.csv"), "ack", ack_rows)
@@ -253,15 +258,21 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
              rate_gbps=100, reduced_speed=0),
     ])
     if not replacement_chain and not clean_scan and emit_terminal:
-        action = "invalidate" if coordination_recycle else ("round_complete_handoff" if handoff else "round_complete_progress")
+        action = "invalidate" if coordination_recycle else (
+            "round_complete_retry" if retry else (
+                "round_complete_handoff" if handoff else "round_complete_progress"
+            )
+        )
         coordination_rows.append(_row(
             "coordination", **run_id_values, event_seq=coordination_event_seq, time_ps=coordination_time_ps,
             flow_id=1, epoch_id=coordination_epoch_id, round_id=1, cache_slot=4294967295,
             cache_generation=18446744073709551615, floor_ps=2_000_000,
             spread_ps=completed_spread_ps, spread_ref_ps=8_000_000, residual_ps=0,
-            action=action, reason="slot_high_residual" if coordination_recycle else ("spread_not_reduced" if handoff else "spread_reduced"),
-            refresh_complete=int(refresh_complete and not coordination_recycle), progress=int(progress and not handoff and not coordination_recycle),
-            handoff=int(handoff and not coordination_recycle), cwnd_bytes=12000,
+            action=action, reason="slot_high_residual" if coordination_recycle else (
+                "refresh_retry" if retry else ("spread_not_reduced" if handoff else "spread_reduced")
+            ),
+            refresh_complete=int(refresh_complete and not coordination_recycle), progress=int(progress and not handoff and not retry and not coordination_recycle),
+            handoff=int(handoff and not retry and not coordination_recycle), cwnd_bytes=12000,
             control_state="decrease" if handoff else "hold",
         ))
     _write_csv(
@@ -737,6 +748,28 @@ class AnalyzeTests(unittest.TestCase):
 
             terminal = results["rounds"][0]
             self.assertTrue(terminal["replacement_chain_complete"])
+
+    def test_counts_retry_terminal_with_replacement_evidence_without_progress_or_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_bundle(
+                root,
+                "persistent",
+                "prism_recycle",
+                replacement_chain="complete",
+                retry=True,
+            )
+
+            results = analyze_data(root)
+
+            terminal = results["rounds"][0]
+            metrics = results["per_seed_metrics"][0]
+            self.assertTrue(terminal["replacement_chain_complete"])
+            self.assertFalse(terminal["progress"])
+            self.assertFalse(terminal["handoff"])
+            self.assertEqual(metrics["completed_rounds"], 1)
+            self.assertEqual(metrics["progress_rounds"], 0)
+            self.assertEqual(metrics["handoff_rounds"], 0)
 
     def test_rejects_recoverable_full_prism_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
