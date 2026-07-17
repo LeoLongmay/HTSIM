@@ -358,6 +358,38 @@ class TraceSchemaTests(unittest.TestCase):
                     bundle = loader(prefix)
                     self.assertFalse(bundle.coordination[0]["handoff"])
 
+    def test_allows_round_complete_clean_only_for_clean_terminal_state(self):
+        valid = valid_rows()
+        valid["coordination"][0].update({
+            "action": "round_complete_clean", "refresh_complete": "1",
+            "progress": "0", "handoff": "0",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, valid)
+            for loader in (load_trace, load_trace_compact):
+                with self.subTest(loader=loader.__name__):
+                    self.assertEqual(
+                        loader(prefix).coordination[0]["action"],
+                        "round_complete_clean",
+                    )
+
+        for field in ("refresh_complete", "progress", "handoff"):
+            rows = valid_rows()
+            rows["coordination"][0].update({
+                "action": "round_complete_clean", "refresh_complete": "1",
+                "progress": "0", "handoff": "0",
+            })
+            rows["coordination"][0][field] = "0" if field == "refresh_complete" else "1"
+            with tempfile.TemporaryDirectory() as directory:
+                prefix = write_trace(directory, rows)
+                for loader in (load_trace, load_trace_compact):
+                    with self.subTest(loader=loader.__name__, field=field):
+                        with self.assertRaisesRegex(
+                            TraceValidationError,
+                            r"fixture\.coordination\.csv",
+                        ):
+                            loader(prefix)
+
     def test_rejects_round_complete_handoff_terminal_no_op_without_refresh(self):
         rows = valid_rows()
         rows["coordination"][0].update({
