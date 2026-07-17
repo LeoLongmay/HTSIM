@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import subprocess
 import sys
 from pathlib import Path
@@ -16,14 +17,42 @@ from htsim.sim.datacenter.add_motivation.common.run_case import run_case
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.gen_workload import write_workload
 
 
+SOURCE_NIC_CAPACITY_GBPS = 100.0
+
+
+@dataclasses.dataclass(frozen=True)
+class ScenarioCapacity:
+    foreground_flows: int
+    source_offered_ceiling_gbps: float
+    healthy_capacity_gbps: float
+
+
 SCENARIOS = {
-    "recoverable": {"foreground_flows": 8, "offered_load_gbps": 744.0},
-    "persistent": {"foreground_flows": 12, "offered_load_gbps": 931.0},
+    "recoverable": ScenarioCapacity(6, 600.0, 800.0),
+    "persistent": ScenarioCapacity(12, 1200.0, 800.0),
 }
 MODES = ("original_prism", "prism_recycle", "full_prism")
 SEEDS = (13, 14, 15)
 FORMAL_CONFIG = HERE / "configs" / "formal.csv"
 TOPOLOGY = HERE.parents[1] / "topologies" / "fat_tree_128_1os.topo"
+
+
+def scenario_capacity(scenario: str) -> ScenarioCapacity:
+    try:
+        capacity = SCENARIOS[scenario]
+    except KeyError as exc:
+        raise ValueError("scenario must use a locked M3 scenario") from exc
+    if capacity.source_offered_ceiling_gbps != (
+        capacity.foreground_flows * SOURCE_NIC_CAPACITY_GBPS
+    ):
+        raise ValueError("source offered ceiling must equal one 100 Gbps NIC per flow")
+    if scenario == "recoverable":
+        relation_holds = capacity.source_offered_ceiling_gbps < capacity.healthy_capacity_gbps
+    else:
+        relation_holds = capacity.source_offered_ceiling_gbps > capacity.healthy_capacity_gbps
+    if not relation_holds:
+        raise ValueError(f"{scenario} source offered ceiling has the wrong healthy-capacity relation")
+    return capacity
 
 
 def _formal_rows() -> tuple[dict, ...]:
@@ -44,10 +73,10 @@ def _formal_rows() -> tuple[dict, ...]:
 
 def _run_one(*, phase: str, output: Path, mode: str, scenario: str, seed: int,
              degraded_links: int = 8, degraded_capacity_gbps: float = 25.0) -> None:
-    scenario_config = SCENARIOS[scenario]
+    capacity = scenario_capacity(scenario)
     workload = output / "workloads" / f"{scenario}_s{seed}.cm"
     if not workload.exists():
-        write_workload(workload, foreground_flows=scenario_config["foreground_flows"], seed=seed)
+        write_workload(workload, foreground_flows=capacity.foreground_flows, seed=seed)
     run_id = f"{phase}_{mode}_{scenario}_s{seed}"
     run_case(
         experiment="M3_residual_spread_coordination",
@@ -66,7 +95,9 @@ def _run_one(*, phase: str, output: Path, mode: str, scenario: str, seed: int,
         analysis_config={
             "cell_id": f"m3-{scenario}",
             "scenario": scenario,
-            "foreground_flows": scenario_config["foreground_flows"],
+            "foreground_flows": capacity.foreground_flows,
+            "source_offered_ceiling_gbps": capacity.source_offered_ceiling_gbps,
+            "healthy_capacity_gbps": capacity.healthy_capacity_gbps,
             "degraded_links": degraded_links,
             "degraded_capacity_gbps": degraded_capacity_gbps,
             "seed": seed,

@@ -9,6 +9,12 @@ target-pod traffic matrix. The matrix is shared unchanged by all three modes.
 All runs use PRISM, `reps_actual`, eight degraded links, and 25 Gbps degraded
 capacity. No background traffic, link events, or traffic grids are used.
 
+The target pod has 800 Gbps healthy ingress. Recoverable traffic uses six
+distinct 100 Gbps source NICs (a 600 Gbps source-NIC ceiling), strictly below
+that capacity; persistent traffic uses twelve distinct source NICs (a 1200 Gbps
+source-NIC ceiling), strictly above it. These are source-NIC ceilings, not
+configured application offered rates.
+
 Run the six-trial smoke reproduction:
 
 ```bash
