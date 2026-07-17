@@ -204,6 +204,8 @@ def _validate_coordination_row(path: Path, row: dict) -> None:
         raise _error(path, "handoff", "round_complete_handoff action requires handoff")
     if row["action"] == "round_complete_progress" and not row["progress"]:
         raise _error(path, "progress", "round_complete_progress action requires progress")
+    if row["progress"] and row["action"] != "round_complete_progress":
+        raise _error(path, "action", "progress requires round_complete_progress action")
 
 
 def _load_file(prefix: Path, kind: str) -> tuple[dict, ...]:

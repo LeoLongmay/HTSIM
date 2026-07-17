@@ -319,6 +319,17 @@ class TraceSchemaTests(unittest.TestCase):
             ):
                 load_trace(prefix)
 
+    def test_rejects_progress_without_round_complete_progress_action(self):
+        rows = valid_rows()
+        rows["coordination"][0].update({"action": "retain", "progress": "1"})
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.coordination\.csv.*action",
+            ):
+                load_trace(prefix)
+
     def test_rejects_wrong_schema_version_with_filename_and_key(self):
         rows = valid_rows()
         rows["ack"][0]["schema_version"] = "1"
