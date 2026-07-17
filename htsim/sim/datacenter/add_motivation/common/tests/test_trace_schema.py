@@ -293,16 +293,44 @@ class TraceSchemaTests(unittest.TestCase):
             ):
                 load_trace(prefix)
 
-    def test_rejects_round_complete_handoff_without_handoff(self):
+    def test_allows_round_complete_handoff_terminal_no_op(self):
         rows = valid_rows()
         rows["coordination"][0].update({
             "action": "round_complete_handoff", "handoff": "0",
+            "refresh_complete": "1", "progress": "0", "cwnd_bytes": "1000",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            for loader in (load_trace, load_trace_compact):
+                with self.subTest(loader=loader.__name__):
+                    bundle = loader(prefix)
+                    self.assertFalse(bundle.coordination[0]["handoff"])
+
+    def test_rejects_round_complete_handoff_terminal_no_op_without_refresh(self):
+        rows = valid_rows()
+        rows["coordination"][0].update({
+            "action": "round_complete_handoff", "handoff": "0",
+            "refresh_complete": "0", "progress": "0",
         })
         with tempfile.TemporaryDirectory() as directory:
             prefix = write_trace(directory, rows)
             with self.assertRaisesRegex(
                 TraceValidationError,
-                r"fixture\.coordination\.csv.*handoff",
+                r"fixture\.coordination\.csv.*refresh_complete",
+            ):
+                load_trace(prefix)
+
+    def test_rejects_round_complete_handoff_terminal_no_op_with_progress(self):
+        rows = valid_rows()
+        rows["coordination"][0].update({
+            "action": "round_complete_handoff", "handoff": "0",
+            "refresh_complete": "1", "progress": "1",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            with self.assertRaisesRegex(
+                TraceValidationError,
+                r"fixture\.coordination\.csv.*progress",
             ):
                 load_trace(prefix)
 

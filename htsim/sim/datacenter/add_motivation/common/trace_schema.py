@@ -201,7 +201,16 @@ def _validate_coordination_row(path: Path, row: dict) -> None:
     if row["handoff"] and row["action"] != "round_complete_handoff":
         raise _error(path, "action", "handoff requires round_complete_handoff action")
     if row["action"] == "round_complete_handoff" and not row["handoff"]:
-        raise _error(path, "handoff", "round_complete_handoff action requires handoff")
+        if not row["refresh_complete"]:
+            raise _error(
+                path, "refresh_complete",
+                "no-op round_complete_handoff requires completed refresh",
+            )
+        if row["progress"]:
+            raise _error(
+                path, "progress",
+                "no-op round_complete_handoff requires no progress",
+            )
     if row["action"] == "round_complete_progress" and not row["progress"]:
         raise _error(path, "progress", "round_complete_progress action requires progress")
     if row["progress"] and row["action"] != "round_complete_progress":
