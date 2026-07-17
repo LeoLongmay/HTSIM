@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import dataclasses
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -55,6 +56,20 @@ def scenario_capacity(scenario: str) -> ScenarioCapacity:
     return capacity
 
 
+def add_workload_capacity(manifest_path: Path, capacity: ScenarioCapacity) -> None:
+    manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+    manifest["workload_capacity"] = {
+        "foreground_flows": capacity.foreground_flows,
+        "source_nic_capacity_gbps": SOURCE_NIC_CAPACITY_GBPS,
+        "source_offered_ceiling_gbps": capacity.source_offered_ceiling_gbps,
+        "healthy_capacity_gbps": capacity.healthy_capacity_gbps,
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n",
+        encoding="ascii",
+    )
+
+
 def _formal_rows() -> tuple[dict, ...]:
     with FORMAL_CONFIG.open(newline="", encoding="ascii") as stream:
         rows = tuple(csv.DictReader(stream))
@@ -78,7 +93,7 @@ def _run_one(*, phase: str, output: Path, mode: str, scenario: str, seed: int,
     if not workload.exists():
         write_workload(workload, foreground_flows=capacity.foreground_flows, seed=seed)
     run_id = f"{phase}_{mode}_{scenario}_s{seed}"
-    run_case(
+    manifest_path = run_case(
         experiment="M3_residual_spread_coordination",
         phase=phase,
         run_id=run_id,
@@ -96,13 +111,12 @@ def _run_one(*, phase: str, output: Path, mode: str, scenario: str, seed: int,
             "cell_id": f"m3-{scenario}",
             "scenario": scenario,
             "foreground_flows": capacity.foreground_flows,
-            "source_offered_ceiling_gbps": capacity.source_offered_ceiling_gbps,
-            "healthy_capacity_gbps": capacity.healthy_capacity_gbps,
             "degraded_links": degraded_links,
             "degraded_capacity_gbps": degraded_capacity_gbps,
             "seed": seed,
         },
     )
+    add_workload_capacity(manifest_path, capacity)
     print(run_id)
 
 
