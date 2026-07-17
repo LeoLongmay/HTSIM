@@ -208,9 +208,16 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
     if load_balancing_algo not in VALID_LOAD_BALANCERS:
         raise ValueError(f"load_balancing_algo must be one of {sorted(VALID_LOAD_BALANCERS)}")
     if prism_coordination_mode not in {
-        "disabled", "original_prism", "prism_recycle", "full_prism",
+        "disabled", "original_prism", "prism_recycle", "full_prism", "outcome_recycle",
     }:
         raise ValueError("invalid prism_coordination_mode")
+    if prism_coordination_mode == "outcome_recycle" and cc != "prism":
+        raise ValueError("outcome_recycle requires cc='prism'")
+    if (
+        prism_coordination_mode == "outcome_recycle"
+        and load_balancing_algo != "reps_actual"
+    ):
+        raise ValueError("outcome_recycle requires load_balancing_algo='reps_actual'")
     if type(motivation_residual_recycle) is not bool:
         raise TypeError("motivation_residual_recycle must be boolean")
     if isinstance(motivation_residual_threshold_us, bool) or not isinstance(
@@ -491,7 +498,10 @@ def main(argv=None):
     parser.add_argument("--motivation-residual-threshold-us", type=float, default=10.0)
     parser.add_argument(
         "--prism-coordination-mode",
-        choices=("disabled", "original_prism", "prism_recycle", "full_prism"),
+        choices=(
+            "disabled", "original_prism", "prism_recycle", "full_prism",
+            "outcome_recycle",
+        ),
         default="disabled",
     )
     parser.add_argument("--m2-cell-id")

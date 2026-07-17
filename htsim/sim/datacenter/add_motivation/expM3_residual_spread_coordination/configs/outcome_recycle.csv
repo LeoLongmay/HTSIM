@@ -1,0 +1,7 @@
+mode,scenario,seed,degraded_links,degraded_capacity_gbps
+prism_recycle,recoverable,13,2,25
+outcome_recycle,recoverable,13,2,25
+prism_recycle,recoverable,14,2,25
+outcome_recycle,recoverable,14,2,25
+prism_recycle,recoverable,15,2,25
+outcome_recycle,recoverable,15,2,25

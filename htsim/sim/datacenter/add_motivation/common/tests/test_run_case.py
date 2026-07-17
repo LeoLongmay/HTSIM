@@ -26,7 +26,7 @@ TRACE_HEADERS = {
     "token": (
         "schema_version", "run_id", "event_seq", "time_ps", "flow_id", "operation",
         "reason", "token_id", "entropy", "queue_depth_before", "queue_depth_after",
-        "related_ack_event_seq",
+        "related_ack_event_seq", "cache_slot", "cache_generation", "admission_written",
     ),
     "epoch": (
         "schema_version", "run_id", "event_seq", "flow_id", "epoch_id", "start_ps",
@@ -281,6 +281,30 @@ class RunCaseTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "invalid prism_coordination_mode"):
                 self.invoke(module, prism_coordination_mode="unknown")
         run.assert_not_called()
+
+    def test_outcome_recycle_requires_prism_and_reps_actual(self):
+        module = load_run_case_module()
+        with mock.patch.object(module.subprocess, "run", side_effect=self.completed) as run:
+            manifest_path = self.invoke(
+                module,
+                cc="prism",
+                load_balancing_algo="reps_actual",
+                prism_coordination_mode="outcome_recycle",
+            )
+
+        argv = run.call_args_list[-1].args[0]
+        self.assertEqual(argv[argv.index("-prism_coordination_mode") + 1], "outcome_recycle")
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+        self.assertEqual(manifest["config"]["prism_coordination_mode"], "outcome_recycle")
+
+        for overrides in (
+            {"cc": "nscc", "load_balancing_algo": "reps_actual"},
+            {"cc": "prism", "load_balancing_algo": "reps"},
+        ):
+            with self.subTest(overrides=overrides), mock.patch.object(module.subprocess, "run") as run:
+                with self.assertRaisesRegex(ValueError, "outcome_recycle requires"):
+                    self.invoke(module, prism_coordination_mode="outcome_recycle", **overrides)
+                run.assert_not_called()
 
     def test_m2_rejects_missing_fields_and_seed_mismatch_before_running(self):
         module = load_run_case_module()

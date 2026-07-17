@@ -331,6 +331,8 @@ int main(int argc, char **argv) {
                 prism_coordination_mode = PrismCoordinationMode::PRISM_RECYCLE;
             } else if (!strcmp(argv[i + 1], "full_prism")) {
                 prism_coordination_mode = PrismCoordinationMode::FULL_PRISM;
+            } else if (!strcmp(argv[i + 1], "outcome_recycle")) {
+                prism_coordination_mode = PrismCoordinationMode::OUTCOME_RECYCLE;
             } else {
                 cerr << "invalid -prism_coordination_mode value " << argv[i + 1] << endl;
                 return 1;
