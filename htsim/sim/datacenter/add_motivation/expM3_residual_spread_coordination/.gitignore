@@ -1,0 +1,5 @@
+data/
+__pycache__/
+tests/__pycache__/
+figs/*.pdf
+figs/*.png
