@@ -18,6 +18,12 @@ from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.anal
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination import (
     make_distribution_fig,
 )
+from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination import (
+    analyze_refresh_outcomes as refresh_outcome_analysis,
+)
+from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination import (
+    make_refresh_outcome_fig,
+)
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.tests.test_analyze import (
     _row,
     _write_bundle,
@@ -670,6 +676,127 @@ class DistributionFigureTests(unittest.TestCase):
 
             self.assertTrue((root / "figs" / "distribution.png").is_file())
             self.assertTrue((root / "figs" / "distribution.pdf").is_file())
+
+
+class RefreshOutcomeAnalysisTests(unittest.TestCase):
+    def _write_outcome_windows(self, prefix, *, complete_post2):
+        with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
+            rows = list(csv.DictReader(stream))
+        by_event_seq = {int(row["event_seq"]): row for row in rows}
+        by_event_seq[9]["newly_acked_bytes"] = "900"
+        by_event_seq[10]["newly_acked_bytes"] = "100"
+        by_event_seq[21]["newly_acked_bytes"] = "100"
+        by_event_seq[22]["newly_acked_bytes"] = "100"
+        if complete_post2:
+            rows.extend((
+                _row(
+                    "ack", run_id="fixture_recoverable_prism_recycle_s13", seed=13,
+                    scenario=TRACE_SCENARIO, event_seq=24, time_ps=2_270_000_000,
+                    flow_id=1, epoch_id=2, acked_psn=5, entropy=0, physical_path_id=10,
+                    raw_rtt_ps=18_000_000, base_rtt_ps=BASE_RTT_PS, qdelay_ps=4_000_000,
+                    ecn=0, genuine_sample=1, retransmitted=0, selection_source="fresh",
+                    newly_acked_bytes=20, new_data_bytes_sent_total=300, cwnd_bytes=12_000,
+                ),
+                _row(
+                    "ack", run_id="fixture_recoverable_prism_recycle_s13", seed=13,
+                    scenario=TRACE_SCENARIO, event_seq=25, time_ps=2_280_000_000,
+                    flow_id=2, epoch_id=2, acked_psn=5, entropy=0, physical_path_id=20,
+                    raw_rtt_ps=16_000_000, base_rtt_ps=BASE_RTT_PS, qdelay_ps=2_000_000,
+                    ecn=0, genuine_sample=1, retransmitted=0, selection_source="fresh",
+                    newly_acked_bytes=80, new_data_bytes_sent_total=1_400, cwnd_bytes=13_000,
+                ),
+                _row(
+                    "ack", run_id="fixture_recoverable_prism_recycle_s13", seed=13,
+                    scenario=TRACE_SCENARIO, event_seq=26, time_ps=2_312_000_000,
+                    flow_id=2, epoch_id=2, acked_psn=6, entropy=0, physical_path_id=20,
+                    raw_rtt_ps=16_000_000, base_rtt_ps=BASE_RTT_PS, qdelay_ps=2_000_000,
+                    ecn=0, genuine_sample=1, retransmitted=0, selection_source="fresh",
+                    newly_acked_bytes=0, new_data_bytes_sent_total=1_400, cwnd_bytes=13_000,
+                ),
+            ))
+        _write_csv(prefix.with_suffix(".ack.csv"), "ack", rows)
+
+    def test_measures_three_complete_refresh_windows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = _write_locked_distribution_matrix(root)
+            self._write_outcome_windows(prefix, complete_post2=True)
+
+            result = refresh_outcome_analysis.analyze_refresh_outcomes(root, root / "aggregate")
+            rows = _read_csv(root / "aggregate" / "refresh_outcomes.csv")
+
+        self.assertEqual(len(result["refresh_outcomes"]), len(rows))
+        row = next(row for row in rows if row["run_id"] == "fixture_recoverable_prism_recycle_s13")
+        self.assertEqual(row["window_width_ps"], "56000000")
+        self.assertEqual(row["pre_throttled_ratio"], "0.9")
+        self.assertEqual(row["post1_throttled_ratio"], "0.5")
+        self.assertEqual(row["post2_throttled_ratio"], "0.2")
+        self.assertLess(float(row["pre_to_post1_throttled_ratio_change"]), 0)
+        self.assertLess(float(row["pre_to_post2_throttled_ratio_change"]), 0)
+        self.assertEqual(row["sustained_decrease"], "1")
+
+    def test_blanks_partial_post2_refresh_outcome(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = _write_locked_distribution_matrix(root)
+            self._write_outcome_windows(prefix, complete_post2=False)
+
+            refresh_outcome_analysis.analyze_refresh_outcomes(root, root / "aggregate")
+            rows = _read_csv(root / "aggregate" / "refresh_outcomes.csv")
+
+        row = next(row for row in rows if row["run_id"] == "fixture_recoverable_prism_recycle_s13")
+        self.assertEqual(row["post2_complete"], "0")
+        self.assertEqual(row["post2_throttled_ratio"], "")
+        self.assertEqual(row["sustained_decrease"], "")
+
+
+class RefreshOutcomeFigureTests(unittest.TestCase):
+    def test_renders_pdf_and_png_from_minimal_refresh_outcome_csvs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            aggregate = root / "aggregate"
+            aggregate.mkdir()
+            outcome_fields = (
+                "scenario", "pre_complete", "post1_complete", "post2_complete",
+                "pre_throttled_ratio", "post1_throttled_ratio", "post2_throttled_ratio",
+            )
+            with (aggregate / "refresh_outcomes.csv").open("w", newline="", encoding="ascii") as stream:
+                writer = csv.DictWriter(stream, fieldnames=outcome_fields)
+                writer.writeheader()
+                for scenario in SCENARIOS:
+                    writer.writerow({
+                        "scenario": scenario,
+                        "pre_complete": "1",
+                        "post1_complete": "1",
+                        "post2_complete": "1",
+                        "pre_throttled_ratio": "0.9",
+                        "post1_throttled_ratio": "0.5",
+                        "post2_throttled_ratio": "0.2",
+                    })
+            summary_fields = (
+                "scenario", "seed", "complete_outcome_count",
+                "mean_pre_throttled_ratio", "mean_post1_throttled_ratio",
+                "mean_post2_throttled_ratio",
+            )
+            with (aggregate / "refresh_outcome_summary.csv").open(
+                "w", newline="", encoding="ascii"
+            ) as stream:
+                writer = csv.DictWriter(stream, fieldnames=summary_fields)
+                writer.writeheader()
+                for scenario in SCENARIOS:
+                    writer.writerow({
+                        "scenario": scenario,
+                        "seed": "13",
+                        "complete_outcome_count": "1",
+                        "mean_pre_throttled_ratio": "0.9",
+                        "mean_post1_throttled_ratio": "0.5",
+                        "mean_post2_throttled_ratio": "0.2",
+                    })
+
+            make_refresh_outcome_fig.render_refresh_outcome_figure(aggregate, root / "figs")
+
+            self.assertGreater((root / "figs" / "refresh_outcomes.png").stat().st_size, 0)
+            self.assertGreater((root / "figs" / "refresh_outcomes.pdf").stat().st_size, 0)
 
 
 if __name__ == "__main__":
