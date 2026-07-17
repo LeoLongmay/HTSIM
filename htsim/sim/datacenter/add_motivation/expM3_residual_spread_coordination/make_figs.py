@@ -22,6 +22,9 @@ import matplotlib.pyplot as plt
 
 COLORS = {"original_prism": "#4c78a8", "prism_recycle": "#f58518", "full_prism": "#54a24b"}
 LABELS = {"original_prism": "original", "prism_recycle": "recycle", "full_prism": "full PRISM"}
+EPOCH_SERIES_FIELDS = {
+    "scenario", "mode", "seed", "epoch_index", "floor_ps", "spread_ps", "cwnd_bytes", "hold_fraction",
+}
 
 
 def _read(name: str, required: set[str], *, allow_empty: bool = False) -> list[dict]:
@@ -44,6 +47,23 @@ def _number(row: dict, field: str) -> float:
     return value
 
 
+def _aggregate_epochs(epochs: list[dict], scenario: str, mode: str) -> list[dict]:
+    by_index = defaultdict(list)
+    for row in epochs:
+        if row["scenario"] == scenario and row["mode"] == mode:
+            by_index[int(row["epoch_index"])].append(row)
+    return [
+        {
+            "epoch_index": epoch_index,
+            "floor_ps": sum(_number(row, "floor_ps") for row in rows) / len(rows),
+            "spread_ps": sum(_number(row, "spread_ps") for row in rows) / len(rows),
+            "cwnd_bytes": sum(_number(row, "cwnd_bytes") for row in rows) / len(rows),
+            "hold_fraction": sum(_number(row, "hold_fraction") for row in rows) / len(rows),
+        }
+        for epoch_index, rows in sorted(by_index.items())
+    ]
+
+
 def _render(scenario: str, summaries: list[dict], epochs: list[dict], rounds: list[dict], metrics: list[dict]) -> None:
     scenario_summaries = {row["mode"]: row for row in summaries if row["scenario"] == scenario}
     modes = [mode for mode in COLORS if mode in scenario_summaries]
@@ -61,23 +81,31 @@ def _render(scenario: str, summaries: list[dict], epochs: list[dict], rounds: li
 
     axis = axes[1]
     cwnd_axis = axis.twinx()
+    state_axis = axis.twinx()
+    state_axis.spines["right"].set_position(("axes", 1.22))
     for mode in modes:
-        rows = sorted((row for row in epochs if row["scenario"] == scenario and row["mode"] == mode), key=lambda row: (int(row["seed"]), int(row["epoch_index"])))
+        rows = _aggregate_epochs(epochs, scenario, mode)
         if rows:
-            axis.plot(range(len(rows)), [_number(row, "floor_ps") / 1e6 for row in rows], color=COLORS[mode], linewidth=1.4, label=f"{LABELS[mode]} floor")
-            axis.plot(range(len(rows)), [_number(row, "spread_ps") / 1e6 for row in rows], color=COLORS[mode], linewidth=1.0, linestyle="--", label=f"{LABELS[mode]} spread")
-            cwnd_axis.plot(range(len(rows)), [_number(row, "cwnd_bytes") / 1000 for row in rows], color=COLORS[mode], linewidth=0.9, linestyle=":", label=f"{LABELS[mode]} cwnd")
+            epoch_indices = [row["epoch_index"] for row in rows]
+            axis.plot(epoch_indices, [_number(row, "floor_ps") / 1e6 for row in rows], color=COLORS[mode], linewidth=1.4, label=f"{LABELS[mode]} floor")
+            axis.plot(epoch_indices, [_number(row, "spread_ps") / 1e6 for row in rows], color=COLORS[mode], linewidth=1.0, linestyle="--", label=f"{LABELS[mode]} spread")
+            cwnd_axis.plot(epoch_indices, [_number(row, "cwnd_bytes") / 1000 for row in rows], color=COLORS[mode], linewidth=0.9, linestyle=":", label=f"{LABELS[mode]} cwnd")
+            state_axis.plot(epoch_indices, [_number(row, "hold_fraction") for row in rows], color=COLORS[mode], linewidth=0.9, linestyle="-.", marker="s", markersize=2.5, label=f"{LABELS[mode]} hold share")
         handoffs = [row for row in rounds if row["scenario"] == scenario and row["mode"] == mode and row["handoff"] == "True"]
         if handoffs:
-            axis.scatter([len(rows) - 1], [_number(handoffs[-1], "floor_ps") / 1e6], color=COLORS[mode], marker="x", zorder=3)
-    axis.set_xlabel("epoch index within seed")
+            axis.scatter([int(row["epoch_id"]) for row in handoffs], [_number(row, "floor_ps") / 1e6 for row in handoffs], color=COLORS[mode], marker="x", zorder=3, label=f"{LABELS[mode]} handoff")
+    axis.set_xlabel("epoch index")
     axis.set_ylabel("delay (us)")
     cwnd_axis.set_ylabel("cwnd (KB)")
-    axis.set_title("Floor, spread, control")
+    state_axis.set_ylabel("flow share holding")
+    state_axis.set_ylim(-0.05, 1.05)
+    state_axis.set_yticks((0, 0.5, 1), ("active", "mixed", "holding"))
+    axis.set_title("Aligned floor, spread, and control")
     axis.grid(axis="y", alpha=0.25)
     handles, labels = axis.get_legend_handles_labels()
     cwnd_handles, cwnd_labels = cwnd_axis.get_legend_handles_labels()
-    axis.legend(handles + cwnd_handles, labels + cwnd_labels, frameon=False, fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1))
+    state_handles, state_labels = state_axis.get_legend_handles_labels()
+    axis.legend(handles + cwnd_handles + state_handles, labels + cwnd_labels + state_labels, frameon=False, fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1))
 
     axis = axes[2]
     for mode in modes:
@@ -106,8 +134,8 @@ def _render(scenario: str, summaries: list[dict], epochs: list[dict], rounds: li
 
 def main() -> int:
     summaries = _read("summary.csv", {"scenario", "mode", "mean_healthy_to_throttled_ratio"})
-    epochs = _read("epoch_series.csv", {"scenario", "mode", "seed", "epoch_index", "floor_ps", "spread_ps", "cwnd_bytes"})
-    rounds = _read("rounds.csv", {"scenario", "mode", "handoff", "floor_ps"}, allow_empty=True)
+    epochs = _read("epoch_series.csv", EPOCH_SERIES_FIELDS)
+    rounds = _read("rounds.csv", {"scenario", "mode", "handoff", "epoch_id", "floor_ps"}, allow_empty=True)
     metrics = _read("per_seed_metrics.csv", {"scenario", "mode", "seed", "goodput_gbps", "p99_genuine_qdelay_ps"})
     for scenario in ("recoverable", "persistent"):
         _render(scenario, summaries, epochs, rounds, metrics)

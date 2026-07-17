@@ -3,10 +3,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.analyze import (
     analyze_data,
 )
+from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination import make_figs
 from htsim.sim.datacenter.add_motivation.common.trace_schema import _SCHEMAS
 
 
@@ -28,7 +30,7 @@ def _write_csv(path, kind, rows):
         writer.writerows(rows)
 
 
-def _manifest(run_id, scenario, mode, seed):
+def _manifest(run_id, scenario, mode, seed, foreground_flows):
     return {
         "run_id": run_id,
         "seed": seed,
@@ -43,7 +45,7 @@ def _manifest(run_id, scenario, mode, seed):
         },
         "analysis_config": {
             "scenario": scenario,
-            "foreground_flows": 8 if scenario == "recoverable" else 12,
+            "foreground_flows": foreground_flows,
             "offered_load_gbps": 744.0 if scenario == "recoverable" else 931.0,
             "seed": seed,
         },
@@ -52,7 +54,9 @@ def _manifest(run_id, scenario, mode, seed):
 
 def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                   refresh_complete=True, recycled=False, progress=True,
-                  coordination_recycle=False, throttled_bytes=100, healthy_bytes=900):
+                  coordination_recycle=False, throttled_bytes=100, healthy_bytes=900,
+                  foreground_flows=2, completed_spread_ps=6_000_000,
+                  pathmap_resolution="resolved", duplicate_pathmap=False):
     run_id = f"fixture_{scenario}_{mode}_s{seed}"
     prefix = root / run_id
     run_id_values = {"run_id": run_id}
@@ -95,12 +99,16 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
     _write_csv(prefix.with_suffix(".background.csv"), "background", [])
     _write_csv(prefix.with_suffix(".pathmap.csv"), "pathmap", [
         _row("pathmap", **run_id_values, flow_id=1, entropy=0, physical_path_id=10,
-             resolution_status="resolved", queue_fingerprint="1", bottleneck_rate_gbps=25,
+             resolution_status=pathmap_resolution, queue_fingerprint="1", bottleneck_rate_gbps=25,
              contains_reduced_link=1, ordered_queue_ids="1"),
         _row("pathmap", **run_id_values, flow_id=2, entropy=0, physical_path_id=20,
              resolution_status="resolved", queue_fingerprint="2", bottleneck_rate_gbps=100,
              contains_reduced_link=0, ordered_queue_ids="2"),
-    ])
+    ] + ([
+        _row("pathmap", **run_id_values, flow_id=1, entropy=0, physical_path_id=11,
+             resolution_status="resolved", queue_fingerprint="3", bottleneck_rate_gbps=100,
+             contains_reduced_link=0, ordered_queue_ids="3"),
+    ] if duplicate_pathmap else []))
     _write_csv(prefix.with_suffix(".linkmap.csv"), "linkmap", [
         _row("linkmap", **run_id_values, queue_id=1, queue_name="reduced",
              rate_gbps=25, reduced_speed=1),
@@ -112,14 +120,14 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
         _row("coordination", **run_id_values, event_seq=5, time_ps=2_200_000_000,
              flow_id=1, epoch_id=1, round_id=1, cache_slot=4294967295,
              cache_generation=18446744073709551615, floor_ps=2_000_000,
-             spread_ps=6_000_000, spread_ref_ps=8_000_000, residual_ps=0,
+             spread_ps=completed_spread_ps, spread_ref_ps=8_000_000, residual_ps=0,
              action=action, reason="slot_high_residual" if coordination_recycle else ("spread_not_reduced" if handoff else "spread_reduced"),
              refresh_complete=int(refresh_complete and not coordination_recycle), progress=int(progress and not handoff and not coordination_recycle),
              handoff=int(handoff and not coordination_recycle), cwnd_bytes=12000,
              control_state="decrease" if handoff else "hold"),
     ])
     (root / f"{run_id}.manifest.json").write_text(
-        json.dumps(_manifest(run_id, scenario, mode, seed)), encoding="ascii"
+        json.dumps(_manifest(run_id, scenario, mode, seed, foreground_flows)), encoding="ascii"
     )
 
 
@@ -149,6 +157,34 @@ class AnalyzeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "recoverable full_prism handed off"):
                 analyze_data(root)
 
+    def test_rejects_full_prism_handoff_after_positive_spread_progress(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", full_prism={"handoff": True, "progress": False})
+            with self.assertRaisesRegex(ValueError, "handoff after positive spread progress"):
+                analyze_data(root)
+
+    def test_rejects_missing_manifest_foreground_ack_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", original_prism={"foreground_flows": 3})
+            with self.assertRaisesRegex(ValueError, "foreground ACK coverage"):
+                analyze_data(root)
+
+    def test_rejects_unresolved_pathmap_attribution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", original_prism={"pathmap_resolution": "unresolved"})
+            with self.assertRaisesRegex(ValueError, "unresolved pathmap attribution"):
+                analyze_data(root)
+
+    def test_rejects_duplicate_pathmap_mapping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", original_prism={"duplicate_pathmap": True})
+            with self.assertRaisesRegex(ValueError, "duplicate pathmap mapping"):
+                analyze_data(root)
+
     def test_recoverable_progress_records_positive_spread_change_and_lower_throttled_ratio(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -164,11 +200,41 @@ class AnalyzeTests(unittest.TestCase):
     def test_accepts_persistent_no_progress_then_full_prism_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._all_modes(root, "persistent", full_prism={"handoff": True, "progress": False})
+            self._all_modes(root, "persistent", full_prism={
+                "handoff": True,
+                "progress": False,
+                "completed_spread_ps": 8_000_000,
+            })
             results = analyze_data(root)
             handoff = next(row for row in results["rounds"] if row["mode"] == "full_prism")
             self.assertFalse(handoff["progress"])
             self.assertTrue(handoff["handoff"])
+
+    def test_epoch_aggregation_aligns_seed_rows_by_epoch_index(self):
+        rows = [
+            {"scenario": "persistent", "mode": "full_prism", "seed": "13", "epoch_index": "1", "floor_ps": "2", "spread_ps": "6", "cwnd_bytes": "12000", "hold_fraction": "1"},
+            {"scenario": "persistent", "mode": "full_prism", "seed": "13", "epoch_index": "2", "floor_ps": "4", "spread_ps": "8", "cwnd_bytes": "14000", "hold_fraction": "0"},
+            {"scenario": "persistent", "mode": "full_prism", "seed": "17", "epoch_index": "1", "floor_ps": "6", "spread_ps": "10", "cwnd_bytes": "16000", "hold_fraction": "0"},
+        ]
+
+        aggregate = make_figs._aggregate_epochs(rows, "persistent", "full_prism")
+
+        self.assertEqual([row["epoch_index"] for row in aggregate], [1, 2])
+        self.assertEqual([row["floor_ps"] for row in aggregate], [4.0, 4.0])
+        self.assertEqual(aggregate[0]["hold_fraction"], 0.5)
+
+    def test_epoch_figure_input_requires_control_state_fractions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "epoch_series.csv"
+            path.write_text(
+                "scenario,mode,seed,epoch_index,floor_ps,spread_ps,cwnd_bytes\n"
+                "persistent,full_prism,13,1,2,6,12000\n",
+                encoding="ascii",
+            )
+            with patch.object(make_figs, "AGGREGATE", root):
+                with self.assertRaisesRegex(ValueError, "hold_fraction"):
+                    make_figs._read("epoch_series.csv", make_figs.EPOCH_SERIES_FIELDS)
 
 
 if __name__ == "__main__":

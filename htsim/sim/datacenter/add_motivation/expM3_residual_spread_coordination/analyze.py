@@ -72,13 +72,16 @@ def _load_manifest(manifest_path: Path) -> dict:
     return manifest
 
 
-def _common_window(bundle) -> tuple[int, int]:
+def _common_window(bundle, foreground_flows: int) -> tuple[int, int]:
     by_flow = defaultdict(list)
     for ack in bundle.ack:
         if ack["time_ps"] >= WARMUP_PS:
             by_flow[ack["flow_id"]].append(ack["time_ps"])
-    if not by_flow:
-        raise ValueError(f"{bundle.run_id}: no post-warm-up foreground ACKs")
+    if len(by_flow) != foreground_flows:
+        raise ValueError(
+            f"{bundle.run_id}: foreground ACK coverage has {len(by_flow)} flows; "
+            f"manifest requires {foreground_flows}"
+        )
     end_ps = min(max(times) for times in by_flow.values())
     if end_ps <= WARMUP_PS:
         # A one-sample-per-flow fixture still has a valid window anchored at warm-up.
@@ -86,6 +89,18 @@ def _common_window(bundle) -> tuple[int, int]:
     if end_ps <= WARMUP_PS:
         raise ValueError(f"{bundle.run_id}: nonpositive post-warm-up window")
     return WARMUP_PS, end_ps
+
+
+def _path_attribution(bundle) -> dict[tuple[int, int], bool]:
+    attribution = {}
+    for row in bundle.pathmap:
+        key = (row["flow_id"], row["entropy"])
+        if row["resolution_status"] != "resolved":
+            raise ValueError(f"{bundle.run_id}: unresolved pathmap attribution for {key}")
+        if key in attribution:
+            raise ValueError(f"{bundle.run_id}: duplicate pathmap mapping for {key}")
+        attribution[key] = row["contains_reduced_link"]
+    return attribution
 
 
 def _validate_coordination(bundle, *, scenario: str, mode: str) -> list[dict]:
@@ -98,6 +113,8 @@ def _validate_coordination(bundle, *, scenario: str, mode: str) -> list[dict]:
             raise ValueError(f"{bundle.run_id}: non-full mode handed off")
         if scenario == "recoverable" and mode == "full_prism" and row["handoff"]:
             raise ValueError(f"{bundle.run_id}: recoverable full_prism handed off")
+        if mode == "full_prism" and row["handoff"] and row["spread_ps"] < row["spread_ref_ps"]:
+            raise ValueError(f"{bundle.run_id}: handoff after positive spread progress")
         rounds.append({
             "run_id": bundle.run_id,
             "scenario": scenario,
@@ -125,6 +142,12 @@ def _analyze_bundle(manifest_path: Path) -> tuple[dict, list[dict], list[dict]]:
     mode = config["prism_coordination_mode"]
     scenario = analysis["scenario"]
     seed = int(analysis.get("seed", manifest.get("seed")))
+    try:
+        foreground_flows = int(analysis["foreground_flows"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"{manifest_path}: invalid analysis_config.foreground_flows") from exc
+    if foreground_flows <= 0:
+        raise ValueError(f"{manifest_path}: invalid analysis_config.foreground_flows")
     bundle = load_trace_compact(_trace_prefix(manifest_path))
     if bundle.run_id != manifest.get("run_id"):
         raise ValueError(f"{manifest_path}: manifest and trace run IDs differ")
@@ -133,11 +156,8 @@ def _analyze_bundle(manifest_path: Path) -> tuple[dict, list[dict], list[dict]]:
     if mode == "original_prism" and coordination_recycles:
         raise ValueError(f"{bundle.run_id}: original_prism emitted recycle")
 
-    start_ps, end_ps = _common_window(bundle)
-    path_reduced = {
-        (row["flow_id"], row["entropy"]): row["contains_reduced_link"]
-        for row in bundle.pathmap
-    }
+    start_ps, end_ps = _common_window(bundle, foreground_flows)
+    path_reduced = _path_attribution(bundle)
     healthy_bytes = 0
     throttled_bytes = 0
     foreground_bytes = 0
