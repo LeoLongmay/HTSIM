@@ -3,15 +3,17 @@
 
 from __future__ import annotations
 
+import bisect
 import csv
 import json
 import statistics
 from collections import defaultdict
 from pathlib import Path
 
-from htsim.sim.datacenter.add_motivation.common.trace_schema import load_trace_compact
-from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.analyze import (
-    _replacement_chain_complete,
+from htsim.sim.datacenter.add_motivation.common.trace_schema import (
+    SCHEMA_VERSION,
+    TraceValidationError,
+    _SCHEMAS,
 )
 
 
@@ -45,6 +47,15 @@ SUMMARY_FIELDS = (
     "mean_pre_throttled_ratio", "mean_post_throttled_ratio",
     "mean_throttled_ratio_change",
 )
+_COORDINATION_ACTIONS = frozenset({
+    "retain",
+    "invalidate",
+    "pending",
+    "round_complete_progress",
+    "round_complete_handoff",
+    "round_complete_clean",
+    "round_complete_retry",
+})
 
 
 def _trace_prefix(manifest_path: Path) -> Path:
@@ -87,26 +98,208 @@ def _validate_locked_manifest_set(manifest_paths: list[Path]) -> None:
         )
 
 
-def _resolved_attribution(bundle) -> dict[tuple[int, int], tuple[bool, int]]:
+def _trace_error(path: Path, key: str, detail: str) -> TraceValidationError:
+    return TraceValidationError(f"{path}: {key}: {detail}")
+
+
+def _stream_rows(prefix: Path, kind: str, fields: tuple[str, ...], expected_run_id: str):
+    """Yield validated rows, parsing only the fields this analysis consumes."""
+    path = Path(f"{prefix}.{kind}.csv")
+    schema = dict(_SCHEMAS[kind])
+    expected_header = [name for name, _parser in _SCHEMAS[kind]]
+    parse_fields = tuple(dict.fromkeys(("schema_version", "run_id", *fields)))
+    try:
+        stream = path.open("r", newline="", encoding="utf-8")
+    except OSError as exc:
+        raise _trace_error(path, "file", str(exc)) from exc
+
+    with stream:
+        reader = csv.DictReader(stream)
+        if reader.fieldnames != expected_header:
+            raise _trace_error(
+                path,
+                "header",
+                f"expected {expected_header!r}, got {reader.fieldnames!r}",
+            )
+        previous_event_seq = None
+        for line_number, raw_row in enumerate(reader, start=2):
+            if set(raw_row) != set(expected_header) or any(
+                raw_row[name] is None for name in expected_header
+            ):
+                raise _trace_error(path, "header", f"row {line_number} has missing or extra columns")
+            row = {}
+            for key in parse_fields:
+                value = raw_row[key]
+                try:
+                    row[key] = schema[key](value)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise _trace_error(
+                        path,
+                        key,
+                        f"row {line_number} has invalid value {value!r}",
+                    ) from exc
+            if row["schema_version"] != SCHEMA_VERSION:
+                raise _trace_error(
+                    path,
+                    "schema_version",
+                    f"expected {SCHEMA_VERSION}, got {row['schema_version']}",
+                )
+            if row["run_id"] != expected_run_id:
+                raise _trace_error(
+                    path,
+                    "run_id",
+                    f"expected {expected_run_id!r}, got {row['run_id']!r}",
+                )
+            if "event_seq" in row:
+                event_seq = row["event_seq"]
+                if previous_event_seq is not None and event_seq <= previous_event_seq:
+                    raise _trace_error(
+                        path,
+                        "event_seq",
+                        f"row {line_number} value {event_seq} is not strictly increasing",
+                    )
+                previous_event_seq = event_seq
+            yield row
+
+
+def _load_attribution(prefix: Path, run_id: str) -> dict[tuple[int, int], tuple[bool, int]]:
     attribution = {}
-    for row in bundle.pathmap:
+    for row in _stream_rows(
+        prefix,
+        "pathmap",
+        ("flow_id", "entropy", "physical_path_id", "resolution_status", "contains_reduced_link"),
+        run_id,
+    ):
         key = (row["flow_id"], row["entropy"])
         if row["resolution_status"] != "resolved":
-            raise ValueError(f"{bundle.run_id}: unresolved pathmap attribution for {key}")
+            raise ValueError(f"{run_id}: unresolved pathmap attribution for {key}")
         if key in attribution:
-            raise ValueError(f"{bundle.run_id}: duplicate pathmap mapping for {key}")
+            raise ValueError(f"{run_id}: duplicate pathmap mapping for {key}")
         attribution[key] = (row["contains_reduced_link"], row["physical_path_id"])
     return attribution
 
 
-def _base_rtt_ps(bundle) -> int:
-    values = {ack["base_rtt_ps"] for ack in bundle.ack}
-    if len(values) != 1:
-        raise ValueError(f"{bundle.run_id}: require one identical ACK base RTT per run")
-    value = next(iter(values))
-    if value <= 0:
-        raise ValueError(f"{bundle.run_id}: ACK base RTT must be positive")
-    return value
+def _validate_coordination_row(path: Path, row: dict) -> None:
+    if row["action"] not in _COORDINATION_ACTIONS:
+        raise _trace_error(path, "action", f"unknown coordination action {row['action']!r}")
+    if row["action"] == "invalidate" and row["refresh_complete"]:
+        raise _trace_error(path, "refresh_complete", "invalidate action cannot mark refresh complete")
+    if row["action"] in ("round_complete_clean", "round_complete_retry"):
+        action = row["action"]
+        if not row["refresh_complete"]:
+            raise _trace_error(path, "refresh_complete", f"{action} requires completed refresh")
+        if row["progress"]:
+            raise _trace_error(path, "progress", f"{action} requires no progress")
+        if row["handoff"]:
+            raise _trace_error(path, "handoff", f"{action} requires no handoff")
+    if row["handoff"] and row["action"] != "round_complete_handoff":
+        raise _trace_error(path, "action", "handoff requires round_complete_handoff action")
+    if row["action"] == "round_complete_handoff" and not row["handoff"]:
+        if not row["refresh_complete"]:
+            raise _trace_error(
+                path,
+                "refresh_complete",
+                "no-op round_complete_handoff requires completed refresh",
+            )
+        if row["progress"]:
+            raise _trace_error(
+                path,
+                "progress",
+                "no-op round_complete_handoff requires no progress",
+            )
+    if row["action"] == "round_complete_progress" and not row["progress"]:
+        raise _trace_error(path, "progress", "round_complete_progress action requires progress")
+    if row["progress"] and row["action"] != "round_complete_progress":
+        raise _trace_error(path, "action", "progress requires round_complete_progress action")
+
+
+def _load_coordination(prefix: Path, run_id: str) -> list[dict]:
+    path = Path(f"{prefix}.coordination.csv")
+    records = []
+    for row in _stream_rows(
+        prefix,
+        "coordination",
+        (
+            "event_seq", "time_ps", "flow_id", "round_id", "cache_slot",
+            "cache_generation", "action", "refresh_complete", "progress", "handoff",
+        ),
+        run_id,
+    ):
+        _validate_coordination_row(path, row)
+        if row["action"] == "invalidate" or row["action"] == "retain" or row["action"].startswith("round_complete_"):
+            records.append(row)
+    return records
+
+
+def _chain_specs(records: list[dict], mode: str) -> list[dict]:
+    if mode != "prism_recycle":
+        return []
+    specs = []
+    terminals = [
+        row for row in records
+        if row["action"].startswith("round_complete_") and row["time_ps"] >= WARMUP_PS
+    ]
+    for terminal in terminals:
+        if not terminal["refresh_complete"]:
+            continue
+        terminal_seq = terminal["event_seq"]
+        invalidations_by_identity = {}
+        retains = []
+        for row in records:
+            if not (
+                row["flow_id"] == terminal["flow_id"]
+                and row["round_id"] == terminal["round_id"]
+                and row["event_seq"] < terminal_seq
+            ):
+                continue
+            if row["action"] == "invalidate":
+                identity = (
+                    row["flow_id"], row["round_id"], row["cache_slot"], row["cache_generation"],
+                )
+                invalidations_by_identity.setdefault(identity, row)
+            elif row["action"] == "retain":
+                retains.append(row)
+        invalidations = list(invalidations_by_identity.values())
+        if invalidations:
+            specs.append({
+                "terminal": terminal,
+                "invalidations": invalidations,
+                "retains": retains,
+                "admissions": [],
+            })
+    return specs
+
+
+def _stream_candidate_admissions(prefix: Path, run_id: str, specs: list[dict]) -> None:
+    requirements_by_slot = defaultdict(list)
+    for index, spec in enumerate(specs):
+        for invalidation in spec["invalidations"]:
+            requirements_by_slot[(invalidation["flow_id"], invalidation["cache_slot"])].append(
+                (index, invalidation)
+            )
+    if not requirements_by_slot:
+        return
+    for row in _stream_rows(
+        prefix,
+        "token",
+        (
+            "event_seq", "flow_id", "operation", "related_ack_event_seq", "cache_slot",
+            "cache_generation", "admission_written",
+        ),
+        run_id,
+    ):
+        if row["operation"] not in {"enqueue_good_ack", "overwrite_good_ack"} or not row["admission_written"]:
+            continue
+        matching_specs = set()
+        for index, invalidation in requirements_by_slot.get((row["flow_id"], row["cache_slot"]), ()):
+            terminal = specs[index]["terminal"]
+            if (
+                invalidation["event_seq"] < row["event_seq"] < terminal["event_seq"]
+                and row["cache_generation"] > invalidation["cache_generation"]
+            ):
+                matching_specs.add(index)
+        for index in matching_specs:
+            specs[index]["admissions"].append(row)
 
 
 def _ratio(healthy_bytes: int, throttled_bytes: int) -> float | str:
@@ -114,30 +307,89 @@ def _ratio(healthy_bytes: int, throttled_bytes: int) -> float | str:
     return throttled_bytes / total if total else ""
 
 
-def _window_bytes(acks, start_ps: int, end_ps: int) -> tuple[int, int]:
-    healthy_bytes = 0
-    throttled_bytes = 0
-    for ack, contains_reduced_link in acks:
-        if start_ps <= ack["time_ps"] < end_ps:
-            if contains_reduced_link:
-                throttled_bytes += ack["newly_acked_bytes"]
-            else:
-                healthy_bytes += ack["newly_acked_bytes"]
-    return healthy_bytes, throttled_bytes
+def _stream_ack_aggregates(prefix: Path, run_id: str, attribution, specs: list[dict]):
+    selected_event_seqs = {
+        admission["related_ack_event_seq"]
+        for spec in specs
+        for admission in spec["admissions"]
+    }
+    selected_acks = {}
+    base_rtt_ps = None
+    last_ack_ps = None
+    counts = defaultdict(lambda: [0, 0])
+    for row in _stream_rows(
+        prefix,
+        "ack",
+        (
+            "event_seq", "time_ps", "flow_id", "entropy", "physical_path_id",
+            "base_rtt_ps", "genuine_sample", "ecn", "newly_acked_bytes",
+        ),
+        run_id,
+    ):
+        if base_rtt_ps is None:
+            base_rtt_ps = row["base_rtt_ps"]
+        elif row["base_rtt_ps"] != base_rtt_ps:
+            raise ValueError(f"{run_id}: require one identical ACK base RTT per run")
+        key = (row["flow_id"], row["entropy"])
+        if key not in attribution:
+            raise ValueError(f"{run_id}: ACK lacks pathmap attribution for {key}")
+        contains_reduced_link, physical_path_id = attribution[key]
+        if row["physical_path_id"] != physical_path_id:
+            raise ValueError(
+                f"{run_id}: ACK physical path ID mismatch for {key}: "
+                f"ACK has {row['physical_path_id']}, pathmap has {physical_path_id}"
+            )
+        if row["event_seq"] in selected_event_seqs:
+            selected_acks[row["event_seq"]] = row
+        if row["time_ps"] < WARMUP_PS:
+            continue
+        last_ack_ps = row["time_ps"] if last_ack_ps is None else max(last_ack_ps, row["time_ps"])
+        bin_width_ps = 4 * base_rtt_ps
+        index = (row["time_ps"] - WARMUP_PS) // bin_width_ps
+        counts[index][int(contains_reduced_link)] += row["newly_acked_bytes"]
+    if base_rtt_ps is None or base_rtt_ps <= 0:
+        raise ValueError(f"{run_id}: ACK base RTT must be positive")
+    if last_ack_ps is None:
+        raise ValueError(f"{run_id}: no post-warm-up ACKs")
+    return base_rtt_ps, last_ack_ps, counts, selected_acks
 
 
-def _complete_window(start_ps: int, end_ps: int, last_ack_ps: int) -> bool:
-    return start_ps >= WARMUP_PS and end_ps <= last_ack_ps
+def _replacement_chain_complete(spec: dict, selected_acks: dict) -> bool:
+    terminal = spec["terminal"]
+    terminal_seq = terminal["event_seq"]
+    for invalidation in spec["invalidations"]:
+        for admission in spec["admissions"]:
+            if not (
+                invalidation["event_seq"] < admission["event_seq"] < terminal_seq
+                and admission["flow_id"] == terminal["flow_id"]
+                and admission["cache_slot"] == invalidation["cache_slot"]
+                and admission["cache_generation"] > invalidation["cache_generation"]
+            ):
+                continue
+            ack = selected_acks.get(admission["related_ack_event_seq"])
+            if not (
+                ack
+                and invalidation["event_seq"] < ack["event_seq"] < admission["event_seq"]
+                and ack["flow_id"] == terminal["flow_id"]
+                and ack["genuine_sample"]
+                and not ack["ecn"]
+            ):
+                continue
+            if any(
+                admission["event_seq"] < retain["event_seq"] < terminal_seq
+                and retain["cache_slot"] == admission["cache_slot"]
+                and retain["cache_generation"] == admission["cache_generation"]
+                for retain in spec["retains"]
+            ):
+                break
+        else:
+            return False
+    return True
 
 
 def _distribution_bins(*, run_id: str, scenario: str, mode: str, seed: int,
-                       base_rtt_ps: int, acks) -> list[dict]:
+                       base_rtt_ps: int, last_ack_ps: int, counts) -> list[dict]:
     bin_width_ps = 4 * base_rtt_ps
-    last_ack_ps = max(ack["time_ps"] for ack, _reduced in acks)
-    counts = defaultdict(lambda: [0, 0])
-    for ack, contains_reduced_link in acks:
-        index = (ack["time_ps"] - WARMUP_PS) // bin_width_ps
-        counts[index][int(contains_reduced_link)] += ack["newly_acked_bytes"]
     rows = []
     for index in range((last_ack_ps - WARMUP_PS) // bin_width_ps + 1):
         healthy_bytes, throttled_bytes = counts[index]
@@ -158,29 +410,61 @@ def _distribution_bins(*, run_id: str, scenario: str, mode: str, seed: int,
     return rows
 
 
-def _refresh_effects(*, bundle, run_id: str, scenario: str, mode: str, seed: int,
-                     base_rtt_ps: int, acks) -> list[dict]:
-    if mode != "prism_recycle":
-        return []
+def _stream_effect_windows(prefix: Path, run_id: str, attribution, specs: list[dict],
+                           base_rtt_ps: int) -> None:
+    if not specs:
+        return
     bin_width_ps = 4 * base_rtt_ps
-    last_ack_ps = max(ack["time_ps"] for ack, _reduced in acks)
-    rows = []
-    for terminal in bundle.coordination:
-        if not terminal["action"].startswith("round_complete_"):
+    ordered_specs = sorted(specs, key=lambda spec: spec["terminal"]["time_ps"])
+    terminal_times = [spec["terminal"]["time_ps"] for spec in ordered_specs]
+    for spec in ordered_specs:
+        spec["window_counts"] = [0, 0, 0, 0]
+    for row in _stream_rows(
+        prefix,
+        "ack",
+        ("time_ps", "flow_id", "entropy", "physical_path_id", "newly_acked_bytes"),
+        run_id,
+    ):
+        if row["time_ps"] < WARMUP_PS:
             continue
-        terminal_time_ps = terminal["time_ps"]
-        if terminal_time_ps < WARMUP_PS or not _replacement_chain_complete(bundle, terminal):
-            continue
+        key = (row["flow_id"], row["entropy"])
+        if key not in attribution:
+            raise ValueError(f"{run_id}: ACK lacks pathmap attribution for {key}")
+        contains_reduced_link, physical_path_id = attribution[key]
+        if row["physical_path_id"] != physical_path_id:
+            raise ValueError(
+                f"{run_id}: ACK physical path ID mismatch for {key}: "
+                f"ACK has {row['physical_path_id']}, pathmap has {physical_path_id}"
+            )
+        time_ps = row["time_ps"]
+        byte_count = row["newly_acked_bytes"]
+        value_index = int(contains_reduced_link)
+        for index in range(
+            bisect.bisect_right(terminal_times, time_ps),
+            bisect.bisect_right(terminal_times, time_ps + bin_width_ps),
+        ):
+            ordered_specs[index]["window_counts"][value_index] += byte_count
+        for index in range(
+            bisect.bisect_right(terminal_times, time_ps - bin_width_ps),
+            bisect.bisect_right(terminal_times, time_ps),
+        ):
+            ordered_specs[index]["window_counts"][2 + value_index] += byte_count
 
-        # Effects are terminal-anchored, non-overlapping windows: [t-width, t), [t, t+width).
+
+def _refresh_effects(*, specs: list[dict], run_id: str, scenario: str, mode: str, seed: int,
+                     base_rtt_ps: int, last_ack_ps: int) -> list[dict]:
+    bin_width_ps = 4 * base_rtt_ps
+    rows = []
+    for spec in specs:
+        terminal = spec["terminal"]
+        terminal_time_ps = terminal["time_ps"]
         pre_start_ps = terminal_time_ps - bin_width_ps
         pre_end_ps = terminal_time_ps
         post_start_ps = terminal_time_ps
         post_end_ps = terminal_time_ps + bin_width_ps
-        pre_complete = _complete_window(pre_start_ps, pre_end_ps, last_ack_ps)
-        post_complete = _complete_window(post_start_ps, post_end_ps, last_ack_ps)
-        pre_healthy, pre_throttled = _window_bytes(acks, pre_start_ps, pre_end_ps)
-        post_healthy, post_throttled = _window_bytes(acks, post_start_ps, post_end_ps)
+        pre_complete = pre_start_ps >= WARMUP_PS and pre_end_ps <= last_ack_ps
+        post_complete = post_start_ps >= WARMUP_PS and post_end_ps <= last_ack_ps
+        pre_healthy, pre_throttled, post_healthy, post_throttled = spec["window_counts"]
         pre_ratio = _ratio(pre_healthy, pre_throttled) if pre_complete else ""
         post_ratio = _ratio(post_healthy, post_throttled) if post_complete else ""
         change = post_ratio - pre_ratio if pre_ratio != "" and post_ratio != "" else ""
@@ -217,40 +501,40 @@ def _mean_or_blank(rows: list[dict], field: str) -> float | str:
 
 
 def _analyze_bundle(manifest_path: Path) -> tuple[list[dict], list[dict], dict]:
-    expected_run_id, scenario, seed, mode = _load_manifest(manifest_path)
-    bundle = load_trace_compact(_trace_prefix(manifest_path))
-    if bundle.run_id != expected_run_id:
-        raise ValueError(f"{manifest_path}: manifest and trace run IDs differ")
-    base_rtt_ps = _base_rtt_ps(bundle)
-    attribution = _resolved_attribution(bundle)
-    post_warmup_acks = []
-    for ack in bundle.ack:
-        key = (ack["flow_id"], ack["entropy"])
-        if key not in attribution:
-            raise ValueError(f"{bundle.run_id}: ACK lacks pathmap attribution for {key}")
-        contains_reduced_link, physical_path_id = attribution[key]
-        if ack["physical_path_id"] != physical_path_id:
-            raise ValueError(
-                f"{bundle.run_id}: ACK physical path ID mismatch for {key}: "
-                f"ACK has {ack['physical_path_id']}, pathmap has {physical_path_id}"
-            )
-        if ack["time_ps"] >= WARMUP_PS:
-            post_warmup_acks.append((ack, contains_reduced_link))
-    if not post_warmup_acks:
-        raise ValueError(f"{bundle.run_id}: no post-warm-up ACKs")
-
+    run_id, scenario, seed, mode = _load_manifest(manifest_path)
+    prefix = _trace_prefix(manifest_path)
+    attribution = _load_attribution(prefix, run_id)
+    specs = _chain_specs(_load_coordination(prefix, run_id), mode)
+    _stream_candidate_admissions(prefix, run_id, specs)
+    base_rtt_ps, last_ack_ps, counts, selected_acks = _stream_ack_aggregates(
+        prefix, run_id, attribution, specs
+    )
+    complete_specs = [
+        spec for spec in specs if _replacement_chain_complete(spec, selected_acks)
+    ]
+    _stream_effect_windows(prefix, run_id, attribution, complete_specs, base_rtt_ps)
     bins = _distribution_bins(
-        run_id=bundle.run_id, scenario=scenario, mode=mode, seed=seed,
-        base_rtt_ps=base_rtt_ps, acks=post_warmup_acks,
+        run_id=run_id,
+        scenario=scenario,
+        mode=mode,
+        seed=seed,
+        base_rtt_ps=base_rtt_ps,
+        last_ack_ps=last_ack_ps,
+        counts=counts,
     )
     effects = _refresh_effects(
-        bundle=bundle, run_id=bundle.run_id, scenario=scenario, mode=mode, seed=seed,
-        base_rtt_ps=base_rtt_ps, acks=post_warmup_acks,
+        specs=complete_specs,
+        run_id=run_id,
+        scenario=scenario,
+        mode=mode,
+        seed=seed,
+        base_rtt_ps=base_rtt_ps,
+        last_ack_ps=last_ack_ps,
     )
     healthy_bytes = sum(row["healthy_acked_bytes"] for row in bins)
     throttled_bytes = sum(row["throttled_acked_bytes"] for row in bins)
     summary = {
-        "run_id": bundle.run_id,
+        "run_id": run_id,
         "scenario": scenario,
         "mode": mode,
         "seed": seed,

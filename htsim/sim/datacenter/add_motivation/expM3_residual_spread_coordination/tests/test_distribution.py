@@ -195,6 +195,43 @@ class DistributionRunnerTests(unittest.TestCase):
 
 
 class DistributionAnalysisTests(unittest.TestCase):
+    def test_streams_large_ack_trace_without_full_bundle_loader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = _write_locked_distribution_matrix(root)
+            with prefix.with_suffix(".ack.csv").open(newline="", encoding="ascii") as stream:
+                ack_rows = list(csv.DictReader(stream))
+            for event_seq in range(24, 1_024):
+                ack_rows.append(_row(
+                    "ack", run_id="fixture_recoverable_prism_recycle_s13", seed=13,
+                    scenario="recoverable", event_seq=event_seq,
+                    time_ps=2_300_000_000 + event_seq, flow_id=1, epoch_id=2,
+                    acked_psn=event_seq, entropy=0, physical_path_id=10,
+                    raw_rtt_ps=18_000_000, base_rtt_ps=BASE_RTT_PS,
+                    qdelay_ps=4_000_000, ecn=0, genuine_sample=1,
+                    retransmitted=0, selection_source="fresh", newly_acked_bytes=7,
+                    new_data_bytes_sent_total=7, cwnd_bytes=12_000,
+                ))
+            _write_csv(prefix.with_suffix(".ack.csv"), "ack", ack_rows)
+
+            with patch(
+                "htsim.sim.datacenter.add_motivation."
+                "expM3_residual_spread_coordination.analyze_distribution."
+                "load_trace_compact",
+                side_effect=AssertionError("analyzer must stream trace rows"),
+                create=True,
+            ) as loader:
+                analyze_distribution(root, root / "aggregate")
+                loader.assert_not_called()
+            summary = _read_csv(root / "aggregate" / "summary.csv")
+
+        target = next(
+            row for row in summary
+            if row["run_id"] == "fixture_recoverable_prism_recycle_s13"
+        )
+        self.assertEqual(target["throttled_acked_bytes"], "7180")
+        self.assertEqual(target["healthy_acked_bytes"], "1320")
+
     def test_writes_resolved_post_warmup_bins_and_terminal_anchored_effect(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
