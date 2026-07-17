@@ -110,6 +110,21 @@ void lower_ending_spread_completes_with_progress_without_handoff() {
     assert(has_action(result, PrismCoordinationAction::ROUND_COMPLETE_PROGRESS));
 }
 
+void full_prism_clean_equal_spread_completion_does_not_handoff() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    const auto slots = eight_slots();
+
+    for (uint16_t slot = 0; slot < 8; ++slot) {
+        coordinator.observeAck(1, slot, 1, 3, false, true);
+    }
+    const auto result = coordinator.closeEpoch(hold_epoch(1, 2, 16, slots));
+
+    assert(result.round_complete);
+    assert(!result.progress);
+    assert(!result.handoff_requested);
+    assert(has_action(result, PrismCoordinationAction::ROUND_COMPLETE_CLEAN));
+}
+
 void prism_recycle_never_handoffs() {
     PrismResidualCoordinator coordinator(PrismCoordinationMode::PRISM_RECYCLE, 10, 10);
     const auto slots = four_slots();
@@ -154,7 +169,8 @@ void non_hold_clears_and_frozen_hold_pauses_ordinary_refresh_state() {
     const auto restarted = coordinator.closeEpoch(hold_epoch(3, 2, 15, slots));
     assert(restarted.round_complete);
     assert(!restarted.progress);
-    assert(restarted.handoff_requested);
+    assert(!restarted.handoff_requested);
+    assert(has_action(restarted, PrismCoordinationAction::ROUND_COMPLETE_CLEAN));
 
     PrismResidualCoordinator frozen_coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
     frozen_coordinator.observeAck(1, 0, 1, 2, false, true);
@@ -225,7 +241,8 @@ void completed_physical_slots_survive_reps_freshness_consumption() {
     coordinator.observeAck(2, 7, 1, 3, false, true);
     const auto second = coordinator.closeEpoch(hold_epoch(2, 2, 16, slots));
     assert(second.round_complete);
-    assert(second.handoff_requested);
+    assert(!second.handoff_requested);
+    assert(has_action(second, PrismCoordinationAction::ROUND_COMPLETE_CLEAN));
 }
 
 void ack_validated_consumed_token_completes_a_refresh_round_with_progress() {
@@ -362,6 +379,7 @@ int main() {
     stale_or_pending_slots_do_not_complete_a_round();
     ecn_and_non_genuine_observations_are_not_admitted();
     lower_ending_spread_completes_with_progress_without_handoff();
+    full_prism_clean_equal_spread_completion_does_not_handoff();
     prism_recycle_never_handoffs();
     non_hold_clears_and_frozen_hold_pauses_ordinary_refresh_state();
     late_observation_from_an_older_epoch_is_pending();

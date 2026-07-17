@@ -13,7 +13,8 @@
 
 enum class PrismCoordinationMode { DISABLED, ORIGINAL_PRISM, PRISM_RECYCLE, FULL_PRISM };
 enum class PrismCoordinationAction { RETAIN, INVALIDATE, PENDING,
-                                    ROUND_COMPLETE_PROGRESS, ROUND_COMPLETE_HANDOFF };
+                                    ROUND_COMPLETE_PROGRESS, ROUND_COMPLETE_HANDOFF,
+                                    ROUND_COMPLETE_CLEAN };
 
 struct PrismCoordinationEpoch {
     uint64_t epoch_id;
@@ -91,6 +92,7 @@ private:
     simtime_picosec _t_cc;
     simtime_picosec _t_spray;
     bool _round_active = false;
+    bool _round_had_invalidation = false;
     uint64_t _round_id = 0;
     simtime_picosec _spread_ref = 0;
     std::set<uint16_t> _round_slots;

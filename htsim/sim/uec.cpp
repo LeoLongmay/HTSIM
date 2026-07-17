@@ -68,6 +68,7 @@ const char* motivationCoordinationActionName(PrismCoordinationAction action) {
     case PrismCoordinationAction::PENDING: return "pending";
     case PrismCoordinationAction::ROUND_COMPLETE_PROGRESS: return "round_complete_progress";
     case PrismCoordinationAction::ROUND_COMPLETE_HANDOFF: return "round_complete_handoff";
+    case PrismCoordinationAction::ROUND_COMPLETE_CLEAN: return "round_complete_clean";
     }
     return "unknown";
 }
@@ -2323,7 +2324,8 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         if (_motivation_trace_writer.enabledFor(flowId())) {
             for (PrismCoordinationAction action : coordination_result.actions) {
                 if (action != PrismCoordinationAction::ROUND_COMPLETE_PROGRESS &&
-                    action != PrismCoordinationAction::ROUND_COMPLETE_HANDOFF) {
+                    action != PrismCoordinationAction::ROUND_COMPLETE_HANDOFF &&
+                    action != PrismCoordinationAction::ROUND_COMPLETE_CLEAN) {
                     continue;
                 }
                 _motivation_trace_writer.logCoordination({

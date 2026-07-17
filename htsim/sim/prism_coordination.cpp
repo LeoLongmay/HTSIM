@@ -81,6 +81,7 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
             if (observation->second.ecn) {
                 _completed_slots.erase(slot.slot);
                 _invalidated_generations[slot.slot] = slot.generation;
+                _round_had_invalidation = true;
                 addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
                               "ecn_marked");
                 continue;
@@ -88,6 +89,7 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
             if (residual >= _t_spray) {
                 _completed_slots.erase(slot.slot);
                 _invalidated_generations[slot.slot] = slot.generation;
+                _round_had_invalidation = true;
                 addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
                               "residual_threshold");
                 continue;
@@ -132,9 +134,11 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
     result.progress = epoch.spread < _spread_ref;
     if (result.progress) {
         result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_PROGRESS);
-    } else if (_mode == PrismCoordinationMode::FULL_PRISM) {
+    } else if (_round_had_invalidation && _mode == PrismCoordinationMode::FULL_PRISM) {
         result.handoff_requested = true;
         result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_HANDOFF);
+    } else {
+        result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_CLEAN);
     }
 
     resetRound();
@@ -148,6 +152,7 @@ bool PrismResidualCoordinator::enabled() const {
 
 void PrismResidualCoordinator::resetRound() {
     _round_active = false;
+    _round_had_invalidation = false;
     _spread_ref = 0;
     _round_slots.clear();
     _completed_slots.clear();
@@ -173,6 +178,7 @@ void PrismResidualCoordinator::addSlotAction(PrismCoordinationResult& result,
         break;
     case PrismCoordinationAction::ROUND_COMPLETE_PROGRESS:
     case PrismCoordinationAction::ROUND_COMPLETE_HANDOFF:
+    case PrismCoordinationAction::ROUND_COMPLETE_CLEAN:
         break;
     }
 }
