@@ -40,12 +40,23 @@ CSVs. The retained figures are
 Every trial fixes the same capacity relation: eight degraded links at 25 Gbps,
 against the 100 Gbps normal-link capacity.
 
-Verifier status: `python3 analyze.py --verify-only` is currently rejected
-because this analyzer does not implement that option. It therefore emits neither
-`supported` nor `not_supported`; this run is **not verified** by the required
-causal-status interface, and no support claim is made by selecting individual
-seeds. M3 is a mechanism-validation experiment, not a substitute for a full
-performance evaluation.
+The aggregate-only causal verifier was run without selecting individual seeds:
+
+```bash
+python3 htsim/sim/datacenter/add_motivation/expM3_residual_spread_coordination/analyze.py --verify-only
+```
+
+It emitted:
+
+```text
+not_supported: every recoverable/full_prism seed has a completed progress round
+```
+
+The fixed 18-run matrix is complete, but `rounds.csv` is header-only, so the
+required all-seed recoverable progress evidence is absent. This result means the
+current small setup did not demonstrate the coordination mechanism; it is not a
+claim about full PRISM performance evaluation. M3 remains a mechanism-validation
+experiment, not a substitute for a full performance evaluation.
 
 Remove generated traces and aggregate data while retaining local figures:
 

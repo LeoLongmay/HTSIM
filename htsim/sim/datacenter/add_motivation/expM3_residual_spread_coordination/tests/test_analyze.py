@@ -1,12 +1,16 @@
 import csv
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.analyze import (
+    TABLE_FIELDS,
     analyze_data,
+    main,
 )
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination import make_figs
 from htsim.sim.datacenter.add_motivation.common.trace_schema import _SCHEMAS
@@ -140,6 +144,139 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
 
 
 class AnalyzeTests(unittest.TestCase):
+    def _supported_verifier_rows(self):
+        metrics = []
+        rounds = []
+        for scenario in ("recoverable", "persistent"):
+            for mode in MODES:
+                for seed in (13, 14, 15):
+                    metrics.append({
+                        "run_id": f"formal_{scenario}_{mode}_s{seed}",
+                        "scenario": scenario,
+                        "mode": mode,
+                        "seed": seed,
+                        "throttled_traffic_ratio": 0.1 if (scenario, mode) == ("recoverable", "full_prism") else 0.2,
+                    })
+        for seed in (13, 14, 15):
+            rounds.append({
+                "run_id": f"formal_recoverable_full_prism_s{seed}",
+                "scenario": "recoverable",
+                "mode": "full_prism",
+                "seed": seed,
+                "round_index": 1,
+                "progress": 1,
+                "handoff": 0,
+            })
+            rounds.append({
+                "run_id": f"formal_persistent_full_prism_s{seed}",
+                "scenario": "persistent",
+                "mode": "full_prism",
+                "seed": seed,
+                "round_index": 1,
+                "progress": 0,
+                "handoff": 1,
+            })
+        return metrics, rounds
+
+    def _write_verifier_aggregate(self, root, metrics, rounds):
+        aggregate = root / "aggregate"
+        aggregate.mkdir()
+        for name, rows in (("per_seed_metrics", metrics), ("rounds", rounds)):
+            with (aggregate / f"{name}.csv").open("w", newline="", encoding="ascii") as stream:
+                writer = csv.DictWriter(stream, fieldnames=TABLE_FIELDS[name], lineterminator="\n")
+                writer.writeheader()
+                writer.writerows(rows)
+
+    def _verdict(self, root):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = main(["--data-root", str(root), "--verify-only"])
+        self.assertEqual(status, 0)
+        return output.getvalue()
+
+    def test_verify_only_supports_complete_all_seed_causal_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(self._verdict(Path(directory)), "supported\n")
+
+    def test_verify_only_rejects_incomplete_fixed_matrix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            metrics.pop()
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: fixed complete 18-run matrix (scenarios recoverable/persistent, modes original_prism/prism_recycle/full_prism, seeds 13/14/15)\n",
+            )
+
+    def test_verify_only_rejects_empty_rounds_before_selecting_a_seed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, _rounds = self._supported_verifier_rows()
+            self._write_verifier_aggregate(Path(directory), metrics, [])
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: every recoverable/full_prism seed has a completed progress round\n",
+            )
+
+    def test_verify_only_rejects_recoverable_full_prism_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            next(row for row in rounds if row["scenario"] == "recoverable")["handoff"] = 1
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: no recoverable/full_prism seed has a handoff round\n",
+            )
+
+    def test_verify_only_rejects_recoverable_full_prism_ratio_without_all_seed_improvement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            next(row for row in metrics if row["scenario"] == "recoverable" and row["mode"] == "full_prism")["throttled_traffic_ratio"] = 0.2
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: every recoverable/full_prism seed has a lower throttled traffic ratio than original_prism\n",
+            )
+
+    def test_verify_only_rejects_persistent_full_prism_without_no_progress_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            next(row for row in rounds if row["scenario"] == "persistent")["handoff"] = 0
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: every persistent/full_prism seed has a completed no-progress handoff round\n",
+            )
+
+    def test_verify_only_rejects_persistent_original_prism_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            rounds.append({"scenario": "persistent", "mode": "original_prism", "seed": 13, "handoff": 1, "progress": 0})
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: no persistent/original_prism seed has a handoff round\n",
+            )
+
+    def test_verify_only_rejects_persistent_prism_recycle_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics, rounds = self._supported_verifier_rows()
+            rounds.append({"scenario": "persistent", "mode": "prism_recycle", "seed": 13, "handoff": 1, "progress": 0})
+            self._write_verifier_aggregate(Path(directory), metrics, rounds)
+
+            self.assertEqual(
+                self._verdict(Path(directory)),
+                "not_supported: no persistent/prism_recycle seed has a handoff round\n",
+            )
+
     def _all_modes(self, root, scenario, **changes):
         for mode in MODES:
             _write_bundle(root, scenario, mode, **changes.get(mode, {}))

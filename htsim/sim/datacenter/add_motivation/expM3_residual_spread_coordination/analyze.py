@@ -26,12 +26,26 @@ AGGREGATE = DATA_ROOT / "aggregate"
 WARMUP_PS = 1_000_000_000
 MODES = ("original_prism", "prism_recycle", "full_prism")
 SCENARIOS = ("recoverable", "persistent")
+SEEDS = (13, 14, 15)
 TABLE_FIELDS = {
     "epoch_series": ("run_id", "scenario", "mode", "seed", "epoch_index", "floor_ps", "spread_ps", "cwnd_bytes", "hold_fraction"),
     "rounds": ("run_id", "scenario", "mode", "seed", "round_index", "epoch_id", "plot_epoch_index", "floor_ps", "spread_ps", "spread_ref_ps", "spread_change_ps", "refresh_complete", "progress", "handoff", "cwnd_bytes", "control_state"),
     "per_seed_metrics": ("run_id", "scenario", "mode", "seed", "window_start_ps", "window_end_ps", "foreground_acked_bytes", "healthy_acked_bytes", "throttled_acked_bytes", "healthy_to_throttled_ratio", "throttled_traffic_ratio", "goodput_gbps", "p99_genuine_qdelay_ps", "completed_rounds", "progress_rounds", "handoff_rounds"),
     "summary": ("scenario", "mode", "seed_count", "mean_healthy_to_throttled_ratio", "mean_throttled_traffic_ratio", "mean_goodput_gbps", "mean_p99_genuine_qdelay_ps", "mean_progress_rounds", "mean_handoff_rounds"),
 }
+
+MATRIX_PREDICATE = (
+    "fixed complete 18-run matrix (scenarios recoverable/persistent, "
+    "modes original_prism/prism_recycle/full_prism, seeds 13/14/15)"
+)
+CAUSAL_PREDICATES = (
+    "every recoverable/full_prism seed has a completed progress round",
+    "no recoverable/full_prism seed has a handoff round",
+    "every recoverable/full_prism seed has a lower throttled traffic ratio than original_prism",
+    "every persistent/full_prism seed has a completed no-progress handoff round",
+    "no persistent/original_prism seed has a handoff round",
+    "no persistent/prism_recycle seed has a handoff round",
+)
 
 
 def _percentile_99(values: Iterable[int]) -> int:
@@ -306,10 +320,96 @@ def _write_csv(path: Path, rows: list[dict], fallback_fields: tuple[str, ...]) -
         writer.writerows(rows)
 
 
+def _read_aggregate_csv(data_root: Path, name: str) -> list[dict] | None:
+    path = data_root / "aggregate" / f"{name}.csv"
+    try:
+        with path.open(newline="", encoding="ascii") as stream:
+            reader = csv.DictReader(stream)
+            if reader.fieldnames is None or not set(TABLE_FIELDS[name]).issubset(reader.fieldnames):
+                return None
+            return list(reader)
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return None
+
+
+def _matrix_rows(rows: list[dict] | None) -> dict[tuple[str, str, int], dict] | None:
+    if rows is None or len(rows) != len(SCENARIOS) * len(MODES) * len(SEEDS):
+        return None
+    matrix = {}
+    try:
+        for row in rows:
+            key = (row["scenario"], row["mode"], int(row["seed"]))
+            if key in matrix:
+                return None
+            matrix[key] = row
+    except (KeyError, TypeError, ValueError):
+        return None
+    expected = {(scenario, mode, seed) for scenario in SCENARIOS for mode in MODES for seed in SEEDS}
+    return matrix if set(matrix) == expected else None
+
+
+def _is_true(row: dict, field: str) -> bool:
+    return row.get(field, "").strip().lower() in {"1", "true"}
+
+
+def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
+    """Return the all-seed M3 causal verdict from existing aggregate CSVs."""
+    data_root = Path(data_root)
+    matrix = _matrix_rows(_read_aggregate_csv(data_root, "per_seed_metrics"))
+    if matrix is None:
+        return f"not_supported: {MATRIX_PREDICATE}"
+
+    rounds = _read_aggregate_csv(data_root, "rounds")
+    if rounds is None:
+        rounds = []
+
+    def selected_rounds(scenario: str, mode: str, seed: int) -> list[dict]:
+        return [
+            row for row in rounds
+            if row.get("scenario") == scenario and row.get("mode") == mode and row.get("seed") == str(seed)
+        ]
+
+    recoverable_full = {seed: selected_rounds("recoverable", "full_prism", seed) for seed in SEEDS}
+    if not all(any(_is_true(row, "progress") for row in seed_rounds) for seed_rounds in recoverable_full.values()):
+        return f"not_supported: {CAUSAL_PREDICATES[0]}"
+    if any(_is_true(row, "handoff") for seed_rounds in recoverable_full.values() for row in seed_rounds):
+        return f"not_supported: {CAUSAL_PREDICATES[1]}"
+
+    try:
+        lower_throttled_ratio = all(
+            float(matrix[("recoverable", "full_prism", seed)]["throttled_traffic_ratio"])
+            < float(matrix[("recoverable", "original_prism", seed)]["throttled_traffic_ratio"])
+            for seed in SEEDS
+        )
+    except (KeyError, TypeError, ValueError):
+        lower_throttled_ratio = False
+    if not lower_throttled_ratio:
+        return f"not_supported: {CAUSAL_PREDICATES[2]}"
+
+    persistent_full = {seed: selected_rounds("persistent", "full_prism", seed) for seed in SEEDS}
+    if not all(
+        any(_is_true(row, "handoff") and not _is_true(row, "progress") for row in seed_rounds)
+        for seed_rounds in persistent_full.values()
+    ):
+        return f"not_supported: {CAUSAL_PREDICATES[3]}"
+    for mode, predicate in (("original_prism", CAUSAL_PREDICATES[4]), ("prism_recycle", CAUSAL_PREDICATES[5])):
+        if any(
+            _is_true(row, "handoff")
+            for seed in SEEDS
+            for row in selected_rounds("persistent", mode, seed)
+        ):
+            return f"not_supported: {predicate}"
+    return "supported"
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
+    parser.add_argument("--verify-only", action="store_true", help="verify existing aggregate CSV causal evidence")
     args = parser.parse_args(argv)
+    if args.verify_only:
+        print(verify_aggregate(args.data_root))
+        return 0
     analyze_data(args.data_root, write=True)
     return 0
 
