@@ -12,6 +12,9 @@ from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination impo
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.analyze_distribution import (
     analyze_distribution,
 )
+from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination import (
+    make_distribution_fig,
+)
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.tests.test_analyze import (
     _row,
     _write_bundle,
@@ -322,6 +325,53 @@ class DistributionAnalysisTests(unittest.TestCase):
             self.assertEqual(effect[f"{name}_window_complete"], "1")
             self.assertEqual(effect[f"{name}_throttled_ratio"], "")
             self.assertEqual(effect["throttled_ratio_change"], "")
+
+
+class DistributionFigureTests(unittest.TestCase):
+    def test_renders_pdf_and_png_from_minimal_aggregate_csvs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            aggregate = root / "aggregate"
+            aggregate.mkdir()
+            summary_rows = []
+            for scenario in SCENARIOS:
+                for mode in MODES:
+                    for seed in SEEDS:
+                        summary_rows.append({
+                            "run_id": f"fixture_{scenario}_{mode}_s{seed}",
+                            "scenario": scenario,
+                            "mode": mode,
+                            "seed": seed,
+                            "throttled_ratio": {
+                                "original_prism": "0.4",
+                                "prism_recycle": "0.2",
+                            }[mode],
+                        })
+            with (aggregate / "summary.csv").open("w", newline="", encoding="ascii") as stream:
+                writer = csv.DictWriter(stream, fieldnames=(
+                    "run_id", "scenario", "mode", "seed", "throttled_ratio",
+                ))
+                writer.writeheader()
+                writer.writerows(summary_rows)
+            with (aggregate / "refresh_effects.csv").open("w", newline="", encoding="ascii") as stream:
+                writer = csv.DictWriter(stream, fieldnames=(
+                    "scenario", "mode", "seed", "terminal_time_ps", "post_window_complete",
+                    "post_throttled_ratio",
+                ))
+                writer.writeheader()
+                writer.writerow({
+                    "scenario": "recoverable",
+                    "mode": "prism_recycle",
+                    "seed": 13,
+                    "terminal_time_ps": 2_200_000_000,
+                    "post_window_complete": 1,
+                    "post_throttled_ratio": 0.2,
+                })
+
+            make_distribution_fig.render_distribution_figure(aggregate, root / "figs")
+
+            self.assertTrue((root / "figs" / "distribution.png").is_file())
+            self.assertTrue((root / "figs" / "distribution.pdf").is_file())
 
 
 if __name__ == "__main__":
