@@ -8,6 +8,7 @@ case "$MODE" in
     *) echo "usage: $0 smoke|full" >&2; exit 2 ;;
 esac
 
+cmake --build "$HERE/../../../build" --target htsim_uec -j2
 bash "$HERE/clean_outputs.sh"
 if [ "$MODE" = "smoke" ]; then
     python3 "$HERE/run.py" --phase smoke --smoke-seed 13

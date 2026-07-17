@@ -29,6 +29,10 @@ Run the locked formal matrix:
 bash htsim/sim/datacenter/add_motivation/expM3_residual_spread_coordination/repro.sh full
 ```
 
+Both reproduction modes rebuild the `htsim_uec` target before running. Each
+generated manifest records the simulator binary's SHA-256 for freshness
+verification.
+
 The analyzer consumes only M3 manifests and trace files beneath `data/`. It
 writes `data/aggregate/epoch_series.csv`, `rounds.csv`, `per_seed_metrics.csv`,
 and `summary.csv`. `make_figs.py` reads only those aggregate files and renders
