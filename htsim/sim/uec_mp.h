@@ -61,6 +61,14 @@ struct UecMpTokenEvent {
     bool admission_written = false;
 };
 
+struct UecMpLapsSignal {
+    bool ready = false;
+    bool all_paths_high = false;
+    uint16_t sampled_paths = 0;
+    simtime_picosec threshold = 0;
+    simtime_picosec max_real_latency = 0;
+};
+
 class UecMultipath {
 public:
     enum PathFeedback {PATH_GOOD, PATH_GOOD_HIGH_RESIDUAL, PATH_ECN, PATH_NACK, PATH_TIMEOUT};
@@ -88,6 +96,10 @@ public:
     virtual bool isFrozen() const { return false; }
     virtual void setTokenObserver(TokenObserver) {}
     virtual void setFeedbackTraceContext(uint64_t) {}
+    virtual void observeLapsDelay(uint32_t, simtime_picosec, simtime_picosec) {}
+    virtual void observeLapsProbe(uint32_t, simtime_picosec, simtime_picosec) {}
+    virtual optional<uint32_t> nextLapsProbeEntropy(simtime_picosec) { return {}; }
+    virtual UecMpLapsSignal lapsSignal(simtime_picosec, simtime_picosec) const { return {}; }
 protected:
     bool _debug;
     string _debug_tag;
@@ -104,6 +116,42 @@ private:
     uint16_t _path_xor;          // random value set each time we wrap the entropy values - XOR with
                                  // _current_ev_index
     uint16_t _current_ev_index;  // count through _no_of_paths and then wrap.  XOR with _path_xor to
+};
+
+class UecMpLaps : public UecMultipath {
+public:
+    UecMpLaps(uint16_t no_of_paths, bool debug, double beta);
+    void processEv(uint32_t path_id, PathFeedback feedback) override;
+    uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) override;
+    void observeLapsDelay(uint32_t path_id, simtime_picosec delay,
+                          simtime_picosec now) override;
+    void observeLapsProbe(uint32_t path_id, simtime_picosec delay,
+                          simtime_picosec now) override;
+    optional<uint32_t> nextLapsProbeEntropy(simtime_picosec now) override;
+    UecMpLapsSignal lapsSignal(simtime_picosec now,
+                               simtime_picosec queue_margin) const override;
+private:
+    struct LapsPathState {
+        bool valid = false;
+        simtime_picosec base_latency = 0;
+        simtime_picosec real_latency = 0;
+        simtime_picosec observed_latency = 0;
+        simtime_picosec last_update = 0;
+        simtime_picosec last_probe = 0;
+    };
+
+    uint32_t pathIndex(uint32_t entropy) const;
+    uint32_t entropyForPath(uint32_t path_id) const;
+    bool isStale(const LapsPathState& state, simtime_picosec now) const;
+    bool isControllerStale(const LapsPathState& state, simtime_picosec now) const;
+    void observe(uint32_t path_id, simtime_picosec delay, simtime_picosec now);
+
+    uint16_t _no_of_paths;
+    uint16_t _path_random;
+    uint32_t _bootstrap_path;
+    uint32_t _next_stale_probe;
+    double _beta;
+    vector<LapsPathState> _paths;
 };
 
 class UecMpBitmap : public UecMultipath {

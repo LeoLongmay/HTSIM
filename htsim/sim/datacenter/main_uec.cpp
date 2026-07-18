@@ -84,7 +84,7 @@ bool parse_degraded_capacity(const char* text, double& value) {
 }
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-cwnd cwnd_size]\n\t[-q queue_size]\n\t[-queue_type composite|ecn|random|lossless|lossless_input|]\n\t[-tm traffic_matrix_file]\n\t[-strat route_strategy (single,rand,perm,pull,ecmp,\n\tecmp_host path_count,ecmp_ar,ecmp_rr,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-hop_latency x] per hop wire latency in us,default 1\n\t[-target_q_delay x] target_queuing_delay in us, default is 6us \n\t[-switch_latency x] switching latency in us, default 0\n\t[-host_queue_type  swift|prio|fair_prio]\n\t[-logtime dt] sample time for sinklogger, etc\n\t[-conn_reuse] enable connection reuse" << endl;
+    cout << "Usage " << progr << " [-nodes N]\n\t[-cwnd cwnd_size]\n\t[-q queue_size]\n\t[-queue_type composite|ecn|random|lossless|lossless_input|]\n\t[-tm traffic_matrix_file]\n\t[-strat route_strategy (single,rand,perm,pull,ecmp,\n\tecmp_host path_count,ecmp_ar,ecmp_rr,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-hop_latency x] per hop wire latency in us,default 1\n\t[-target_q_delay x] target_queuing_delay in us, default is 6us \n\t[-switch_latency x] switching latency in us, default 0\n\t[-host_queue_type  swift|prio|fair_prio]\n\t[-laps_beta x] LAPS Softmax beta, default 8\n\t[-laps_probe_interval x] LAPS probe interval in us, default 50\n\t[-laps_queue_margin x] LAPS queue margin in us, default 0\n\t[-logtime dt] sample time for sinklogger, etc\n\t[-conn_reuse] enable connection reuse" << endl;
     exit(1);
 }
 
@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
     simtime_picosec switch_latency = timeFromUs((uint32_t)0);
     queue_type qt = COMPOSITE;
 
-    enum LoadBalancing_Algo { BITMAP, REPS, REPS_LEGACY, REPS_ACTUAL, FREEZING, OBLIVIOUS, MIXED, ECMP};
+    enum LoadBalancing_Algo { BITMAP, REPS, REPS_LEGACY, REPS_ACTUAL, FREEZING, OBLIVIOUS, MIXED, ECMP, LAPS};
     LoadBalancing_Algo load_balancing_algo = MIXED;
 
     bool log_sink = false;
@@ -286,6 +286,18 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-prism_n_min")) {
             UecSrc::_prism_n_min = atoi(argv[i+1]);
             cout << "prism_n_min " << UecSrc::_prism_n_min << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-laps_beta")) {
+            UecSrc::_laps_beta = atof(argv[i+1]);
+            cout << "laps_beta " << UecSrc::_laps_beta << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-laps_probe_interval")) {
+            UecSrc::_laps_probe_interval = timeFromUs(atof(argv[i+1]));
+            cout << "laps_probe_interval " << atof(argv[i+1]) << " us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-laps_queue_margin")) {
+            UecSrc::_laps_queue_margin = timeFromUs(atof(argv[i+1]));
+            cout << "laps_queue_margin " << atof(argv[i+1]) << " us" << endl;
             i++;
         } else if (!strcmp(argv[i],"-enable_prism_oracle_validation")) {
             UecSrc::_prism_oracle_validation = (atoi(argv[i+1]) != 0);
@@ -456,6 +468,8 @@ int main(int argc, char **argv) {
                 UecSrc::_sender_cc_algo = UecSrc::LSWIFT;
             else if (!strcmp(argv[i+1],"mswift"))
                 UecSrc::_sender_cc_algo = UecSrc::MSWIFT;
+            else if (!strcmp(argv[i+1],"laps"))
+                UecSrc::_sender_cc_algo = UecSrc::LAPS;
             else {
                 cout << "UNKNOWN CC ALGO " << argv[i+1] << endl;
                 exit(1);
@@ -500,8 +514,11 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[i+1], "ecmp")) {
                 load_balancing_algo = ECMP;
             }
+            else if (!strcmp(argv[i+1], "laps")) {
+                load_balancing_algo = LAPS;
+            }
             else {
-                cout << "Unknown load balancing algorithm of type " << argv[i+1] << ", expecting bitmap, reps, reps_legacy, reps_actual, freezing, oblivious, mixed, or ecmp" << endl;
+                cout << "Unknown load balancing algorithm of type " << argv[i+1] << ", expecting bitmap, reps, reps_legacy, reps_actual, freezing, oblivious, mixed, ecmp, or laps" << endl;
                 exit_error(argv[0]);
             }
             cout << "Load balancing algorithm set to  "<< argv[i+1] << endl;
@@ -865,6 +882,14 @@ int main(int argc, char **argv) {
     }
     if (motivation_background_config_set && motivation_prefix.empty()) {
         cerr << "-motivation_background_config requires -motivation_trace_prefix" << endl;
+        return 1;
+    }
+    if (UecSrc::_sender_cc_algo == UecSrc::LAPS && load_balancing_algo != LAPS) {
+        cerr << "-sender_cc_algo laps requires -load_balancing_algo laps" << endl;
+        return 1;
+    }
+    if (load_balancing_algo == LAPS && UecSrc::_sender_cc_algo != UecSrc::LAPS) {
+        cerr << "-load_balancing_algo laps requires -sender_cc_algo laps" << endl;
         return 1;
     }
     if (prism_coordination_mode != PrismCoordinationMode::DISABLED &&
@@ -1285,6 +1310,12 @@ int main(int argc, char **argv) {
                     return std::make_unique<UecMpMixed>(path_entropy_size, UecSrc::_debug);
                 });
                 break;
+            case LAPS:
+                api->setMultipathFactory([path_entropy_size]() {
+                    return std::make_unique<UecMpLaps>(path_entropy_size, UecSrc::_debug,
+                                                       UecSrc::_laps_beta);
+                });
+                break;
             default:
                 cout << "ERROR: Failed to set multipath algorithm, abort." << endl;
                 abort();
@@ -1346,6 +1377,9 @@ int main(int argc, char **argv) {
                 mp = make_unique<UecMpMixed>(path_entropy_size, UecSrc::_debug);
             } else if (load_balancing_algo == ECMP){
                 mp = make_unique<UecMpEcmp>(path_entropy_size, UecSrc::_debug);
+            } else if (load_balancing_algo == LAPS){
+                mp = make_unique<UecMpLaps>(path_entropy_size, UecSrc::_debug,
+                                             UecSrc::_laps_beta);
             } else {
                 cout << "ERROR: Failed to set multipath algorithm, abort." << endl;
                 abort();

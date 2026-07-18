@@ -221,6 +221,18 @@ class RunCaseTest(unittest.TestCase):
             },
         )
 
+    def test_laps_is_accepted_on_both_axes_and_preserved_in_command(self):
+        module = load_run_case_module()
+        self.assertIn("laps", module.VALID_CCS)
+        self.assertIn("laps", module.VALID_LOAD_BALANCERS)
+
+        with mock.patch.object(module.subprocess, "run", side_effect=self.completed) as run:
+            self.invoke(module, cc="laps", load_balancing_algo="laps")
+
+        argv = run.call_args_list[-1].args[0]
+        self.assertEqual(argv[argv.index("-sender_cc_algo") + 1], "laps")
+        self.assertEqual(argv[argv.index("-load_balancing_algo") + 1], "laps")
+
     def test_m2_phases_round_trip_analysis_config(self):
         module = load_run_case_module()
         self.assertTrue({"coarse", "confirmation"}.issubset(module.VALID_PHASES))
@@ -609,7 +621,7 @@ class M1ConfigTest(unittest.TestCase):
                 filename = script.index('traffic="$OUT/${run_id}.cm"')
                 self.assertLess(validation, filename)
 
-    def test_calibration_is_exact_product_and_formal_is_header_only(self):
+    def test_calibration_is_exact_product_and_formal_is_locked_pair(self):
         calibration = M1_CONFIGS / "calibration.csv"
         with calibration.open(newline="", encoding="ascii") as handle:
             reader = csv.DictReader(handle)
@@ -650,11 +662,46 @@ class M1ConfigTest(unittest.TestCase):
         self.assertEqual(len({row["scenario_id"] for row in rows}), 90)
         self.assertEqual(actual, expected)
 
-        formal = (M1_CONFIGS / "formal.csv").read_text(encoding="ascii")
+        with (M1_CONFIGS / "formal.csv").open(newline="", encoding="ascii") as handle:
+            reader = csv.DictReader(handle)
+            self.assertEqual(
+                reader.fieldnames,
+                [
+                    "scenario_id",
+                    "degraded_links",
+                    "degraded_capacity_gbps",
+                    "offered_load",
+                    "seed",
+                ],
+            )
+            formal_rows = list(reader)
+
+        self.assertEqual(len(formal_rows), 10)
+        symmetric = [row for row in formal_rows if int(row["degraded_links"]) == 0]
+        gray = [row for row in formal_rows if int(row["degraded_links"]) > 0]
+        self.assertEqual(len(symmetric), 5)
+        self.assertEqual(len(gray), 5)
+        self.assertEqual({int(row["seed"]) for row in symmetric}, {13, 14, 15, 16, 17})
+        self.assertEqual({int(row["seed"]) for row in gray}, {13, 14, 15, 16, 17})
         self.assertEqual(
-            formal,
-            "scenario_id,degraded_links,degraded_capacity_gbps,offered_load,seed\n",
+            {float(row["offered_load"]) for row in symmetric},
+            {float(row["offered_load"]) for row in gray},
         )
+        symmetric_configs = {
+            (row["scenario_id"], row["degraded_capacity_gbps"], row["offered_load"])
+            for row in symmetric
+        }
+        gray_configs = {
+            (
+                row["scenario_id"],
+                row["degraded_links"],
+                row["degraded_capacity_gbps"],
+                row["offered_load"],
+            )
+            for row in gray
+        }
+        self.assertEqual(len(symmetric_configs), 1)
+        self.assertEqual(len(gray_configs), 1)
 
 
 if __name__ == "__main__":

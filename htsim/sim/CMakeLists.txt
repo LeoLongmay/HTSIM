@@ -176,6 +176,24 @@ if ( ENABLE_TESTS )
     add_test(NAME reps_slot_cache COMMAND test_reps_slot_cache)
     set_tests_properties(reps_slot_cache PROPERTIES LABELS "motivation" TIMEOUT 60)
 
+    add_executable(test_laps_multipath
+        datacenter/add_motivation/common/tests/test_laps_multipath.cpp)
+    target_link_libraries(test_laps_multipath PRIVATE htsim)
+    add_test(NAME laps_multipath COMMAND test_laps_multipath)
+    set_tests_properties(laps_multipath PROPERTIES LABELS "laps;unit" TIMEOUT 60)
+
+    add_executable(test_laps_cc_decision
+        datacenter/add_motivation/common/tests/test_laps_cc_decision.cpp)
+    target_link_libraries(test_laps_cc_decision PRIVATE htsim)
+    add_test(NAME laps_cc_decision COMMAND test_laps_cc_decision)
+    set_tests_properties(laps_cc_decision PROPERTIES LABELS "laps;unit" TIMEOUT 60)
+
+    add_executable(test_laps_packet_feedback
+        datacenter/add_motivation/common/tests/test_laps_packet_feedback.cpp)
+    target_link_libraries(test_laps_packet_feedback PRIVATE htsim)
+    add_test(NAME laps_packet_feedback COMMAND test_laps_packet_feedback)
+    set_tests_properties(laps_packet_feedback PROPERTIES LABELS "laps;unit" TIMEOUT 60)
+
     add_executable(test_prism_coordination
         datacenter/add_motivation/common/tests/test_prism_coordination.cpp)
     target_link_libraries(test_prism_coordination PRIVATE htsim)
@@ -209,6 +227,14 @@ if ( ENABLE_TESTS )
             $<TARGET_FILE:htsim_uec>)
     set_tests_properties(prism_coordination_cli
         PROPERTIES LABELS "motivation;integration" TIMEOUT 120)
+
+    add_test(
+        NAME laps_cli
+        COMMAND bash
+            ${CMAKE_CURRENT_SOURCE_DIR}/datacenter/add_motivation/common/tests/test_laps_cli.sh
+            $<TARGET_FILE:htsim_uec>)
+    set_tests_properties(laps_cli
+        PROPERTIES LABELS "laps;integration" TIMEOUT 120)
 endif()
 
 # Always print ENABLE_TESTS status, so folks don't miss it.

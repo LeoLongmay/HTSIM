@@ -19,6 +19,7 @@
 #include "modular_vector.h"
 #include "pciemodel.h"
 #include "oversubscribed_cc.h"
+#include "laps_cc.h"
 #include "uec_mp.h"
 #include "motivation_epoch.h"
 #include "prism_coordination.h"
@@ -235,7 +236,7 @@ public:
     static bool _sender_based_cc;
     static bool _receiver_based_cc;
 
-    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT};
+    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT, LAPS};
     static Sender_CC _sender_cc_algo;
 
     static bool _disable_quick_adapt;
@@ -300,6 +301,11 @@ public:
     mem_b sendRtxPacket(const Route& route);
     void sendRTS();
     void sendProbe();
+    void sendLapsProbe();
+    void scheduleLapsProbe();
+    void cancelLapsProbe();
+    void applyLapsCwnd(simtime_picosec now, simtime_picosec delay,
+                       mem_b newly_acked_bytes);
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
                           UecMpSelection selection);
     void configureMotivationTokenObserver();
@@ -441,6 +447,9 @@ public:
     static double          _prism_engage_mult;
     static double          _prism_disengage_ratio;
     static uint32_t        _prism_n_min;     // minimum genuine ACK samples needed to close an epoch
+    static double          _laps_beta;           // Softmax inverse-temperature; default 8.0
+    static simtime_picosec _laps_probe_interval; // microseconds on CLI; default 50us
+    static simtime_picosec _laps_queue_margin;   // microseconds on CLI; default 0us
     // Motivation-only REPS admission gate. Disabled unless explicitly requested.
     static bool            _motivation_residual_recycle;
     static simtime_picosec _motivation_residual_threshold;
@@ -636,6 +645,15 @@ private:
     EventList::Handle _probe_timer_handle; 
     /******** END Probe parameters *********/
 
+    /******** LAPS probe parameters *********/
+    simtime_picosec _laps_probe_timer_when = 0;
+    UecDataPacket::seq_t _laps_probe_seqno = 0;
+    std::set<UecDataPacket::seq_t> _laps_probe_outstanding;
+    EventList::Handle _laps_probe_timer_handle;
+    simtime_picosec _laps_next_increase_at = 0;
+    simtime_picosec _laps_next_decrease_at = 0;
+    /******** END LAPS probe parameters *********/
+
 
     // Connectivity
     PacketFlow _flow;
@@ -702,7 +720,9 @@ class UecSink : public DataReceiver {
     UecBasePacket::seq_t sackBitmapBase(UecBasePacket::seq_t epsn);
     UecBasePacket::seq_t sackBitmapBaseIdeal();
     uint64_t buildSackBitmap(UecBasePacket::seq_t ref_epsn);
-    UecAckPacket* sack(uint32_t path_id, UecBasePacket::seq_t seqno, UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo);
+    UecAckPacket* sack(uint32_t path_id, UecBasePacket::seq_t seqno,
+                       UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo,
+                       const UecDataPacket* received_data = nullptr);
 
     UecNackPacket* nack(uint32_t path_id, UecBasePacket::seq_t seqno, bool last_hop, bool ecn_echo);
 
