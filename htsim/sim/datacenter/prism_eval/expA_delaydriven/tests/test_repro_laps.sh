@@ -38,10 +38,17 @@ awk '
 data_dir="$TMP/data"
 mkdir -p "$data_dir"
 touch "$data_dir/m2m.cm" "$data_dir/expA_laps_f0_s13.flow.txt"
-stub="$TMP/run_lib_stub.sh"
+stub_dir="$TMP/prism_eval/common"
+mkdir -p "$stub_dir"
+stub="$stub_dir/run_lib.sh"
 cat >"$stub" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
 printf 'stub was invoked\n' >>"${STUB_MARK:?}"
+shared_idmap="$(cd "$(dirname "$0")/../.." && pwd)/idmap.txt"
+printf 'generated idmap\n' >"$shared_idmap"
+cp "$shared_idmap" "$9/$8.idmap"
+exit "${STUB_EXIT_CODE:-0}"
 EOF
 chmod +x "$stub"
 
@@ -55,7 +62,7 @@ fi
 }
 grep -q 'collision' "$TMP/real-run.txt"
 
-for suffix in idmap dat; do
+for suffix in idmap dat stdout ascii.tmp; do
   collision_data_dir="$TMP/data-$suffix"
   mkdir -p "$collision_data_dir"
   touch "$collision_data_dir/m2m.cm" "$collision_data_dir/expA_laps_f0_s13.$suffix"
@@ -72,5 +79,62 @@ for suffix in idmap dat; do
   }
   grep -q 'collision' "$TMP/$suffix-real-run.txt"
 done
+
+shared_data_dir="$TMP/shared-idmap-data"
+mkdir -p "$shared_data_dir"
+touch "$shared_data_dir/m2m.cm"
+shared_idmap="$TMP/idmap.txt"
+sentinel_idmap="$TMP/original-idmap.txt"
+printf 'original shared idmap sentinel\n' >"$sentinel_idmap"
+cp "$sentinel_idmap" "$shared_idmap"
+shared_marker="$TMP/shared-idmap-stub-ran"
+
+DATA_DIR="$shared_data_dir" RUN_LIB="$stub" STUB_MARK="$shared_marker" bash "$RUNNER"
+cmp -s "$sentinel_idmap" "$shared_idmap" || {
+  echo "runner did not restore the shared idmap sentinel" >&2
+  exit 1
+}
+shared_runs="$(wc -l <"$shared_marker" | tr -d ' ')"
+[ "$shared_runs" -eq 35 ] || {
+  echo "expected 35 stubbed LAPS runs, got $shared_runs" >&2
+  exit 1
+}
+shared_tagged_idmaps="$(find "$shared_data_dir" -name 'expA_laps_f*_s*.idmap' -type f | wc -l | tr -d ' ')"
+[ "$shared_tagged_idmaps" -eq 35 ] || {
+  echo "expected 35 tagged idmaps, got $shared_tagged_idmaps" >&2
+  exit 1
+}
+
+failed_data_dir="$TMP/failed-idmap-data"
+mkdir -p "$failed_data_dir"
+touch "$failed_data_dir/m2m.cm"
+cp "$sentinel_idmap" "$shared_idmap"
+if DATA_DIR="$failed_data_dir" RUN_LIB="$stub" STUB_MARK="$TMP/failed-idmap-stub-ran" \
+  STUB_EXIT_CODE=7 bash "$RUNNER" >"$TMP/failed-idmap-run.txt" 2>&1; then
+  echo "runner accepted a failing run_lib stub" >&2
+  exit 1
+fi
+cmp -s "$sentinel_idmap" "$shared_idmap" || {
+  echo "runner did not restore shared idmap after a failing run" >&2
+  exit 1
+}
+
+absent_root="$TMP/absent-idmap-root"
+absent_stub_dir="$absent_root/prism_eval/common"
+absent_data_dir="$TMP/absent-idmap-data"
+mkdir -p "$absent_stub_dir" "$absent_data_dir"
+touch "$absent_data_dir/m2m.cm"
+cp "$stub" "$absent_stub_dir/run_lib.sh"
+absent_shared_idmap="$absent_root/idmap.txt"
+[ ! -e "$absent_shared_idmap" ] || {
+  echo "absent shared-idmap fixture already exists" >&2
+  exit 1
+}
+DATA_DIR="$absent_data_dir" RUN_LIB="$absent_stub_dir/run_lib.sh" STUB_MARK="$TMP/absent-idmap-stub-ran" \
+  bash "$RUNNER"
+[ ! -e "$absent_shared_idmap" ] || {
+  echo "runner did not remove a generated shared idmap that was initially absent" >&2
+  exit 1
+}
 
 echo "ok: 35 LAPS dry-run cells and collision refusal"
