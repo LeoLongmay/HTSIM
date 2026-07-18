@@ -46,7 +46,7 @@ weight_i = exp(-beta * (real_latency_i - min_real_latency) / max(T, 1))
 P(i) = weight_i / sum(weight)
 ```
 
-Samples older than `2 * real_latency` are stale. A stale candidate is selected before ordinary softmax traffic by `nextLapsProbeEntropy`; its temporary `real_latency` doubles only for the stale interval, then the probe ACK replaces it. An ACK or probe ACK observation updates `real_latency = delay`, keeps `base_latency = min(base_latency, delay)`, and refreshes `last_update`.
+Samples at least `2 * real_latency` old are stale. A stale candidate is selected before ordinary softmax traffic by `nextLapsProbeEntropy`; its temporary `real_latency` doubles only for the stale interval, then the probe ACK replaces it. An ACK or probe ACK observation updates `real_latency = delay`, keeps `base_latency = min(base_latency, delay)`, and refreshes `last_update`.
 
 `UecSrc` rate action is a single LAPS decision: only when `lapsSignal.ready && lapsSignal.all_paths_high` is true may it halve `_cwnd`, gated by `2 * max_real_latency`. Otherwise it retains the normal UEC ACK/window-growth path, with additive growth gated by `2 * T`. No incomplete/bootstrap sample set may trigger an all-path decrease.
 
