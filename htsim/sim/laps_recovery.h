@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <list>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -51,12 +52,14 @@ class LapsRecoveryDomain final : public EventSource {
 public:
     // C++17 requires this literal spelling because timeFromUs() is not constexpr.
     static constexpr simtime_picosec kRto = 8000ULL * 1000000ULL;
+    static constexpr simtime_picosec kBootstrapRto = 100ULL * 1000000ULL;
 
     explicit LapsRecoveryDomain(EventList& eventlist);
 
     LapsAttempt sent(LapsPathKey path, LapsRecoveryOwner& owner,
                      UecBasePacket::seq_t seq, mem_b bytes);
-    bool acknowledge(LapsAttempt attempt);
+    bool acknowledge(LapsAttempt attempt,
+                     std::optional<simtime_picosec> one_way_delay = std::nullopt);
     bool nack(LapsAttempt attempt);
     bool retire(LapsAttempt attempt);
 

@@ -209,28 +209,89 @@ void attempt_lifecycle_is_path_scoped_and_attempt_safe(EventList& eventlist,
     FakeOwner owner_a;
     FakeOwner owner_b;
     const LapsPathKey shared_path{"queue-a\\x1fqueue-b"};
-    const LapsPathKey isolated_path{"queue-c\\x1fqueue-d"};
 
-    const LapsAttempt first = domain.sent(shared_path, owner_a, 10, 1000);
-    const LapsAttempt second = domain.sent(shared_path, owner_b, 20, 1100);
-    const LapsAttempt isolated = domain.sent(isolated_path, owner_a, 30, 1200);
-    owner_a.makeCurrent(first);
-    owner_b.makeCurrent(second);
+    const LapsAttempt a_first = domain.sent(shared_path, owner_a, 10, 1000);
+    const LapsAttempt b_only = domain.sent(shared_path, owner_b, 20, 1100);
+    const LapsAttempt a_later = domain.sent(shared_path, owner_a, 30, 1200);
+    owner_a.makeCurrent(a_first);
+    owner_b.makeCurrent(b_only);
 
-    assert(domain.acknowledge(second));
+    assert(domain.acknowledge(a_later, timeFromUs(uint32_t{7})));
     assert((owner_a.recovered ==
             std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{10, 1000}}));
     assert(owner_b.recovered.empty());
     assert(owner_a.callbacks.size() == 1);
-    assert(owner_a.callbacks.front().attempt == first);
-    assert(domain.retire(isolated));
-    assert(!domain.retire(isolated));
+    assert(owner_a.callbacks.front().attempt == a_first);
+
+    const size_t callbacks_before = owner_a.callbacks.size();
+    assert(!domain.acknowledge(a_first, timeFromUs(uint32_t{7})));
+    assert(!domain.nack(a_first));
+    assert(!domain.retire(a_first));
+    assert(owner_a.callbacks.size() == callbacks_before);
+
+    assert(domain.retire(b_only));
+    assert(!domain.retire(b_only));
     assert(!EventList::doNextEvent());
+}
+
+void acknowledge_does_not_cross_paths_and_retimes_the_tail(
+    EventList& eventlist, LapsRecoveryDomain& domain) {
+    FakeOwner owner;
+    const LapsPathKey path_a{"queue-c\\x1fqueue-d"};
+    const LapsPathKey path_b{"queue-e\\x1fqueue-f"};
+
+    const LapsAttempt path_a_record = domain.sent(path_a, owner, 90, 900);
+    const LapsAttempt path_b_record = domain.sent(path_b, owner, 95, 950);
+    owner.makeCurrent(path_a_record);
+    assert(domain.acknowledge(path_b_record, timeFromUs(uint32_t{7})));
+    assert(owner.recovered.empty());
+    assert(domain.retire(path_a_record));
+    assert(!EventList::doNextEvent());
+
+    const LapsAttempt first = domain.sent(path_a, owner, 100, 1000);
+    const LapsAttempt middle = domain.sent(path_a, owner, 110, 1000);
+    const LapsAttempt tail = domain.sent(path_a, owner, 120, 1000);
+    owner.makeCurrent(first);
+    assert(domain.acknowledge(middle, timeFromUs(uint32_t{7})));
+    owner.makeCurrent(tail);
+
+    const size_t callbacks_before = owner.callbacks.size();
+    assert(!domain.acknowledge(first, timeFromUs(uint32_t{7})));
+    assert(!domain.nack(first));
+    assert(!domain.retire(first));
+    assert(owner.callbacks.size() == callbacks_before);
+
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == timeFromUs(uint32_t{14}));
+    assert((owner.recovered ==
+            std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{100, 1000}, {120, 1000}}));
+    assert(owner.callbacks.back().attempt == tail);
+
+    const size_t expired_callbacks_before = owner.callbacks.size();
+    assert(!domain.acknowledge(tail, timeFromUs(uint32_t{7})));
+    assert(!domain.nack(tail));
+    assert(!domain.retire(tail));
+    assert(owner.callbacks.size() == expired_callbacks_before);
+}
+
+void no_sample_uses_the_bootstrap_rto(EventList& eventlist, LapsRecoveryDomain& domain) {
+    FakeOwner owner;
+    const LapsPathKey path{"queue-g\\x1fqueue-h"};
+    const simtime_picosec sent_at = EventList::now();
+
+    const LapsAttempt lone = domain.sent(path, owner, 125, 2100);
+    owner.makeCurrent(lone);
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == sent_at + LapsRecoveryDomain::kBootstrapRto);
+    assert((owner.recovered ==
+            std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{125, 2100}}));
+    assert(owner.callbacks.back().attempt == lone);
 }
 
 void nack_detaches_the_old_attempt_before_retry(EventList& eventlist, LapsRecoveryDomain& domain) {
     FakeOwner owner;
     const LapsPathKey path{"queue-e\\x1fqueue-f"};
+    const simtime_picosec retry_sent_at = EventList::now();
 
     const LapsAttempt old_attempt = domain.sent(path, owner, 40, 1300);
     owner.makeCurrent(old_attempt);
@@ -243,7 +304,7 @@ void nack_detaches_the_old_attempt_before_retry(EventList& eventlist, LapsRecove
     owner.lapsRecover(old_attempt, 40, 1300);
     assert(owner.recovered.empty());
     assert(EventList::doNextEvent());
-    assert(EventList::now() == LapsRecoveryDomain::kRto);
+    assert(EventList::now() == retry_sent_at + LapsRecoveryDomain::kBootstrapRto);
     assert((owner.recovered ==
             std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{40, 1300}}));
     assert(owner.callbacks.back().attempt == retry);
@@ -253,16 +314,17 @@ void expired_recovery_batch_is_removed_before_owner_can_reregister(
     EventList& eventlist, LapsRecoveryDomain& domain) {
     const LapsPathKey path{"queue-g\\x1fqueue-h"};
     ReRegisteringOwner owner(domain, path);
+    const simtime_picosec first_sent_at = EventList::now();
 
     const LapsAttempt first = domain.sent(path, owner, 130, 2200);
     assert(EventList::doNextEvent());
-    assert(EventList::now() == 2 * LapsRecoveryDomain::kRto);
+    assert(EventList::now() == first_sent_at + LapsRecoveryDomain::kBootstrapRto);
     assert((owner.recovered ==
             std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{130, 2200}}));
     assert(owner.retried_attempt != first);
 
     assert(EventList::doNextEvent());
-    assert(EventList::now() == 3 * LapsRecoveryDomain::kRto);
+    assert(EventList::now() == first_sent_at + 2 * LapsRecoveryDomain::kBootstrapRto);
     assert((owner.recovered ==
             std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{130, 2200}, {140, 2300}}));
 }
@@ -274,6 +336,8 @@ int main() {
     materializes_canonical_ecmp_paths_before_data_forwarding(eventlist);
     LapsRecoveryDomain domain(eventlist);
     attempt_lifecycle_is_path_scoped_and_attempt_safe(eventlist, domain);
+    acknowledge_does_not_cross_paths_and_retimes_the_tail(eventlist, domain);
+    no_sample_uses_the_bootstrap_rto(eventlist, domain);
     nack_detaches_the_old_attempt_before_retry(eventlist, domain);
     expired_recovery_batch_is_removed_before_owner_can_reregister(eventlist, domain);
 }
