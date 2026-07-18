@@ -12,12 +12,10 @@ LapsRecoveryDomain::LapsRecoveryDomain(EventList& eventlist)
 
 void LapsRecoveryDomain::sent(LapsPathKey path, LapsRecoveryOwner& owner,
                               UecBasePacket::seq_t seq, mem_b bytes) {
-    auto [path_it, inserted] = paths_.try_emplace(path);
+    const auto path_it = paths_.try_emplace(path).first;
     PathState& state = path_it->second;
-    if (inserted) {
-        state.deadline = EventList::now() + kRto;
-    }
     state.records.push_back({&owner, seq, bytes});
+    state.deadline = EventList::now() + kRto;
     updateTimer();
 }
 
@@ -45,6 +43,8 @@ bool LapsRecoveryDomain::acknowledge(LapsPathKey path, LapsRecoveryOwner& owner,
 
     if (state.records.empty()) {
         paths_.erase(path_it);
+    } else {
+        state.deadline = EventList::now() + kRto;
     }
     updateTimer();
     return true;
@@ -53,10 +53,14 @@ bool LapsRecoveryDomain::acknowledge(LapsPathKey path, LapsRecoveryOwner& owner,
 void LapsRecoveryDomain::removeOwner(LapsRecoveryOwner& owner) {
     for (auto path_it = paths_.begin(); path_it != paths_.end();) {
         PathState& state = path_it->second;
+        const size_t old_size = state.records.size();
         state.records.remove_if([&](const Record& record) { return record.owner == &owner; });
         if (state.records.empty()) {
             path_it = paths_.erase(path_it);
         } else {
+            if (state.records.size() != old_size) {
+                state.deadline = EventList::now() + kRto;
+            }
             ++path_it;
         }
     }

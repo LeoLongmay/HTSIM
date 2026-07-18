@@ -89,6 +89,37 @@ void remove_owner_preserves_other_path_records(EventList& eventlist, LapsRecover
     assert(!EventList::doNextEvent());
 }
 
+void nonempty_paths_reset_their_rto(EventList& eventlist, LapsRecoveryDomain& domain) {
+    FakeOwner owner_a;
+    FakeOwner owner_b;
+    const LapsPathKey path{13, 7};
+
+    domain.sent(path, owner_a, 90, 1800);
+    SendAt send_later(eventlist, [&] { domain.sent(path, owner_a, 100, 1900); });
+    eventlist.sourceIsPending(send_later, EventList::now() + timeFromMs(1));
+
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == timeFromUs(uint32_t{18000}));
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == timeFromUs(uint32_t{26000}));
+    assert((owner_a.recovered ==
+            std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{90, 1800}, {100, 1900}}));
+
+    domain.sent(path, owner_a, 110, 2000);
+    domain.sent(path, owner_b, 120, 2100);
+    SendAt acknowledge_later(eventlist, [&] {
+        assert(domain.acknowledge(path, owner_a, 110, 2000));
+    });
+    eventlist.sourceIsPending(acknowledge_later, EventList::now() + timeFromMs(1));
+
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == timeFromUs(uint32_t{27000}));
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == timeFromUs(uint32_t{35000}));
+    assert((owner_b.recovered ==
+            std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{120, 2100}}));
+}
+
 }  // namespace
 
 int main() {
@@ -96,4 +127,5 @@ int main() {
     LapsRecoveryDomain domain(eventlist);
     later_ack_recovers_shared_path_records_in_send_order(eventlist, domain);
     remove_owner_preserves_other_path_records(eventlist, domain);
+    nonempty_paths_reset_their_rto(eventlist, domain);
 }
