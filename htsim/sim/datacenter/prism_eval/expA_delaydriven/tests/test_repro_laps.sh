@@ -119,6 +119,47 @@ replacement_target_count="$(grep -c '^LAPS replacement target: ' "$replacement_d
 [ "$ops_before" = "$(cksum "$replacement_data_dir/expA_ops_f0_s13.flow.txt")" ]
 [ "$original_fig_before" = "$(cksum "$replacement_figs_dir/figA1dd_goodput.pdf")" ]
 
+invalid_replace_root="$TMP/invalid-replace-idmap-root"
+invalid_replace_stub_dir="$invalid_replace_root/prism_eval/common"
+invalid_replace_data_dir="$TMP/invalid-replace-idmap-data"
+invalid_replace_figs_dir="$TMP/invalid-replace-idmap-figs"
+mkdir -p "$invalid_replace_stub_dir" "$invalid_replace_data_dir" "$invalid_replace_figs_dir"
+cp "$stub" "$invalid_replace_stub_dir/run_lib.sh"
+cp -a "$replacement_data_dir/." "$invalid_replace_data_dir/"
+cp -a "$replacement_figs_dir/." "$invalid_replace_figs_dir/"
+invalid_replace_data_before="$TMP/invalid-replace-data-before.cksum"
+invalid_replace_figs_before="$TMP/invalid-replace-figs-before.cksum"
+(cd "$invalid_replace_data_dir" && find . -name 'expA_laps_f*_s*' -type f -print0 | sort -z | xargs -0 cksum) >"$invalid_replace_data_before"
+(cd "$invalid_replace_figs_dir" && find . -name '*_laps.*' -type f -print0 | sort -z | xargs -0 cksum) >"$invalid_replace_figs_before"
+invalid_replace_shared_idmap="$invalid_replace_root/idmap.txt"
+invalid_replace_target="$TMP/invalid-replace-idmap-target"
+ln -s "$invalid_replace_target" "$invalid_replace_shared_idmap"
+invalid_replace_marker="$TMP/invalid-replace-idmap-stub-ran"
+if DATA_DIR="$invalid_replace_data_dir" FIGS_DIR="$invalid_replace_figs_dir" \
+  RUN_LIB="$invalid_replace_stub_dir/run_lib.sh" STUB_MARK="$invalid_replace_marker" \
+  bash "$RUNNER" --replace-laps >"$TMP/invalid-replace-idmap-run.txt" 2>&1; then
+  echo "runner accepted a dangling shared-idmap symlink during LAPS replacement" >&2
+  exit 1
+fi
+[ -L "$invalid_replace_shared_idmap" ] || {
+  echo "runner removed the dangling shared-idmap symlink during LAPS replacement" >&2
+  exit 1
+}
+[ ! -e "$invalid_replace_marker" ] || {
+  echo "runner invoked run_lib with an invalid shared-idmap during LAPS replacement" >&2
+  exit 1
+}
+(cd "$invalid_replace_data_dir" && find . -name 'expA_laps_f*_s*' -type f -print0 | sort -z | xargs -0 cksum) >"$TMP/invalid-replace-data-after.cksum"
+(cd "$invalid_replace_figs_dir" && find . -name '*_laps.*' -type f -print0 | sort -z | xargs -0 cksum) >"$TMP/invalid-replace-figs-after.cksum"
+cmp -s "$invalid_replace_data_before" "$TMP/invalid-replace-data-after.cksum" || {
+  echo "runner deleted a LAPS data artifact before rejecting an invalid shared idmap" >&2
+  exit 1
+}
+cmp -s "$invalid_replace_figs_before" "$TMP/invalid-replace-figs-after.cksum" || {
+  echo "runner deleted a LAPS overlay before rejecting an invalid shared idmap" >&2
+  exit 1
+}
+
 replacement_marker="$TMP/replacement-stub-ran"
 DATA_DIR="$replacement_data_dir" FIGS_DIR="$replacement_figs_dir" RUN_LIB="$stub" \
   STUB_MARK="$replacement_marker" bash "$RUNNER" --replace-laps >"$TMP/replacement-run.txt"

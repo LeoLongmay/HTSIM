@@ -113,10 +113,6 @@ if ! "$replace_laps"; then
   done
 fi
 
-if "$replace_laps"; then
-  remove_replacement_targets
-fi
-
 idmap_existed=false
 idmap_backup=""
 if [ -e "$SHARED_IDMAP" ] || [ -L "$SHARED_IDMAP" ]; then
@@ -153,6 +149,10 @@ trap 'restore_shared_idmap $?' EXIT
 trap 'restore_shared_idmap 129' HUP
 trap 'restore_shared_idmap 130' INT
 trap 'restore_shared_idmap 143' TERM
+
+if "$replace_laps"; then
+  remove_replacement_targets
+fi
 
 for failed in "${FAILEDS[@]}"; do
   for seed in "${SEEDS[@]}"; do
