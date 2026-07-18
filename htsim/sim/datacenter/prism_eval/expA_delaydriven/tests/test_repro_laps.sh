@@ -48,6 +48,11 @@ printf 'stub was invoked\n' >>"${STUB_MARK:?}"
 shared_idmap="$(cd "$(dirname "$0")/../.." && pwd)/idmap.txt"
 printf 'generated idmap\n' >"$shared_idmap"
 cp "$shared_idmap" "$9/$8.idmap"
+if [ "${STUB_WAIT_FOR_TERM:-0}" = 1 ]; then
+  : "${STUB_READY:?}"
+  : >"$STUB_READY"
+  while :; do sleep 1; done
+fi
 exit "${STUB_EXIT_CODE:-0}"
 EOF
 chmod +x "$stub"
@@ -134,6 +139,66 @@ DATA_DIR="$absent_data_dir" RUN_LIB="$absent_stub_dir/run_lib.sh" STUB_MARK="$TM
   bash "$RUNNER"
 [ ! -e "$absent_shared_idmap" ] || {
   echo "runner did not remove a generated shared idmap that was initially absent" >&2
+  exit 1
+}
+
+dangling_root="$TMP/dangling-idmap-root"
+dangling_stub_dir="$dangling_root/prism_eval/common"
+dangling_data_dir="$TMP/dangling-idmap-data"
+mkdir -p "$dangling_stub_dir" "$dangling_data_dir"
+touch "$dangling_data_dir/m2m.cm"
+cp "$stub" "$dangling_stub_dir/run_lib.sh"
+dangling_shared_idmap="$dangling_root/idmap.txt"
+dangling_target="$TMP/dangling-idmap-target"
+ln -s "$dangling_target" "$dangling_shared_idmap"
+if DATA_DIR="$dangling_data_dir" RUN_LIB="$dangling_stub_dir/run_lib.sh" \
+  STUB_MARK="$TMP/dangling-idmap-stub-ran" bash "$RUNNER" >"$TMP/dangling-idmap-run.txt" 2>&1; then
+  echo "runner accepted a dangling shared-idmap symlink" >&2
+  exit 1
+fi
+[ -L "$dangling_shared_idmap" ] || {
+  echo "runner removed the dangling shared-idmap symlink" >&2
+  exit 1
+}
+[ ! -e "$dangling_target" ] || {
+  echo "runner wrote through the dangling shared-idmap symlink" >&2
+  exit 1
+}
+[ ! -e "$TMP/dangling-idmap-stub-ran" ] || {
+  echo "runner invoked run_lib with a dangling shared-idmap symlink" >&2
+  exit 1
+}
+
+term_root="$TMP/term-idmap-root"
+term_stub_dir="$term_root/prism_eval/common"
+term_data_dir="$TMP/term-idmap-data"
+mkdir -p "$term_stub_dir" "$term_data_dir"
+touch "$term_data_dir/m2m.cm"
+cp "$stub" "$term_stub_dir/run_lib.sh"
+term_shared_idmap="$term_root/idmap.txt"
+cp "$sentinel_idmap" "$term_shared_idmap"
+term_ready="$TMP/term-idmap-ready"
+setsid env DATA_DIR="$term_data_dir" RUN_LIB="$term_stub_dir/run_lib.sh" \
+  STUB_MARK="$TMP/term-idmap-stub-ran" STUB_WAIT_FOR_TERM=1 STUB_READY="$term_ready" \
+  bash "$RUNNER" >"$TMP/term-idmap-run.txt" 2>&1 &
+term_pid=$!
+for _ in $(seq 1 50); do
+  [ -e "$term_ready" ] && break
+  sleep 0.1
+done
+[ -e "$term_ready" ] || {
+  kill -TERM -- "-$term_pid" 2>/dev/null || true
+  wait "$term_pid" 2>/dev/null || true
+  echo "timed out waiting for the term-test stub" >&2
+  exit 1
+}
+kill -TERM -- "-$term_pid"
+if wait "$term_pid"; then
+  echo "runner survived TERM" >&2
+  exit 1
+fi
+cmp -s "$sentinel_idmap" "$term_shared_idmap" || {
+  echo "runner did not restore shared idmap after TERM" >&2
   exit 1
 }
 

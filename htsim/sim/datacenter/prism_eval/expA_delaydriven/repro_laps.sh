@@ -71,8 +71,8 @@ done
 
 idmap_existed=false
 idmap_backup=""
-if [ -e "$SHARED_IDMAP" ]; then
-  [ -f "$SHARED_IDMAP" ] || {
+if [ -e "$SHARED_IDMAP" ] || [ -L "$SHARED_IDMAP" ]; then
+  [ -f "$SHARED_IDMAP" ] && [ ! -L "$SHARED_IDMAP" ] || {
     echo "ERROR: shared idmap is not a regular file: $SHARED_IDMAP" >&2
     exit 1
   }
