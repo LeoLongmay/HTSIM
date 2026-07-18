@@ -67,12 +67,15 @@ void strict_laps_uses_canonical_shared_paths_and_retires_all_ack_forms(EventList
     const LapsPathKey other_path("10:other-path");
     LapsRecoveryDomain& domain = nic.lapsRecovery();
     installStrictRecord(first, domain, first_entropy_0, 0, 10, 1'000);
-    installStrictRecord(second, domain, second_entropy_1, 1, 20, 1'100);
+    const LapsAttempt second_attempt =
+        installStrictRecord(second, domain, second_entropy_1, 1, 20, 1'100);
     installStrictRecord(first, domain, first_entropy_0, 0, 30, 1'200);
     installStrictRecord(first, domain, other_path, 1, 50, 1'300);
 
-    // Exact ACK of 30 infers 10/20 lost on the shared physical path.  Its
-    // SACK retires 50 on another path.
+    // Exact ACK of first's 30 infers only first's earlier 10 lost.  A shared
+    // physical-path fingerprint does not cross the source-owner boundary, so
+    // second's 20 remains an outstanding record.  The SACK retires first's
+    // 50 on another path.
     UecAckPacket* ack = UecAckPacket::newpkt(*first.flow(), nullptr, 0, 50, 30, 0,
                                              false, 0, 255);
     ack->set_bitmap(1);
@@ -80,16 +83,22 @@ void strict_laps_uses_canonical_shared_paths_and_retires_all_ack_forms(EventList
     ack->free();
 
     assert(first._rtx_queue.count(10) == 1);
-    assert(second._rtx_queue.count(20) == 1);
+    assert(second._rtx_queue.count(20) == 0);
+    assert(second._tx_bitmap.count(20) == 1);
     assert(first._tx_bitmap.count(30) == 1);
-    assert(second._tx_bitmap.empty());
+    assert(first._tx_bitmap.count(50) == 0);
     UecAckPacket* cumulative = UecAckPacket::newpkt(*first.flow(), nullptr, 31, 0, 30,
                                                     0, false, 0, 255);
     first.processAck(*cumulative);
     cumulative->free();
     assert(first._tx_bitmap.empty());
-    // Every strict attempt was detached before generic UEC record erasure, so
-    // no delayed strict-recovery callback remains at kRto.
+    assert(second._tx_bitmap.count(20) == 1);
+
+    // Explicit test teardown: the independent owner's still-outstanding
+    // attempt would otherwise keep its recovery deadline pending.
+    assert(domain.retire(second_attempt));
+    // Test teardown detached the remaining independent-owner attempt, so no
+    // delayed strict-recovery callback remains.
     assert(!EventList::doNextEvent());
 }
 
@@ -157,7 +166,7 @@ void strict_nack_retires_old_attempt_before_retry(EventList& eventlist) {
     assert(retry_attempt != old_attempt);
     assert(source._tx_bitmap.at(40).laps_attempt == retry_attempt);
     assert(EventList::doNextEvent());
-    assert(EventList::now() == timeFromUs(uint32_t{16000}));
+    assert(EventList::now() == timeFromUs(uint32_t{8000}) + LapsRecoveryDomain::kBootstrapRto);
     assert(source._tx_bitmap.empty());
     assert(source._rtx_queue.count(40) == 1);
 }
@@ -174,6 +183,7 @@ void non_laps_source_never_joins_paired_recovery_on_the_same_nic(EventList& even
     non_laps.lapsSetPathResolver({});
     assert(!non_laps.lapsResolvePath(0, 0, ignored));
 
+    const simtime_picosec sent_at = EventList::now();
     laps.createSendRecord(3, 40, 1'300, {}, true);
     laps._in_flight += 1'300;
     LapsRecoveryDomain& domain = nic.lapsRecovery();
@@ -193,7 +203,7 @@ void non_laps_source_never_joins_paired_recovery_on_the_same_nic(EventList& even
     const mem_b non_laps_rtx_backlog_before = non_laps._rtx_backlog;
 
     assert(EventList::doNextEvent());
-    assert(EventList::now() == timeFromUs(uint32_t{24000}));
+    assert(EventList::now() == sent_at + LapsRecoveryDomain::kBootstrapRto);
     assert(laps._tx_bitmap.empty());
     assert(laps._rtx_queue.count(40) == 1);
     assert(non_laps._tx_bitmap.size() == non_laps_tx_count_before);
