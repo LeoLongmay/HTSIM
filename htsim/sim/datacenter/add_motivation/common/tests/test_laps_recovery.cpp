@@ -16,6 +16,25 @@ public:
     std::vector<std::pair<UecBasePacket::seq_t, mem_b>> recovered;
 };
 
+class ReRegisteringOwner final : public LapsRecoveryOwner {
+public:
+    ReRegisteringOwner(LapsRecoveryDomain& domain, LapsPathKey path)
+        : domain_(domain), path_(path) {}
+
+    void lapsRecover(UecBasePacket::seq_t seq, mem_b bytes) override {
+        recovered.push_back({seq, bytes});
+        if (seq == 130) {
+            domain_.sent(path_, *this, 140, 2300);
+        }
+    }
+
+    std::vector<std::pair<UecBasePacket::seq_t, mem_b>> recovered;
+
+private:
+    LapsRecoveryDomain& domain_;
+    LapsPathKey path_;
+};
+
 class SendAt final : public EventSource {
 public:
     SendAt(EventList& eventlist, std::function<void()> action)
@@ -120,6 +139,23 @@ void nonempty_paths_reset_their_rto(EventList& eventlist, LapsRecoveryDomain& do
             std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{120, 2100}}));
 }
 
+void expired_recovery_batch_is_removed_before_owner_can_reregister(
+    EventList& eventlist, LapsRecoveryDomain& domain) {
+    const LapsPathKey path{14, 8};
+    ReRegisteringOwner owner(domain, path);
+
+    domain.sent(path, owner, 130, 2200);
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == timeFromUs(uint32_t{43000}));
+    assert((owner.recovered ==
+            std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{130, 2200}}));
+
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == timeFromUs(uint32_t{51000}));
+    assert((owner.recovered ==
+            std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{130, 2200}, {140, 2300}}));
+}
+
 }  // namespace
 
 int main() {
@@ -128,4 +164,5 @@ int main() {
     later_ack_recovers_shared_path_records_in_send_order(eventlist, domain);
     remove_owner_preserves_other_path_records(eventlist, domain);
     nonempty_paths_reset_their_rto(eventlist, domain);
+    expired_recovery_batch_is_removed_before_owner_can_reregister(eventlist, domain);
 }

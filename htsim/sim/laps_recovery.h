@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <list>
 #include <map>
+#include <vector>
 
 #include "eventlist.h"
 #include "uecpacket.h"
@@ -53,7 +54,6 @@ private:
     };
 
     void updateTimer();
-    void recover(PathState& state);
 
     std::map<LapsPathKey, PathState> paths_;
     EventList::Handle timer_handle_;

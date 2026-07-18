@@ -71,13 +71,19 @@ void LapsRecoveryDomain::doNextEvent() {
     timer_handle_ = eventlist().nullHandle();
     timer_deadline_ = 0;
 
+    std::vector<Record> expired_records;
     for (auto path_it = paths_.begin(); path_it != paths_.end();) {
         if (path_it->second.deadline <= EventList::now()) {
-            recover(path_it->second);
+            const PathState& state = path_it->second;
+            expired_records.insert(expired_records.end(), state.records.begin(), state.records.end());
             path_it = paths_.erase(path_it);
         } else {
             ++path_it;
         }
+    }
+
+    for (const Record& record : expired_records) {
+        record.owner->lapsRecover(record.seq, record.bytes);
     }
     updateTimer();
 }
@@ -107,11 +113,5 @@ void LapsRecoveryDomain::updateTimer() {
     timer_handle_ = eventlist().sourceIsPendingGetHandle(*this, timer_deadline_);
     if (timer_handle_ == eventlist().nullHandle()) {
         timer_deadline_ = 0;
-    }
-}
-
-void LapsRecoveryDomain::recover(PathState& state) {
-    for (const Record& record : state.records) {
-        record.owner->lapsRecover(record.seq, record.bytes);
     }
 }

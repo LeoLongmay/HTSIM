@@ -770,7 +770,8 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 break;
             case LAPS:
                 updateCwndOnAck = &UecSrc::dontUpdateCwndOnAck;
-                updateCwndOnNack = &UecSrc::dontUpdateCwndOnNack;
+                updateCwndOnNack = isStrictLaps() ? &UecSrc::dontUpdateCwndOnNack
+                                                   : &UecSrc::updateCwndOnNack_NSCC;
                 break;
             default:
                 cout << "Unknown CC algo specified " << _sender_cc_algo << endl;
@@ -3936,7 +3937,7 @@ void UecSrc::recalculateRTO() {
     for (const auto& [send_time, seqno] : _send_times) {
         const auto record = _tx_bitmap.find(seqno);
         assert(record != _tx_bitmap.end());
-        if (!record->second.strict_laps_data) {
+        if (!isStrictLaps() || !record->second.strict_laps_data) {
             startRTO(send_time);
             return;
         }
@@ -3951,7 +3952,7 @@ void UecSrc::rtxTimerExpired() {
     for (auto entry = _send_times.begin(); entry != _send_times.end(); ++entry) {
         const auto record = _tx_bitmap.find(entry->second);
         assert(record != _tx_bitmap.end());
-        if (!record->second.strict_laps_data) {
+        if (!isStrictLaps() || !record->second.strict_laps_data) {
             first_entry = entry;
             break;
         }
@@ -3961,7 +3962,7 @@ void UecSrc::rtxTimerExpired() {
 
     auto send_record = _tx_bitmap.find(seqno);
     assert(send_record != _tx_bitmap.end());
-    assert(!send_record->second.strict_laps_data);
+    assert(!isStrictLaps() || !send_record->second.strict_laps_data);
     mem_b pkt_size = send_record->second.pkt_size;
 
     _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);

@@ -72,7 +72,6 @@ public:
     void doNextEvent();
 
     linkspeed_bps linkspeed() const {return _linkspeed;}
-    LapsRecoveryDomain& lapsRecovery();
     bool hasLapsRecovery() const { return _laps_recovery != nullptr; }
 
     int activeSources() const { return _active_srcs.size(); }
@@ -80,6 +79,9 @@ public:
     list<UecSrc*> _active_srcs;
 
 private:
+    friend class UecSrc;
+
+    LapsRecoveryDomain& lapsRecovery();
     void sendControlPktNow();
     uint32_t sendOnFreePortNow(simtime_picosec endtime, const Route* rt);
     list<struct CtrlPacket> _control;
