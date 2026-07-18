@@ -254,7 +254,11 @@
   `LapsRateState::cur_rate`.  On valid LAPS ACK feedback, build a
   `LapsRateSignal` from `UecMpLaps`, call `advanceLapsRate`, and do not invoke
   `applyLapsCwnd`, `fair_increase`, `proportional_increase`, or generic NACK
-  cwnd updates for LAPS.
+  cwnd updates for LAPS.  Refactor `sendRtxPacket` to emit and return exactly
+  one retransmission, like `sendNewPacket`; remove its internal recursive
+  `sendNewPacket/sendRtxPacket` chaining.  The existing outer
+  `sendIfPermitted` continuation then re-enters the LAPS time gate before any
+  subsequent packet, so retransmissions cannot bypass pacing.
 
 - [ ] **Step 6: Run focused UEC, packet-feedback, and non-LAPS regression tests**
 
