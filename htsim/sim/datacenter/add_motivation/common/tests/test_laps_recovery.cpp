@@ -3,6 +3,7 @@
 #include "datacenter/fat_tree_switch.h"
 
 #include <cassert>
+#include <limits>
 #include <map>
 #include <string>
 #include <utility>
@@ -50,6 +51,13 @@ public:
 private:
     LapsRecoveryDomain& domain_;
     LapsPathKey path_;
+};
+
+class NoopEventSource final : public EventSource {
+public:
+    explicit NoopEventSource(EventList& eventlist) : EventSource(eventlist, "laps test noop") {}
+
+    void doNextEvent() override {}
 };
 
 class TestPacketSink final : public PacketSink {
@@ -331,6 +339,28 @@ void expired_recovery_batch_is_removed_before_owner_can_reregister(
             std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{130, 2200}, {140, 2300}}));
 }
 
+void saturated_deadline_is_still_scheduled_and_recovers(
+    EventList& eventlist, LapsRecoveryDomain& domain) {
+    FakeOwner owner;
+    NoopEventSource advance_to_saturation(eventlist);
+    const simtime_picosec maximum = std::numeric_limits<simtime_picosec>::max();
+
+    EventList::sourceIsPending(advance_to_saturation,
+                               maximum - LapsRecoveryDomain::kBootstrapRto);
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == maximum - LapsRecoveryDomain::kBootstrapRto);
+
+    const LapsAttempt attempt = domain.sent(LapsPathKey{"queue-i\\x1fqueue-j"}, owner,
+                                            150, 2400);
+    owner.makeCurrent(attempt);
+
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == maximum);
+    assert((owner.recovered ==
+            std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{150, 2400}}));
+    assert(owner.callbacks.back().attempt == attempt);
+}
+
 }  // namespace
 
 int main() {
@@ -342,4 +372,5 @@ int main() {
     no_sample_uses_the_bootstrap_rto(eventlist, domain);
     nack_detaches_the_old_attempt_before_retry(eventlist, domain);
     expired_recovery_batch_is_removed_before_owner_can_reregister(eventlist, domain);
+    saturated_deadline_is_still_scheduled_and_recovers(eventlist, domain);
 }

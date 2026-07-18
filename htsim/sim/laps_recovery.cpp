@@ -138,13 +138,15 @@ void LapsRecoveryDomain::doNextEvent() {
 
 void LapsRecoveryDomain::updateTimer() {
     simtime_picosec earliest_deadline = std::numeric_limits<simtime_picosec>::max();
+    bool has_active_deadline = false;
     for (const auto& [path, state] : paths_) {
         if (!state.records.empty()) {
+            has_active_deadline = true;
             earliest_deadline = std::min(earliest_deadline, state.deadline);
         }
     }
 
-    if (earliest_deadline == std::numeric_limits<simtime_picosec>::max()) {
+    if (!has_active_deadline) {
         if (timer_handle_ != eventlist().nullHandle()) {
             eventlist().cancelPendingSourceByHandle(*this, timer_handle_);
             timer_handle_ = eventlist().nullHandle();
