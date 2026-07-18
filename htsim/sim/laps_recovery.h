@@ -18,13 +18,6 @@ struct LapsPathKey {
     LapsPathKey() = default;
     LapsPathKey(std::string fingerprint) : queue_fingerprint(std::move(fingerprint)) {}
 
-    // The UEC caller is migrated in the following task.  This constructor is
-    // source compatibility only; it cannot participate in attempt lookup.
-    [[deprecated("strict LAPS requires a queue fingerprint")]]
-    LapsPathKey(uint32_t destination, uint32_t entropy)
-        : queue_fingerprint("unmigrated:" + std::to_string(destination) + ":" +
-                            std::to_string(entropy)) {}
-
     bool operator<(const LapsPathKey& other) const {
         return queue_fingerprint < other.queue_fingerprint;
     }
@@ -50,10 +43,8 @@ class LapsRecoveryOwner {
 public:
     virtual ~LapsRecoveryOwner() = default;
 
-    // Kept temporarily so the domain change can be compiled independently of
-    // the UEC call-site migration.  The strict domain never invokes it.
-    virtual void lapsRecover(UecBasePacket::seq_t seq, mem_b bytes) = 0;
-    virtual void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) {}
+    virtual void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq,
+                             mem_b bytes) = 0;
 };
 
 class LapsRecoveryDomain final : public EventSource {
@@ -69,11 +60,6 @@ public:
     bool nack(LapsAttempt attempt);
     bool retire(LapsAttempt attempt);
 
-    // Transitional no-op until the strict UEC send records carry LapsAttempt.
-    // It deliberately never looks up records by owner/sequence/byte count.
-    bool acknowledge(LapsPathKey, LapsRecoveryOwner&, UecBasePacket::seq_t, mem_b) {
-        return false;
-    }
     void removeOwner(LapsRecoveryOwner& owner);
     void doNextEvent() override;
 

@@ -38,6 +38,7 @@ class UecSink;
 class UecSrc;
 class UecLogger;
 class MotivationTraceWriter;
+class BaseQueue;
 
 
 // UecNIC aggregates UecSrcs that are on the same NIC.  It round
@@ -178,8 +179,11 @@ public:
     uint32_t dst() { return _dstaddr; }
     void setDst(uint32_t dst) { _dstaddr = dst; }
     bool isStrictLaps() const;
-    LapsPathKey lapsPathKey(uint32_t entropy) const;
-    void lapsRecover(UecBasePacket::seq_t seq, mem_b bytes) override;
+    using LapsPathResolver = std::function<bool(
+        uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
+    void lapsSetPathResolver(LapsPathResolver resolver);
+    bool lapsResolvePath(uint32_t entropy, LapsPathKey& path) const;
+    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override;
     using PrismOraclePathResolver = std::function<bool(
         uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void prismSetOraclePathResolver(PrismOraclePathResolver resolver,
@@ -284,14 +288,16 @@ public:
     struct sendRecord {
         // need a constructor to be able to put this in a map
         sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime,
-                   UecMpSelection pselection, bool strict_laps_data)
+                   UecMpSelection pselection, bool strict_laps_data,
+                   std::optional<LapsAttempt> laps_attempt = std::nullopt)
             : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection),
-              strict_laps_data(strict_laps_data){};
+              strict_laps_data(strict_laps_data), laps_attempt(laps_attempt){};
         uint32_t path_id;
         mem_b pkt_size;
         simtime_picosec send_time;
         UecMpSelection selection;
         bool strict_laps_data;
+        std::optional<LapsAttempt> laps_attempt;
     };
     UecLogger* _logger;
     TrafficLogger* _pktlogger;
@@ -335,6 +341,7 @@ public:
     uint32_t _motivation_path_entropy_size = 0;
     std::vector<MotivationResolvedPath> _motivation_paths;
     std::vector<bool> _motivation_path_attempted;
+    LapsPathResolver _laps_path_resolver;
     uint64_t motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
                               simtime_picosec qdelay, bool genuine,
                               const UecMpSelection& selection,

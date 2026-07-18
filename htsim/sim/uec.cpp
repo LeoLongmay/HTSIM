@@ -802,13 +802,43 @@ bool UecSrc::isStrictLaps() const {
     return _sender_cc_algo == LAPS && dynamic_cast<const UecMpLaps*>(_mp.get()) != nullptr;
 }
 
-LapsPathKey UecSrc::lapsPathKey(uint32_t entropy) const {
-    return {_dstaddr, entropy};
+void UecSrc::lapsSetPathResolver(LapsPathResolver resolver) {
+    // The resolver materializes the forwarding path and is deliberately a
+    // paired strict-LAPS facility.  Legacy LAPS keeps its old UEC behavior.
+    if (isStrictLaps()) {
+        _laps_path_resolver = std::move(resolver);
+    }
 }
 
-void UecSrc::lapsRecover(UecBasePacket::seq_t seqno, mem_b bytes) {
+bool UecSrc::lapsResolvePath(uint32_t entropy, LapsPathKey& path) const {
+    if (!isStrictLaps() || !_laps_path_resolver) {
+        return false;
+    }
+
+    vector<const BaseQueue*> queues;
+    if (!_laps_path_resolver(flowId(), entropy, queues) || queues.empty()) {
+        return false;
+    }
+
+    ostringstream fingerprint;
+    for (const BaseQueue* queue : queues) {
+        if (queue == nullptr) {
+            return false;
+        }
+        const string& name = queue->queueName();
+        // Length-prefixing preserves the queue sequence even when names
+        // contain the delimiter or each other as a prefix.
+        fingerprint << name.size() << ':' << name;
+    }
+    path = LapsPathKey(fingerprint.str());
+    return true;
+}
+
+void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b bytes) {
     const auto record = _tx_bitmap.find(seqno);
-    if (record == _tx_bitmap.end() || record->second.pkt_size != bytes) {
+    if (record == _tx_bitmap.end() || record->second.pkt_size != bytes ||
+        !record->second.laps_attempt.has_value() ||
+        *record->second.laps_attempt != attempt) {
         return;
     }
 
@@ -1128,6 +1158,10 @@ mem_b UecSrc::handleAckno(UecDataPacket::seq_t ackno) {
             _msg_tracker.value()->addSAck(ackno);
         }
 
+        if (isStrictLaps() && i->second.strict_laps_data) {
+            assert(i->second.laps_attempt.has_value());
+            _nic.lapsRecovery().retire(*i->second.laps_attempt);
+        }
         _tx_bitmap.erase(i);
         // _send_times.erase(send_time);
         delFromSendTimes(send_time, ackno);
@@ -1205,6 +1239,10 @@ mem_b UecSrc::handleCumulativeAck(UecDataPacket::seq_t cum_ack) {
             cout << timeAsUs(eventlist().now()) << " flowid " << _flow.flow_id() << " handleCumulativeAck seqno " << seqno
                 << endl;
         }  
+        if (isStrictLaps() && i->second.strict_laps_data) {
+            assert(i->second.laps_attempt.has_value());
+            _nic.lapsRecovery().retire(*i->second.laps_attempt);
+        }
         _tx_bitmap.erase(i);
         i = _tx_bitmap.begin();
         // _send_times.erase(send_time);
@@ -1438,7 +1476,6 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             pkt.is_probe_ack(), acked_psn,
             validated_normal_selection ? &*validated_normal_selection : nullptr);
 
-    mem_b pkt_size;
     simtime_picosec delay;
     simtime_picosec raw_rtt = 0;
     simtime_picosec send_time = 0;
@@ -1458,7 +1495,6 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         }
         //auto seqno = i->first;
         send_time = i->second.send_time;
-        pkt_size = i->second.pkt_size;
         raw_rtt = eventlist().now() - send_time;
 
         // PRISM: read-only per-path RTT log, gated by env var PRISM_PATHRTT.
@@ -1521,15 +1557,14 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             }else{
                 delay = get_avg_delay();
             }
-            pkt_size = 0;
         }else{
-            pkt_size = _mtu;
             delay = get_avg_delay();
         }
     }
 
-    if (isStrictLaps() && valid_normal_send_attempt) {
-        _nic.lapsRecovery().acknowledge(lapsPathKey(pkt.ev()), *this, pkt.acked_psn(), pkt_size);
+    if (isStrictLaps() && valid_normal_send_attempt && i->second.strict_laps_data) {
+        assert(i->second.laps_attempt.has_value());
+        _nic.lapsRecovery().acknowledge(*i->second.laps_attempt);
     }
 
     const bool valid_laps_probe_ack = pkt.is_probe_ack() &&
@@ -3034,6 +3069,10 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
     if (_debug_src)
         cout << _flow.str() << " " << _nodename << " erasing send record, seqno: " << seqno << " flow " << _flow.str()
              << endl;
+    if (isStrictLaps() && i->second.strict_laps_data) {
+        assert(i->second.laps_attempt.has_value());
+        _nic.lapsRecovery().nack(*i->second.laps_attempt);
+    }
     _tx_bitmap.erase(i);
     assert(_tx_bitmap.find(seqno) == _tx_bitmap.end());  // xxx remove when working
 
@@ -3569,6 +3608,12 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
 
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     const UecMpSelection selection = _mp->lastSelection();
+    LapsPathKey laps_path;
+    if (isStrictLaps() && !lapsResolvePath(ev, laps_path)) {
+        cerr << "Strict LAPS failed to resolve a physical forwarding path for flow "
+             << flowId() << " entropy " << ev << endl;
+        abort();
+    }
     p->set_pathid(ev);
     p->set_hop_count(0);
     p->flow().logTraffic(*p, *this, TrafficLogger::PKT_CREATESEND);
@@ -3578,7 +3623,9 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     
     createSendRecord(ev, _highest_sent, full_pkt_size, selection, isStrictLaps());
     if (isStrictLaps()) {
-        _nic.lapsRecovery().sent(lapsPathKey(ev), *this, _highest_sent, full_pkt_size);
+        const LapsAttempt attempt =
+            _nic.lapsRecovery().sent(std::move(laps_path), *this, _highest_sent, full_pkt_size);
+        _tx_bitmap.at(_highest_sent).laps_attempt = attempt;
     }
     if (_debug_src)
         cout << timeAsUs(eventlist().now()) << " " << _flow.str() << " sending pkt " << _highest_sent
@@ -3629,13 +3676,21 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
 
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     const UecMpSelection selection = _mp->lastSelection();
+    LapsPathKey laps_path;
+    if (isStrictLaps() && !lapsResolvePath(ev, laps_path)) {
+        cerr << "Strict LAPS failed to resolve a physical forwarding path for flow "
+             << flowId() << " entropy " << ev << endl;
+        abort();
+    }
     p->set_pathid(ev);
     p->set_hop_count(0);
     p->flow().logTraffic(*p, *this, TrafficLogger::PKT_CREATESEND);
 
     createSendRecord(ev, seq_no, full_pkt_size, selection, isStrictLaps());
     if (isStrictLaps()) {
-        _nic.lapsRecovery().sent(lapsPathKey(ev), *this, seq_no, full_pkt_size);
+        const LapsAttempt attempt =
+            _nic.lapsRecovery().sent(std::move(laps_path), *this, seq_no, full_pkt_size);
+        _tx_bitmap.at(seq_no).laps_attempt = attempt;
     }
 
     if (_debug_src)

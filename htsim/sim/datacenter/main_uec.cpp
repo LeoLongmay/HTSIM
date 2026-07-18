@@ -1402,6 +1402,16 @@ int main(int argc, char **argv) {
                 assert(flowmap.find(crt->flowid) == flowmap.end()); // don't have dups
             }
 
+            if (uec_src->isStrictLaps()) {
+                FatTreeTopology* laps_topology = topo[0].get();
+                uec_src->lapsSetPathResolver(
+                    [laps_topology, src, dest](uint32_t flow_id, uint32_t entropy,
+                                               vector<const BaseQueue*>& queues) {
+                        return laps_topology->resolve_or_materialize_ecmp_path(
+                            src, dest, flow_id, entropy, queues);
+                    });
+            }
+
             if (conn_reuse) {
                 stringstream uec_src_dbg_tag;
                 uec_src_dbg_tag << "flow_id " << uec_src->flowId();

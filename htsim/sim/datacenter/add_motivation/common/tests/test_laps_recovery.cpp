@@ -12,8 +12,6 @@ namespace {
 
 class FakeOwner final : public LapsRecoveryOwner {
 public:
-    void lapsRecover(UecBasePacket::seq_t, mem_b) override {}
-
     void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override {
         callbacks.push_back({attempt, seq, bytes});
         if (attempt == active_attempt) {
@@ -38,8 +36,6 @@ class ReRegisteringOwner final : public LapsRecoveryOwner {
 public:
     ReRegisteringOwner(LapsRecoveryDomain& domain, LapsPathKey path)
         : domain_(domain), path_(path) {}
-
-    void lapsRecover(UecBasePacket::seq_t, mem_b) override {}
 
     void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override {
         recovered.push_back({seq, bytes});
