@@ -27,11 +27,12 @@ ordered sequence of physical egress queues (including plane and bundle
 identity), scoped by the sending NIC.  It is not a destination address,
 logical path bucket, low entropy bits, or raw entropy.
 
-The resolver is LAPS-only and must be ready before the first LAPS data send;
-it may prepopulate relevant FIB state without changing vector order after
-forwarding starts, or share the forwarding's deterministic choice routine.
-Failure to resolve is fail-closed for paired strict LAPS rather than silently
-falling back to the former entropy key.
+The resolver is LAPS-only and must be ready before the first LAPS data send.
+It obtains missing ECMP FIB entries through one extracted, shared
+materialisation routine used by both forwarding and resolution; the routine
+must preserve the forwarding route-vector order and must not reorder a vector
+after it has been installed.  Failure to resolve is fail-closed for paired
+strict LAPS rather than silently falling back to the former entropy key.
 
 ## Outstanding attempt lifecycle
 
