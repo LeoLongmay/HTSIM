@@ -20,6 +20,8 @@
 #include "pciemodel.h"
 #include "oversubscribed_cc.h"
 #include "laps_cc.h"
+#include "laps_rate.h"
+#include "laps_recovery.h"
 #include "uec_mp.h"
 #include "motivation_epoch.h"
 #include "prism_coordination.h"
@@ -70,6 +72,8 @@ public:
     void doNextEvent();
 
     linkspeed_bps linkspeed() const {return _linkspeed;}
+    LapsRecoveryDomain& lapsRecovery();
+    bool hasLapsRecovery() const { return _laps_recovery != nullptr; }
 
     int activeSources() const { return _active_srcs.size(); }
     virtual const string& nodename() const {return _nodename;}
@@ -92,6 +96,7 @@ private:
     int _ratio_data, _ratio_control, _crt;
 
     string _nodename;
+    unique_ptr<LapsRecoveryDomain> _laps_recovery;
 };
 
 // Packets are received on ports, but then passed to the Src for handling
@@ -108,7 +113,8 @@ private:
     const Route* _route;  // we're only going to support ECMP_HOST for now.
 };
 
-class UecSrc : public EventSource, public TriggerTarget, public UecTransportConnection {
+class UecSrc : public EventSource, public TriggerTarget, public UecTransportConnection,
+               public LapsRecoveryOwner {
 public:
     static void configureMotivationTrace(const std::string& prefix, const std::string& run_id,
                                          const std::string& scenario, uint32_t seed,
@@ -144,6 +150,7 @@ public:
            UecNIC& nic, 
            uint32_t no_of_ports, 
            bool rts = false);
+    ~UecSrc() override;
     void delFromSendTimes(simtime_picosec time, UecDataPacket::seq_t seq_no);
     /**
      * Initialize global NSCC parameters.
@@ -169,6 +176,9 @@ public:
     void doNextEvent();
     uint32_t dst() { return _dstaddr; }
     void setDst(uint32_t dst) { _dstaddr = dst; }
+    bool isStrictLaps() const;
+    LapsPathKey lapsPathKey(uint32_t entropy) const;
+    void lapsRecover(UecBasePacket::seq_t seq, mem_b bytes) override;
     using PrismOraclePathResolver = std::function<bool(
         uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void prismSetOraclePathResolver(PrismOraclePathResolver resolver,
@@ -273,12 +283,14 @@ public:
     struct sendRecord {
         // need a constructor to be able to put this in a map
         sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime,
-                   UecMpSelection pselection)
-            : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection){};
+                   UecMpSelection pselection, bool strict_laps_data)
+            : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection),
+              strict_laps_data(strict_laps_data){};
         uint32_t path_id;
         mem_b pkt_size;
         simtime_picosec send_time;
         UecMpSelection selection;
+        bool strict_laps_data;
     };
     UecLogger* _logger;
     TrafficLogger* _pktlogger;
@@ -304,10 +316,13 @@ public:
     void sendLapsProbe();
     void scheduleLapsProbe();
     void cancelLapsProbe();
-    void applyLapsCwnd(simtime_picosec now, simtime_picosec delay,
-                       mem_b newly_acked_bytes);
+    void advanceLapsPacer(mem_b bytes);
+    void scheduleLapsPacer();
+    void cancelLapsPacer();
+    void updateLapsRate(simtime_picosec now);
+    void setLapsSafetyWindow(simtime_picosec target_delay);
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
-                          UecMpSelection selection);
+                          UecMpSelection selection, bool strict_laps_data = false);
     void configureMotivationTokenObserver();
     struct MotivationResolvedPath {
         uint64_t physical_path_id = MotivationEpochObserver::NO_PHYSICAL_PATH;
@@ -650,8 +665,10 @@ private:
     UecDataPacket::seq_t _laps_probe_seqno = 0;
     std::set<UecDataPacket::seq_t> _laps_probe_outstanding;
     EventList::Handle _laps_probe_timer_handle;
-    simtime_picosec _laps_next_increase_at = 0;
-    simtime_picosec _laps_next_decrease_at = 0;
+    EventList::Handle _laps_pacer_timer_handle;
+    simtime_picosec _laps_pacer_timer_when = 0;
+    simtime_picosec _laps_next_send_at = 0;
+    LapsRateState _laps_rate;
     /******** END LAPS probe parameters *********/
 
 

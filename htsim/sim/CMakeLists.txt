@@ -195,6 +195,12 @@ if ( ENABLE_TESTS )
     add_test(NAME laps_packet_feedback COMMAND test_laps_packet_feedback)
     set_tests_properties(laps_packet_feedback PROPERTIES LABELS "laps;unit" TIMEOUT 60)
 
+    add_executable(test_laps_uec_isolation
+        datacenter/add_motivation/common/tests/test_laps_uec_isolation.cpp)
+    target_link_libraries(test_laps_uec_isolation PRIVATE htsim)
+    add_test(NAME laps_uec_isolation COMMAND test_laps_uec_isolation)
+    set_tests_properties(laps_uec_isolation PROPERTIES LABELS "laps;unit" TIMEOUT 60)
+
     add_executable(test_laps_recovery
         datacenter/add_motivation/common/tests/test_laps_recovery.cpp)
     target_link_libraries(test_laps_recovery PRIVATE htsim)

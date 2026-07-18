@@ -40,6 +40,16 @@ void lapsFeedbackCarriesOneWayDelayAndResetsPooledPackets() {
     ack->free();
     data->free();
 
+    UecDataPacket* zero_delay_data = UecDataPacket::newpkt(
+        flow, data_route, 1, 1'500, UecDataPacket::DATA_PULL, 0);
+    zero_delay_data->set_pathid(0);
+    zero_delay_data->setLapsSendTime(EventList::now());
+    UecAckPacket* zero_delay_ack = sink.sack(0, 0, 0, false, false, zero_delay_data);
+    assert(zero_delay_ack->lapsDelayValid());
+    assert(zero_delay_ack->lapsOneWayDelay() == 0);
+    zero_delay_ack->free();
+    zero_delay_data->free();
+
     UecDataPacket* reused_data = UecDataPacket::newpkt(
         flow, data_route, 1, 1'500, UecDataPacket::DATA_PULL, 0);
     UecAckPacket* reused_ack = UecAckPacket::newpkt(
