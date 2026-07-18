@@ -669,6 +669,12 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
     _probe_timer_when = 0;
     _probe_seqno = 0; 
     _probe_send_time = 0; 
+    _laps_probe_timer_handle = eventlist().nullHandle();
+    _laps_probe_timer_when = 0;
+    _laps_probe_seqno = 0;
+    _laps_probe_outstanding.clear();
+    _laps_next_increase_at = 0;
+    _laps_next_decrease_at = 0;
 
     _flow_logger = NULL;
 
@@ -753,8 +759,7 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 updateCwndOnNack = &UecSrc::updateCwndOnNack_SWIFT;
                 break;
             case LAPS:
-                // Task 4 replaces this existing UEC-safe dispatch with LAPS feedback control.
-                updateCwndOnAck = &UecSrc::updateCwndOnAck_NSCC;
+                updateCwndOnAck = &UecSrc::dontUpdateCwndOnAck;
                 updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;
                 break;
             default:
@@ -1314,6 +1319,9 @@ bool UecSrc::checkFinished(UecDataPacket::seq_t cum_ack) {
              << " rtx_queue " << _rtx_queue.size()
              << " done_sending " << _done_sending << endl;
 
+    if (_done_sending) {
+        cancelLapsProbe();
+    }
     return _done_sending;
 }
 
@@ -1474,6 +1482,21 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             pkt_size = _mtu;
             delay = get_avg_delay();
         }
+    }
+
+    const bool valid_laps_probe_ack = pkt.is_probe_ack() &&
+        _laps_probe_outstanding.find(pkt.acked_psn()) != _laps_probe_outstanding.end();
+    const bool usable_laps_measurement = _sender_cc_algo == LAPS &&
+        pkt.lapsDelayValid() && (valid_normal_send_attempt || valid_laps_probe_ack);
+    if (usable_laps_measurement) {
+        const simtime_picosec now = eventlist().now();
+        if (pkt.is_probe_ack()) {
+            _laps_probe_outstanding.erase(pkt.acked_psn());
+            _mp->observeLapsProbe(pkt.ev(), pkt.lapsOneWayDelay(), now);
+        } else {
+            _mp->observeLapsDelay(pkt.ev(), pkt.lapsOneWayDelay(), now);
+        }
+        applyLapsCwnd(now, delay, newly_recvd_bytes);
     }
 
     handleCumulativeAck(cum_ack);
@@ -2944,7 +2967,7 @@ void UecSrc::doNextEvent() {
             _logger->logUec(*this, UecLogger::UEC_TIMEOUT);
 
         rtxTimerExpired();
-    } else if(_highest_sent == 0) {
+    } else if (_highest_sent == 0 && !hasStarted()) {
         if (_debug_src)
             cout << _flow.str() << " " << "Starting flow " << _name << endl;
         startConnection();
@@ -2956,6 +2979,16 @@ void UecSrc::doNextEvent() {
                 cout << timeAsUs(eventlist().now())<< " doNextEvent probe " <<  _rtx_timeout_pending << " flowid " << _flow.flow_id() << endl;
             }
             sendProbe();
+        }
+    }
+
+    if (_sender_cc_algo == LAPS && _laps_probe_timer_when != 0 &&
+        _laps_probe_timer_when == eventlist().now()) {
+        _laps_probe_timer_when = 0;
+        _laps_probe_timer_handle = eventlist().nullHandle();
+        if (!_done_sending) {
+            sendLapsProbe();
+            scheduleLapsProbe();
         }
     }
 }
@@ -3053,6 +3086,7 @@ void UecSrc::startConnection() {
 
     _rtx_backlog = 0;
     _send_blocked_on_nic = false;
+    scheduleLapsProbe();
 
     while (_send_blocked_on_nic == false && isSendPermitted()) {
         if (_debug_src) {
@@ -3499,6 +3533,82 @@ void UecSrc::sendProbe() {
     _probe_send_time = eventlist().now();
     _probe_timer_when = eventlist().now() + probe_retry_time * _base_rtt;
     _probe_timer_handle = eventlist().sourceIsPendingGetHandle(*this, _probe_timer_when);
+}
+
+void UecSrc::sendLapsProbe() {
+    const optional<uint32_t> entropy = _mp->nextLapsProbeEntropy(eventlist().now());
+    if (!entropy.has_value()) {
+        return;
+    }
+
+    if (_laps_probe_seqno == 0) {
+        _laps_probe_seqno = std::numeric_limits<UecDataPacket::seq_t>::max();
+    } else {
+        --_laps_probe_seqno;
+    }
+    auto* p = UecDataPacket::newpkt(_flow, NULL, _laps_probe_seqno, _hdr_size,
+                                    UecBasePacket::DATA_PROBE, 0, _dstaddr);
+    p->set_src(_srcaddr);
+    p->set_dst(_dstaddr);
+    p->set_pathid(*entropy);
+    p->set_hop_count(0);
+    p->setLapsSendTime(eventlist().now());
+    _laps_probe_outstanding.insert(_laps_probe_seqno);
+    _motivation_ack_selection_state.rememberProbe(_laps_probe_seqno, {});
+    _nic.sendControlPacket(p, this, NULL);
+}
+
+void UecSrc::scheduleLapsProbe() {
+    if (_sender_cc_algo != LAPS || _done_sending || _laps_probe_interval == 0 ||
+        _laps_probe_timer_when != 0) {
+        return;
+    }
+    _laps_probe_timer_when = eventlist().now() + _laps_probe_interval;
+    _laps_probe_timer_handle =
+        eventlist().sourceIsPendingGetHandle(*this, _laps_probe_timer_when);
+    if (_laps_probe_timer_handle == eventlist().nullHandle()) {
+        _laps_probe_timer_when = 0;
+    }
+}
+
+void UecSrc::cancelLapsProbe() {
+    if (_laps_probe_timer_when != 0) {
+        eventlist().cancelPendingSourceByHandle(*this, _laps_probe_timer_handle);
+        _laps_probe_timer_when = 0;
+        _laps_probe_timer_handle = eventlist().nullHandle();
+    }
+    _laps_probe_outstanding.clear();
+}
+
+void UecSrc::applyLapsCwnd(simtime_picosec now, simtime_picosec delay,
+                            mem_b newly_acked_bytes) {
+    const LapsCwndDecision decision = decideLapsCwnd(
+        _mp->lapsSignal(now, _laps_queue_margin), now, _laps_next_increase_at,
+        _laps_next_decrease_at);
+    switch (decision.action) {
+        case LapsCwndAction::MultiplicativeDecrease:
+            _cwnd = max((mem_b)_mss, _cwnd / 2);
+            _laps_next_decrease_at = decision.next_allowed_at;
+            break;
+        case LapsCwndAction::AdditiveIncrease:
+            // Preserve NSCC's ACK-growth primitives, but not quick_adapt: a LAPS-safe
+            // observation must not bypass the all-path-high decrease gate.
+            if (delay >= _target_Qdelay) {
+                fair_increase(newly_acked_bytes);
+            } else {
+                proportional_increase(newly_acked_bytes, delay);
+            }
+            set_cwnd_bounds();
+            if (_received_bytes > _adjust_bytes_threshold ||
+                eventlist().now() - _last_adjust_time > _adjust_period_threshold) {
+                fulfill_adjustment();
+            }
+            set_cwnd_bounds();
+            _laps_next_increase_at = decision.next_allowed_at;
+            break;
+        case LapsCwndAction::Hold:
+            break;
+    }
 }
 
 void UecSrc::sendRTS() {

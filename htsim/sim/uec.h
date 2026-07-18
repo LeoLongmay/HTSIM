@@ -19,6 +19,7 @@
 #include "modular_vector.h"
 #include "pciemodel.h"
 #include "oversubscribed_cc.h"
+#include "laps_cc.h"
 #include "uec_mp.h"
 #include "motivation_epoch.h"
 #include "prism_coordination.h"
@@ -300,6 +301,11 @@ public:
     mem_b sendRtxPacket(const Route& route);
     void sendRTS();
     void sendProbe();
+    void sendLapsProbe();
+    void scheduleLapsProbe();
+    void cancelLapsProbe();
+    void applyLapsCwnd(simtime_picosec now, simtime_picosec delay,
+                       mem_b newly_acked_bytes);
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
                           UecMpSelection selection);
     void configureMotivationTokenObserver();
@@ -638,6 +644,15 @@ private:
     simtime_picosec _probe_send_time = 0; 
     EventList::Handle _probe_timer_handle; 
     /******** END Probe parameters *********/
+
+    /******** LAPS probe parameters *********/
+    simtime_picosec _laps_probe_timer_when = 0;
+    UecDataPacket::seq_t _laps_probe_seqno = 0;
+    std::set<UecDataPacket::seq_t> _laps_probe_outstanding;
+    EventList::Handle _laps_probe_timer_handle;
+    simtime_picosec _laps_next_increase_at = 0;
+    simtime_picosec _laps_next_decrease_at = 0;
+    /******** END LAPS probe parameters *********/
 
 
     // Connectivity
