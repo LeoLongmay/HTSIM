@@ -80,6 +80,17 @@ void multiple_stale_paths_are_probed_in_rotation() {
     assert((*second & 3) == 1);
 }
 
+void path_at_exact_stale_timeout_is_probed() {
+    UecMpLaps laps(4, false, 8.0);
+    for (uint32_t path = 0; path != 4; ++path) {
+        laps.observeLapsDelay(path, 10, 0);
+    }
+
+    const auto probe = laps.nextLapsProbeEntropy(20);
+    assert(probe.has_value());
+    assert((*probe & 3) == 0);
+}
+
 void rejects_non_power_of_two_path_count() {
     bool rejected = false;
     try {
@@ -98,5 +109,6 @@ int main() {
     signal_is_not_ready_until_every_path_has_a_sample();
     stale_path_is_probed_and_probe_feedback_refreshes_it();
     multiple_stale_paths_are_probed_in_rotation();
+    path_at_exact_stale_timeout_is_probed();
     rejects_non_power_of_two_path_count();
 }

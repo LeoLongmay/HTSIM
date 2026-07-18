@@ -66,7 +66,7 @@ bool UecMpLaps::isStale(const LapsPathState& state, simtime_picosec now) const {
         state.real_latency > std::numeric_limits<simtime_picosec>::max() / 2
             ? std::numeric_limits<simtime_picosec>::max()
             : 2 * state.real_latency;
-    return now - state.last_update > stale_after;
+    return now - state.last_update >= stale_after;
 }
 
 void UecMpLaps::observe(uint32_t path_id, simtime_picosec delay, simtime_picosec now) {
