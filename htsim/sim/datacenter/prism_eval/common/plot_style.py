@@ -14,6 +14,7 @@ COLORS = {
     "mnscc": "tab:brown",  # median@NSCC (Gerstein et al. 2026) competitor
     "swift": "tab:pink",  # Swift (Kumar et al. 2020) delay-AIMD baseline
     "mswift": "tab:olive",  # MSwift (median@LSwift, Gerstein et al. 2026)
+    "laps": "tab:purple",
     "ccc": "tab:red",      # C_cc / floor
     "spray": "tab:green",  # C_spray / spread band (red C_cc vs green C_spray contrast)
     "target": "gray",

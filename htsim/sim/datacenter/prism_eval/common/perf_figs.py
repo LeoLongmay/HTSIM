@@ -132,7 +132,7 @@ def render_main_perf(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, f
             f"{token}{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0]:.0f}us,"
             f"cr={aggs[lab][f]['cr'][0]:.2f}" for f in failed if aggs[lab].get(f)))
 
-def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f", goodput_tbps=False):
+def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f", goodput_tbps=False, output_suffix=""):
     """Same data as render_main_perf, but emits THREE standalone figures (one metric each):
     `{stem_prefix}_goodput` (Gbps), `{stem_prefix}_avg_fct` (ms), `{stem_prefix}_p99_fct` (ms).
     aggregate() stores FCT in microseconds, so the two FCT panels scale by 1e-3 -> milliseconds."""
@@ -194,7 +194,7 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
         #     note = "completion<1: " + ", ".join(f"{lab}@f{f}={cr:.2f}" for lab, f, cr in incomplete)
         #     fig.text(0.5, 0.005, note, ha="center", fontsize=7, color="firebrick")
         plt.tight_layout()
-        plot_style.save(fig, f"{stem_prefix}_{suffix}", figs_dir)
+        plot_style.save(fig, f"{stem_prefix}_{suffix}{output_suffix}", figs_dir)
         plt.close(fig)
     for (lab, disp, _c) in baselines:
         print(f"[{stem_prefix}] {disp}: " + " ".join(
