@@ -1596,6 +1596,42 @@ bool FatTreeTopology::resolve_ecmp_path(uint32_t src, uint32_t dest, uint32_t fl
     return false;
 }
 
+bool FatTreeTopology::resolve_or_materialize_ecmp_path(
+    uint32_t src, uint32_t dest, uint32_t flow_id, uint32_t entropy,
+    vector<const BaseQueue*>& queues) {
+    queues.clear();
+    const uint32_t source_tor = _cfg->HOST_POD_SWITCH(src);
+    const uint32_t destination_tor = _cfg->HOST_POD_SWITCH(dest);
+
+    BaseQueue* source_queue = queues_ns_nlp[src][source_tor][0];
+    if (!source_queue)
+        return false;
+    queues.push_back(source_queue);
+
+    FatTreeSwitch* current = dynamic_cast<FatTreeSwitch*>(switches_lp[source_tor]);
+    if (!current)
+        return false;
+
+    // Use the same FIB construction and the same ECMP lookup as forwarding at
+    // every switch.  The bound also protects against malformed FIB cycles.
+    for (uint32_t hop = 0; hop < 8; ++hop) {
+        current->materializeRoutes(dest, flow_id);
+        BaseQueue* egress = current->oracleEcmpEgress(dest, flow_id, entropy);
+        if (!egress)
+            return false;
+        queues.push_back(egress);
+
+        if (current->getType() == FatTreeSwitch::TOR &&
+            current->getID() == destination_tor)
+            return true;
+
+        current = dynamic_cast<FatTreeSwitch*>(egress->getRemoteEndpoint());
+        if (!current)
+            return false;
+    }
+    return false;
+}
+
 void FatTreeTopology::count_queue(Queue* queue){
     if (_link_usage.find(queue)==_link_usage.end()){
         _link_usage[queue] = 0;

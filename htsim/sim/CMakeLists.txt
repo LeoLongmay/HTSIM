@@ -203,7 +203,7 @@ if ( ENABLE_TESTS )
 
     add_executable(test_laps_recovery
         datacenter/add_motivation/common/tests/test_laps_recovery.cpp)
-    target_link_libraries(test_laps_recovery PRIVATE htsim)
+    target_link_libraries(test_laps_recovery PRIVATE htsim_dc htsim)
     add_test(NAME laps_recovery COMMAND test_laps_recovery)
     set_tests_properties(laps_recovery PROPERTIES LABELS "laps;unit" TIMEOUT 60)
 

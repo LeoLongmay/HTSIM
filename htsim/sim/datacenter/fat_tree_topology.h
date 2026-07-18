@@ -279,6 +279,12 @@ public:
     bool resolve_ecmp_path(uint32_t src, uint32_t dest, uint32_t flow_id,
                            uint32_t entropy, vector<const BaseQueue*>& queues);
 
+    // Strict-LAPS resolver. Materializes any missing FIB route vectors through
+    // the same switch helper used by packet forwarding before applying ECMP.
+    bool resolve_or_materialize_ecmp_path(uint32_t src, uint32_t dest,
+                                          uint32_t flow_id, uint32_t entropy,
+                                          vector<const BaseQueue*>& queues);
+
     BaseQueue* alloc_src_queue(QueueLogger* q);
     BaseQueue* alloc_queue(QueueLogger* q, const mem_b queuesize, link_direction dir, int switch_tier, bool tor=false);
     BaseQueue* alloc_queue(QueueLogger* q, linkspeed_bps speed, const mem_b queuesize, link_direction dir,  int switch_tier, bool tor, bool reduced_speed);

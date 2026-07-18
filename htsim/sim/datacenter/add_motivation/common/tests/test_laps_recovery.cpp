@@ -1,7 +1,11 @@
 #include "laps_recovery.h"
+#include "datacenter/fat_tree_topology.h"
+#include "datacenter/fat_tree_switch.h"
 
 #include <cassert>
 #include <functional>
+#include <map>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -45,6 +49,158 @@ public:
 private:
     std::function<void()> action_;
 };
+
+class TestPacketSink final : public PacketSink {
+public:
+    void receivePacket(Packet&) override {}
+    const string& nodename() override { return name_; }
+
+private:
+    string name_ = "laps path test sink";
+};
+
+class TestForwardPacket final : public Packet {
+public:
+    PktPriority priority() const override { return PRIO_LO; }
+    void configure(PacketFlow& flow) { set_attrs(flow, 1500, 1); }
+};
+
+std::string serialize_queue_sequence(const std::vector<const BaseQueue*>& queues) {
+    std::string serialized;
+    for (const BaseQueue* queue : queues) {
+        assert(queue != nullptr);
+        if (!serialized.empty())
+            serialized += " -> ";
+        serialized += queue->queueName();
+    }
+    return serialized;
+}
+
+std::string forwarded_queue_sequence(FatTreeTopology& topology,
+                                     const FatTreeTopologyCfg& config,
+                                     uint32_t source, uint32_t destination,
+                                     uint32_t flow_id, uint32_t entropy) {
+    PacketFlow flow(nullptr);
+    flow.set_flowid(flow_id);
+    TestForwardPacket packet;
+    packet.configure(flow);
+    packet.set_src(source);
+    packet.set_dst(destination);
+    packet.set_pathid(entropy);
+
+    std::vector<const BaseQueue*> queues;
+    queues.push_back(topology.queues_ns_nlp[source][config.HOST_POD_SWITCH(source)][0]);
+    FatTreeSwitch* current = dynamic_cast<FatTreeSwitch*>(
+        topology.switches_lp[config.HOST_POD_SWITCH(source)]);
+    assert(current != nullptr);
+    const uint32_t destination_tor = config.HOST_POD_SWITCH(destination);
+
+    for (uint32_t hop = 0; hop < 8; ++hop) {
+        Route* route = current->getNextHop(packet, nullptr);
+        assert(route != nullptr && route->size() > 0);
+        BaseQueue* egress = dynamic_cast<BaseQueue*>(route->at(0));
+        assert(egress != nullptr);
+        queues.push_back(egress);
+        if (current->getType() == FatTreeSwitch::TOR && current->getID() == destination_tor)
+            return serialize_queue_sequence(queues);
+        current = dynamic_cast<FatTreeSwitch*>(egress->getRemoteEndpoint());
+        assert(current != nullptr);
+    }
+    assert(false);
+    return {};
+}
+
+void materializes_canonical_ecmp_paths_before_data_forwarding(EventList& eventlist) {
+    FatTreeTopologyCfg config(3, 16, speedFromGbps(100), memFromPkt(100),
+                              timeFromUs(uint32_t{1}), 0, COMPOSITE, FAIR_PRIO);
+    FatTreeTopology topology(&config, nullptr, &eventlist, nullptr);
+    FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+
+    constexpr uint32_t source = 0;
+    constexpr uint32_t destination = 15;
+    constexpr uint32_t first_flow = 1001;
+    constexpr uint32_t second_flow = 2002;
+    TestPacketSink first_sink;
+    TestPacketSink second_sink;
+    FatTreeSwitch* destination_switch =
+        dynamic_cast<FatTreeSwitch*>(topology.switches_lp[config.HOST_POD_SWITCH(destination)]);
+    assert(destination_switch != nullptr);
+    destination_switch->addHostPort(destination, first_flow, &first_sink);
+    destination_switch->addHostPort(destination, second_flow, &second_sink);
+
+    // No packet has yet traversed this topology.  The strict LAPS resolver
+    // must nevertheless materialize the exact FIB route vectors that packet
+    // forwarding will later hash over.
+    std::map<std::string, uint32_t> first_entropy_by_sequence;
+    std::map<uint32_t, std::pair<std::string, uint32_t>> first_sequence_by_low_bucket;
+    bool found_equal_sequences = false;
+    bool found_distinct_same_bucket = false;
+    uint32_t equal_entropy_a = UINT32_MAX;
+    uint32_t equal_entropy_b = UINT32_MAX;
+    uint32_t bucket_entropy_a = UINT32_MAX;
+    uint32_t bucket_entropy_b = UINT32_MAX;
+
+    for (uint32_t entropy = 0; entropy < 4096; ++entropy) {
+        std::vector<const BaseQueue*> queues;
+        assert(topology.resolve_or_materialize_ecmp_path(source, destination, first_flow,
+                                                         entropy, queues));
+        const std::string sequence = serialize_queue_sequence(queues);
+        assert(!sequence.empty());
+
+        const auto equal = first_entropy_by_sequence.emplace(sequence, entropy);
+        if (!equal.second && equal.first->second != entropy) {
+            found_equal_sequences = true;
+            equal_entropy_a = equal.first->second;
+            equal_entropy_b = entropy;
+        }
+
+        const uint32_t logical_low_bucket = entropy & 0x3u;
+        const auto bucket = first_sequence_by_low_bucket.emplace(
+            logical_low_bucket, std::make_pair(sequence, entropy));
+        if (!bucket.second && bucket.first->second.first != sequence) {
+            found_distinct_same_bucket = true;
+            bucket_entropy_a = bucket.first->second.second;
+            bucket_entropy_b = entropy;
+        }
+
+        if (found_equal_sequences && found_distinct_same_bucket)
+            break;
+    }
+    assert(found_equal_sequences);
+    assert(found_distinct_same_bucket);
+
+    for (uint32_t entropy : {equal_entropy_a, equal_entropy_b,
+                             bucket_entropy_a, bucket_entropy_b}) {
+        assert(entropy != UINT32_MAX);
+        std::vector<const BaseQueue*> resolved;
+        assert(topology.resolve_or_materialize_ecmp_path(source, destination, first_flow,
+                                                         entropy, resolved));
+        assert(serialize_queue_sequence(resolved) ==
+               forwarded_queue_sequence(topology, config, source, destination,
+                                        first_flow, entropy));
+    }
+
+    std::vector<const BaseQueue*> equal_a;
+    std::vector<const BaseQueue*> equal_b;
+    std::vector<const BaseQueue*> bucket_a;
+    std::vector<const BaseQueue*> bucket_b;
+    assert(topology.resolve_or_materialize_ecmp_path(source, destination, first_flow,
+                                                     equal_entropy_a, equal_a));
+    assert(topology.resolve_or_materialize_ecmp_path(source, destination, first_flow,
+                                                     equal_entropy_b, equal_b));
+    assert(topology.resolve_or_materialize_ecmp_path(source, destination, first_flow,
+                                                     bucket_entropy_a, bucket_a));
+    assert(topology.resolve_or_materialize_ecmp_path(source, destination, first_flow,
+                                                     bucket_entropy_b, bucket_b));
+    assert(serialize_queue_sequence(equal_a) == serialize_queue_sequence(equal_b));
+    assert((bucket_entropy_a & 0x3u) == (bucket_entropy_b & 0x3u));
+    assert(serialize_queue_sequence(bucket_a) != serialize_queue_sequence(bucket_b));
+
+    std::vector<const BaseQueue*> second_flow_queues;
+    assert(topology.resolve_or_materialize_ecmp_path(source, destination, second_flow, 0,
+                                                     second_flow_queues));
+    assert(!serialize_queue_sequence(second_flow_queues).empty());
+}
 
 void later_ack_recovers_shared_path_records_in_send_order(EventList& eventlist,
                                                           LapsRecoveryDomain& domain) {
@@ -160,6 +316,7 @@ void expired_recovery_batch_is_removed_before_owner_can_reregister(
 
 int main() {
     EventList eventlist;
+    materializes_canonical_ecmp_paths_before_data_forwarding(eventlist);
     LapsRecoveryDomain domain(eventlist);
     later_ack_recovers_shared_path_records_in_send_order(eventlist, domain);
     remove_owner_preserves_other_path_records(eventlist, domain);

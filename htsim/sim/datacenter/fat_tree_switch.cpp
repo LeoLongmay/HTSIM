@@ -351,6 +351,101 @@ int8_t (*FatTreeSwitch::fn)(FibEntry*,FibEntry*)= &FatTreeSwitch::compare_queues
 uint16_t FatTreeSwitch::_trim_size = 64;
 bool FatTreeSwitch::_disable_trim = false;
 
+void FatTreeSwitch::materializeRoutes(uint32_t destination, uint32_t flow_id) {
+    if (_fib->getRoutes(destination))
+        return;
+
+    // Keep this construction path in one place: both a first forwarded packet
+    // and strict LAPS path identity must see precisely the same FIB vectors.
+    if (_type == TOR) {
+        if (_ft->cfg().HOST_POD_SWITCH(destination) == _id) {
+            HostFibEntry* fe = _fib->getHostRoute(destination, flow_id);
+            assert(fe);
+            return;
+        }
+
+        if (_uproutes) {
+            _fib->setRoutes(destination, _uproutes);
+            return;
+        }
+
+        uint32_t podid, agg_min, agg_max;
+        if (_ft->cfg().get_tiers() == 3) {
+            podid = _id / _ft->cfg().tor_switches_per_pod();
+            agg_min = _ft->cfg().MIN_POD_AGG_SWITCH(podid);
+            agg_max = _ft->cfg().MAX_POD_AGG_SWITCH(podid);
+        } else {
+            agg_min = 0;
+            agg_max = _ft->cfg().getNAGG() - 1;
+        }
+
+        for (uint32_t k = agg_min; k <= agg_max; ++k) {
+            for (uint32_t b = 0; b < _ft->cfg().bundlesize(AGG_TIER); ++b) {
+                Route* r = new Route();
+                r->push_back(_ft->queues_nlp_nup[_id][k][b]);
+                assert(((BaseQueue*)r->at(0))->getSwitch() == this);
+                r->push_back(_ft->pipes_nlp_nup[_id][k][b]);
+                r->push_back(_ft->queues_nlp_nup[_id][k][b]->getRemoteEndpoint());
+                _fib->addRoute(destination, r, 1, UP);
+            }
+        }
+        _uproutes = _fib->getRoutes(destination);
+        permute_paths(_uproutes);
+    } else if (_type == AGG) {
+        if (_ft->cfg().get_tiers() == 2 ||
+            _ft->cfg().HOST_POD(destination) == _ft->cfg().AGG_SWITCH_POD_ID(_id)) {
+            const uint32_t target_tor = _ft->cfg().HOST_POD_SWITCH(destination);
+            for (uint32_t b = 0; b < _ft->cfg().bundlesize(AGG_TIER); ++b) {
+                Route* r = new Route();
+                r->push_back(_ft->queues_nup_nlp[_id][target_tor][b]);
+                assert(((BaseQueue*)r->at(0))->getSwitch() == this);
+                r->push_back(_ft->pipes_nup_nlp[_id][target_tor][b]);
+                r->push_back(_ft->queues_nup_nlp[_id][target_tor][b]->getRemoteEndpoint());
+                _fib->addRoute(destination, r, 1, DOWN);
+            }
+            return;
+        }
+
+        if (_uproutes) {
+            _fib->setRoutes(destination, _uproutes);
+            return;
+        }
+
+        const uint32_t podpos = _id % _ft->cfg().agg_switches_per_pod();
+        const uint32_t uplink_bundles =
+            _ft->cfg().radix_up(AGG_TIER) / _ft->cfg().bundlesize(CORE_TIER);
+        for (uint32_t l = 0; l < uplink_bundles; ++l) {
+            const uint32_t core = l * _ft->cfg().agg_switches_per_pod() + podpos;
+            for (uint32_t b = 0; b < _ft->cfg().bundlesize(CORE_TIER); ++b) {
+                Route* r = new Route();
+                r->push_back(_ft->queues_nup_nc[_id][core][b]);
+                assert(((BaseQueue*)r->at(0))->getSwitch() == this);
+                r->push_back(_ft->pipes_nup_nc[_id][core][b]);
+                r->push_back(_ft->queues_nup_nc[_id][core][b]->getRemoteEndpoint());
+                _fib->addRoute(destination, r, 1, UP);
+            }
+        }
+        permute_paths(_fib->getRoutes(destination));
+    } else if (_type == CORE) {
+        const uint32_t nup = _ft->cfg().MIN_POD_AGG_SWITCH(_ft->cfg().HOST_POD(destination)) +
+                             (_id % _ft->cfg().agg_switches_per_pod());
+        for (uint32_t b = 0; b < _ft->cfg().bundlesize(CORE_TIER); ++b) {
+            Route* r = new Route();
+            assert(_ft->queues_nc_nup[_id][nup][b]);
+            r->push_back(_ft->queues_nc_nup[_id][nup][b]);
+            assert(((BaseQueue*)r->at(0))->getSwitch() == this);
+            assert(_ft->pipes_nc_nup[_id][nup][b]);
+            r->push_back(_ft->pipes_nc_nup[_id][nup][b]);
+            r->push_back(_ft->queues_nc_nup[_id][nup][b]->getRemoteEndpoint());
+            _fib->addRoute(destination, r, 1, DOWN);
+        }
+    } else {
+        cerr << "Route lookup on switch with no proper type: " << _type << endl;
+        abort();
+    }
+    assert(_fib->getRoutes(destination));
+}
+
 Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
     vector<FibEntry*> * available_hops = _fib->getRoutes(pkt.dst());
 
@@ -441,121 +536,14 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
         return e->getEgressPort();
     }
 
-    //no route table entries for this destination. Add them to FIB or fail. 
-    if (_type == TOR){
-        if ( _ft->cfg().HOST_POD_SWITCH(pkt.dst()) == _id) { 
-            //this host is directly connected!
-            HostFibEntry* fe = _fib->getHostRoute(pkt.dst(),pkt.flow_id());
-            assert(fe);
-            pkt.set_direction(DOWN);
-            return fe->getEgressPort();
-        } else {
-            //route packet up!
-            if (_uproutes)
-                _fib->setRoutes(pkt.dst(),_uproutes);
-            else {
-                uint32_t podid,agg_min,agg_max;
-
-                if (_ft->cfg().get_tiers()==3) {
-                    podid = _id / _ft->cfg().tor_switches_per_pod();
-                    agg_min = _ft->cfg().MIN_POD_AGG_SWITCH(podid);
-                    agg_max = _ft->cfg().MAX_POD_AGG_SWITCH(podid);
-                }
-                else {
-                    agg_min = 0;
-                    agg_max = _ft->cfg().getNAGG()-1;
-                }
-
-                for (uint32_t k=agg_min; k<=agg_max;k++){
-                    for (uint32_t b = 0; b < _ft->cfg().bundlesize(AGG_TIER); b++) {
-                        Route * r = new Route();
-                        r->push_back(_ft->queues_nlp_nup[_id][k][b]);
-                        assert(((BaseQueue*)r->at(0))->getSwitch() == this);
-
-                        r->push_back(_ft->pipes_nlp_nup[_id][k][b]);
-                        r->push_back(_ft->queues_nlp_nup[_id][k][b]->getRemoteEndpoint());
-                        _fib->addRoute(pkt.dst(),r,1,UP);
-                    }
-
-                    /*
-                      FatTreeSwitch* next = (FatTreeSwitch*)_ft->queues_nlp_nup[_id][k]->getRemoteEndpoint();
-                      assert (next->getType()==AGG && next->getID() == k);
-                    */
-                }
-                _uproutes = _fib->getRoutes(pkt.dst());
-                permute_paths(_uproutes);
-            }
-        }
-    } else if (_type == AGG) {
-        if (_ft->cfg().get_tiers()==2 || _ft->cfg().HOST_POD(pkt.dst()) == _ft->cfg().AGG_SWITCH_POD_ID(_id)) {
-            //must go down!
-            //target NLP id is 2 * pkt.dst()/K
-            uint32_t target_tor = _ft->cfg().HOST_POD_SWITCH(pkt.dst());
-            for (uint32_t b = 0; b < _ft->cfg().bundlesize(AGG_TIER); b++) {
-                Route * r = new Route();
-                r->push_back(_ft->queues_nup_nlp[_id][target_tor][b]);
-                assert(((BaseQueue*)r->at(0))->getSwitch() == this);
-
-                r->push_back(_ft->pipes_nup_nlp[_id][target_tor][b]);          
-                r->push_back(_ft->queues_nup_nlp[_id][target_tor][b]->getRemoteEndpoint());
-
-                _fib->addRoute(pkt.dst(),r,1, DOWN);
-            }
-        } else {
-            //go up!
-            if (_uproutes)
-                _fib->setRoutes(pkt.dst(),_uproutes);
-            else {
-                uint32_t podpos = _id % _ft->cfg().agg_switches_per_pod();
-                uint32_t uplink_bundles = _ft->cfg().radix_up(AGG_TIER) / _ft->cfg().bundlesize(CORE_TIER);
-                for (uint32_t l = 0; l <  uplink_bundles ; l++) {
-                    uint32_t core = l * _ft->cfg().agg_switches_per_pod() + podpos;
-                    for (uint32_t b = 0; b < _ft->cfg().bundlesize(CORE_TIER); b++) {
-                        Route *r = new Route();
-                        r->push_back(_ft->queues_nup_nc[_id][core][b]);
-                        assert(((BaseQueue*)r->at(0))->getSwitch() == this);
-
-                        r->push_back(_ft->pipes_nup_nc[_id][core][b]);
-                        r->push_back(_ft->queues_nup_nc[_id][core][b]->getRemoteEndpoint());
-
-                        /*
-                          FatTreeSwitch* next = (FatTreeSwitch*)_ft->queues_nup_nc[_id][k]->getRemoteEndpoint();
-                          assert (next->getType()==CORE && next->getID() == k);
-                        */
-                    
-                        _fib->addRoute(pkt.dst(),r,1,UP);
-
-                        //cout << "AGG switch " << _id << " adding route to " << pkt.dst() << " via CORE " << k << " bundle_id " << b << endl;
-                    }
-                }
-                //_uproutes = _fib->getRoutes(pkt.dst());
-                permute_paths(_fib->getRoutes(pkt.dst()));
-            }
-        }
-    } else if (_type == CORE) {
-        uint32_t nup = _ft->cfg().MIN_POD_AGG_SWITCH(_ft->cfg().HOST_POD(pkt.dst())) + (_id % _ft->cfg().agg_switches_per_pod());
-        for (uint32_t b = 0; b < _ft->cfg().bundlesize(CORE_TIER); b++) {
-            Route *r = new Route();
-            //cout << "CORE switch " << _id << " adding route to " << pkt.dst() << " via AGG " << nup << endl;
-
-            assert (_ft->queues_nc_nup[_id][nup][b]);
-            r->push_back(_ft->queues_nc_nup[_id][nup][b]);
-            assert(((BaseQueue*)r->at(0))->getSwitch() == this);
-
-            assert (_ft->pipes_nc_nup[_id][nup][b]);
-            r->push_back(_ft->pipes_nc_nup[_id][nup][b]);
-
-            r->push_back(_ft->queues_nc_nup[_id][nup][b]->getRemoteEndpoint());
-            _fib->addRoute(pkt.dst(),r,1,DOWN);
-        }
+    if (_type == TOR && _ft->cfg().HOST_POD_SWITCH(pkt.dst()) == _id) {
+        HostFibEntry* fe = _fib->getHostRoute(pkt.dst(), pkt.flow_id());
+        assert(fe);
+        pkt.set_direction(DOWN);
+        return fe->getEgressPort();
     }
-    else {
-        cerr << "Route lookup on switch with no proper type: " << _type << endl;
-        abort();
-    }
-    assert(_fib->getRoutes(pkt.dst()));
 
-    //FIB has been filled in; return choice. 
+    materializeRoutes(pkt.dst(), pkt.flow_id());
     return getNextHop(pkt, ingress_port);
 };
 
