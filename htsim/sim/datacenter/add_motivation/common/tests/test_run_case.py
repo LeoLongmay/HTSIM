@@ -206,6 +206,18 @@ class RunCaseTest(unittest.TestCase):
             },
         )
 
+    def test_laps_is_accepted_on_both_axes_and_preserved_in_command(self):
+        module = load_run_case_module()
+        self.assertIn("laps", module.VALID_CCS)
+        self.assertIn("laps", module.VALID_LOAD_BALANCERS)
+
+        with mock.patch.object(module.subprocess, "run", side_effect=self.completed) as run:
+            self.invoke(module, cc="laps", load_balancing_algo="laps")
+
+        argv = run.call_args_list[-1].args[0]
+        self.assertEqual(argv[argv.index("-sender_cc_algo") + 1], "laps")
+        self.assertEqual(argv[argv.index("-load_balancing_algo") + 1], "laps")
+
     def test_m2_phases_round_trip_analysis_config(self):
         module = load_run_case_module()
         self.assertTrue({"coarse", "confirmation"}.issubset(module.VALID_PHASES))

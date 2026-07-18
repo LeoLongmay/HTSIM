@@ -235,7 +235,7 @@ public:
     static bool _sender_based_cc;
     static bool _receiver_based_cc;
 
-    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT};
+    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT, LAPS};
     static Sender_CC _sender_cc_algo;
 
     static bool _disable_quick_adapt;
@@ -441,6 +441,9 @@ public:
     static double          _prism_engage_mult;
     static double          _prism_disengage_ratio;
     static uint32_t        _prism_n_min;     // minimum genuine ACK samples needed to close an epoch
+    static double          _laps_beta;           // Softmax inverse-temperature; default 8.0
+    static simtime_picosec _laps_probe_interval; // microseconds on CLI; default 50us
+    static simtime_picosec _laps_queue_margin;   // microseconds on CLI; default 0us
     // Motivation-only REPS admission gate. Disabled unless explicitly requested.
     static bool            _motivation_residual_recycle;
     static simtime_picosec _motivation_residual_threshold;

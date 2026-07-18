@@ -34,6 +34,7 @@ VALID_CCS = {
     "constant",
     "dctcp",
     "lswift",
+    "laps",
     "mnscc",
     "mswift",
     "nscc",
@@ -41,7 +42,7 @@ VALID_CCS = {
     "strack",
     "swift",
 }
-VALID_LOAD_BALANCERS = {"reps", "reps_actual"}
+VALID_LOAD_BALANCERS = {"laps", "reps", "reps_actual"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 TRACE_SUFFIXES = (
     "ack", "token", "epoch", "background", "pathmap", "linkmap", "coordination",

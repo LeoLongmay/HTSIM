@@ -171,6 +171,9 @@ double          UecSrc::_prism_engage_beta      = 0.1;
 double          UecSrc::_prism_engage_mult      = 0.0;
 double          UecSrc::_prism_disengage_ratio  = 0.7;
 uint32_t        UecSrc::_prism_n_min            = 3;
+double          UecSrc::_laps_beta              = 8.0;
+simtime_picosec UecSrc::_laps_probe_interval    = timeFromUs(50u);
+simtime_picosec UecSrc::_laps_queue_margin      = 0;
 bool            UecSrc::_prism_oracle_validation = false;
 std::string     UecSrc::_prism_oracle_log_path = "";
 std::string     UecSrc::_prism_oracle_run_id = "";
@@ -748,6 +751,11 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
             case MSWIFT:
                 updateCwndOnAck = &UecSrc::updateCwndOnAck_MSWIFT;
                 updateCwndOnNack = &UecSrc::updateCwndOnNack_SWIFT;
+                break;
+            case LAPS:
+                // Task 4 replaces this existing UEC-safe dispatch with LAPS feedback control.
+                updateCwndOnAck = &UecSrc::updateCwndOnAck_NSCC;
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;
                 break;
             default:
                 cout << "Unknown CC algo specified " << _sender_cc_algo << endl;
