@@ -22,12 +22,13 @@ void setStrictGlobals() {
 }
 
 LapsPathKey installSharedPhysicalPath(UecSrc& source, Queue& first, Queue& second) {
-    source.lapsSetPathResolver([&](uint32_t, uint32_t, vector<const BaseQueue*>& queues) {
+    source.lapsSetPathResolver([&](uint32_t, uint32_t, uint32_t,
+                                   vector<const BaseQueue*>& queues) {
         queues = {&first, &second};
         return true;
     });
     LapsPathKey path;
-    assert(source.lapsResolvePath(7, path));
+    assert(source.lapsResolvePath(7, 0, path));
     return path;
 }
 
@@ -58,7 +59,8 @@ void strict_laps_uses_canonical_shared_paths_and_retires_all_ack_forms(EventList
     const LapsPathKey second_entropy_1 = installSharedPhysicalPath(second, q1, q2);
     assert(first_entropy_0.queue_fingerprint == second_entropy_1.queue_fingerprint);
     // Length-prefixing, rather than a raw delimiter, is the canonical identity.
-    assert(first_entropy_0.queue_fingerprint == "13:source|uplink12:spine:egress");
+    assert(first_entropy_0.queue_fingerprint ==
+           "plane=0;13:source|uplink12:spine:egress");
 
     Queue q3(speedFromGbps(100), 100'000, eventlist, nullptr);
     q3.forceName("other-path");
@@ -89,6 +91,40 @@ void strict_laps_uses_canonical_shared_paths_and_retires_all_ack_forms(EventList
     // Every strict attempt was detached before generic UEC record erasure, so
     // no delayed strict-recovery callback remains at kRto.
     assert(!EventList::doNextEvent());
+}
+
+void paired_strict_laps_distinguishes_same_named_queues_on_separate_planes(
+    EventList& eventlist) {
+    setStrictGlobals();
+
+    // Separate topology planes construct independent queue objects, but their
+    // queue names are intentionally identical.  The recovery key therefore
+    // needs the actual sending plane as well as the ordered queue sequence.
+    Queue plane0_queue(speedFromGbps(100), 100'000, eventlist, nullptr);
+    Queue plane1_queue(speedFromGbps(100), 100'000, eventlist, nullptr);
+    plane0_queue.forceName("source-uplink");
+    plane1_queue.forceName("source-uplink");
+    UecNIC nic(6, eventlist, speedFromGbps(100), 2);
+    UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(1, false, 1.0), nic, 2);
+    Route plane0_route;
+    Route plane1_route;
+    source.getPort(0)->setRoute(plane0_route);
+    source.getPort(1)->setRoute(plane1_route);
+
+    source.lapsSetPathResolver(
+        [&](uint32_t, uint32_t, uint32_t plane, vector<const BaseQueue*>& queues) {
+            queues = {plane == 0 ? &plane0_queue : &plane1_queue};
+            return true;
+        });
+
+    LapsPathKey plane0_path;
+    LapsPathKey plane1_path;
+    assert(source.lapsResolvePath(17, plane0_route, plane0_path));
+    assert(source.lapsResolvePath(17, plane1_route, plane1_path));
+    assert(plane0_path.queue_fingerprint != plane1_path.queue_fingerprint);
+
+    Route unconfigured_route;
+    assert(!source.lapsResolvePath(17, unconfigured_route, plane0_path));
 }
 
 void strict_nack_retires_old_attempt_before_retry(EventList& eventlist) {
@@ -136,7 +172,7 @@ void non_laps_source_never_joins_paired_recovery_on_the_same_nic(EventList& even
     assert(!non_laps.isStrictLaps());
     LapsPathKey ignored;
     non_laps.lapsSetPathResolver({});
-    assert(!non_laps.lapsResolvePath(0, ignored));
+    assert(!non_laps.lapsResolvePath(0, 0, ignored));
 
     laps.createSendRecord(3, 40, 1'300, {}, true);
     laps._in_flight += 1'300;
@@ -264,6 +300,8 @@ void unpaired_laps_preserves_legacy_uec_behavior(EventList& eventlist) {
 int main() {
     EventList eventlist;
     strict_laps_uses_canonical_shared_paths_and_retires_all_ack_forms(eventlist);
+    assert(EventList::getPendingSources().empty());
+    paired_strict_laps_distinguishes_same_named_queues_on_separate_planes(eventlist);
     assert(EventList::getPendingSources().empty());
     strict_nack_retires_old_attempt_before_retry(eventlist);
     assert(EventList::getPendingSources().empty());

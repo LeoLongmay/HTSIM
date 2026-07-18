@@ -810,17 +810,22 @@ void UecSrc::lapsSetPathResolver(LapsPathResolver resolver) {
     }
 }
 
-bool UecSrc::lapsResolvePath(uint32_t entropy, LapsPathKey& path) const {
-    if (!isStrictLaps() || !_laps_path_resolver) {
+bool UecSrc::lapsResolvePath(uint32_t entropy, uint32_t send_port,
+                              LapsPathKey& path) const {
+    if (!isStrictLaps() || !_laps_path_resolver || send_port >= _ports.size()) {
         return false;
     }
 
     vector<const BaseQueue*> queues;
-    if (!_laps_path_resolver(flowId(), entropy, queues) || queues.empty()) {
+    if (!_laps_path_resolver(flowId(), entropy, send_port, queues) || queues.empty()) {
         return false;
     }
 
     ostringstream fingerprint;
+    // The NIC source port is the topology plane in main_uec.  Queue names
+    // alone are not sufficient because every plane builds an independent
+    // topology with the same queue names.
+    fingerprint << "plane=" << send_port << ';';
     for (const BaseQueue* queue : queues) {
         if (queue == nullptr) {
             return false;
@@ -832,6 +837,18 @@ bool UecSrc::lapsResolvePath(uint32_t entropy, LapsPathKey& path) const {
     }
     path = LapsPathKey(fingerprint.str());
     return true;
+}
+
+bool UecSrc::lapsResolvePath(uint32_t entropy, const Route& send_route,
+                              LapsPathKey& path) const {
+    for (uint32_t port = 0; port < _ports.size(); ++port) {
+        if (_ports[port]->route() == &send_route) {
+            return lapsResolvePath(entropy, port, path);
+        }
+    }
+    // A paired strict-LAPS send without a configured source port cannot be
+    // mapped to a physical plane, so do not silently fall back to entropy.
+    return false;
 }
 
 void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b bytes) {
@@ -3616,7 +3633,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     const UecMpSelection selection = _mp->lastSelection();
     LapsPathKey laps_path;
-    if (isStrictLaps() && !lapsResolvePath(ev, laps_path)) {
+    if (isStrictLaps() && !lapsResolvePath(ev, route, laps_path)) {
         cerr << "Strict LAPS failed to resolve a physical forwarding path for flow "
              << flowId() << " entropy " << ev << endl;
         abort();
@@ -3684,7 +3701,7 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     const UecMpSelection selection = _mp->lastSelection();
     LapsPathKey laps_path;
-    if (isStrictLaps() && !lapsResolvePath(ev, laps_path)) {
+    if (isStrictLaps() && !lapsResolvePath(ev, route, laps_path)) {
         cerr << "Strict LAPS failed to resolve a physical forwarding path for flow "
              << flowId() << " entropy " << ev << endl;
         abort();

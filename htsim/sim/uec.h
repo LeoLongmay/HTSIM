@@ -180,9 +180,12 @@ public:
     void setDst(uint32_t dst) { _dstaddr = dst; }
     bool isStrictLaps() const;
     using LapsPathResolver = std::function<bool(
-        uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
+        uint32_t, uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void lapsSetPathResolver(LapsPathResolver resolver);
-    bool lapsResolvePath(uint32_t entropy, LapsPathKey& path) const;
+    bool lapsResolvePath(uint32_t entropy, uint32_t send_port,
+                         LapsPathKey& path) const;
+    bool lapsResolvePath(uint32_t entropy, const Route& send_route,
+                         LapsPathKey& path) const;
     void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override;
     using PrismOraclePathResolver = std::function<bool(
         uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;

@@ -1403,11 +1403,13 @@ int main(int argc, char **argv) {
             }
 
             if (uec_src->isStrictLaps()) {
-                FatTreeTopology* laps_topology = topo[0].get();
                 uec_src->lapsSetPathResolver(
-                    [laps_topology, src, dest](uint32_t flow_id, uint32_t entropy,
-                                               vector<const BaseQueue*>& queues) {
-                        return laps_topology->resolve_or_materialize_ecmp_path(
+                    [&topo, src, dest](uint32_t flow_id, uint32_t entropy,
+                                      uint32_t plane, vector<const BaseQueue*>& queues) {
+                        if (plane >= topo.size() || !topo[plane]) {
+                            return false;
+                        }
+                        return topo[plane]->resolve_or_materialize_ecmp_path(
                             src, dest, flow_id, entropy, queues);
                     });
             }
