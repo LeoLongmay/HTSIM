@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Additive LAPS-only ExpA sweep. Existing ExpA artifacts are never overwritten.
+# LAPS-only ExpA sweep. Existing artifacts are fail-closed unless --replace-laps is explicit.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -9,6 +9,7 @@ DEFAULT_DATA_DIR="$EXPERIMENT/data"
 DEFAULT_RUN_LIB="$COMMON/run_lib.sh"
 DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"
 RUN_LIB="${RUN_LIB:-$DEFAULT_RUN_LIB}"
+FIGS_DIR="${FIGS_DIR:-$EXPERIMENT/figs}"
 WORKLOAD="$DATA_DIR/m2m.cm"
 RUN_LIB_DIR="$(cd "$(dirname "$RUN_LIB")" && pwd)"
 DATACENTER_DIR="$(cd "$RUN_LIB_DIR/../.." && pwd)"
@@ -19,11 +20,14 @@ FAILEDS=(0 2 4 6 8 10 12)
 TOPOLOGY="fat_tree_128_1os.topo"
 
 dry_run=false
-case "${1:-}" in
-  "") ;;
-  --dry-run) dry_run=true ;;
+replace_laps=false
+case "$#:$*" in
+  0:) ;;
+  1:--dry-run) dry_run=true ;;
+  1:--replace-laps) replace_laps=true ;;
+  2:--replace-laps\ --dry-run) replace_laps=true; dry_run=true ;;
   *)
-    echo "usage: $0 [--dry-run]" >&2
+    echo "usage: $0 [--dry-run|--replace-laps [--dry-run]]" >&2
     exit 2
     ;;
 esac
@@ -36,7 +40,45 @@ print_run() {
     "$RUN_LIB" "$failed" "$TOPOLOGY" "$seed" "$WORKLOAD" "$tag" "$DATA_DIR"
 }
 
+print_replacement_targets() {
+  local failed seed tag suffix stem extension
+  for failed in "${FAILEDS[@]}"; do
+    for seed in "${SEEDS[@]}"; do
+      tag="expA_laps_f${failed}_s${seed}"
+      for suffix in flow.txt stdout idmap dat ascii.tmp; do
+        printf 'LAPS replacement target: %s\n' "$DATA_DIR/$tag.$suffix"
+      done
+    done
+  done
+  for stem in figA1dd_goodput_laps figA1dd_avg_fct_laps figA1dd_p99_fct_laps figA1dd_legend_laps; do
+    for extension in pdf png; do
+      printf 'LAPS replacement target: %s\n' "$FIGS_DIR/$stem.$extension"
+    done
+  done
+}
+
+remove_replacement_targets() {
+  local failed seed tag suffix stem extension
+  print_replacement_targets
+  for failed in "${FAILEDS[@]}"; do
+    for seed in "${SEEDS[@]}"; do
+      tag="expA_laps_f${failed}_s${seed}"
+      for suffix in flow.txt stdout idmap dat ascii.tmp; do
+        rm -f -- "$DATA_DIR/$tag.$suffix"
+      done
+    done
+  done
+  for stem in figA1dd_goodput_laps figA1dd_avg_fct_laps figA1dd_p99_fct_laps figA1dd_legend_laps; do
+    for extension in pdf png; do
+      rm -f -- "$FIGS_DIR/$stem.$extension"
+    done
+  done
+}
+
 if "$dry_run"; then
+  if "$replace_laps"; then
+    print_replacement_targets
+  fi
   for failed in "${FAILEDS[@]}"; do
     for seed in "${SEEDS[@]}"; do
       print_run "$failed" "$seed"
@@ -54,20 +96,26 @@ fi
   exit 1
 }
 
-for failed in "${FAILEDS[@]}"; do
-  for seed in "${SEEDS[@]}"; do
-    tag="expA_laps_f${failed}_s${seed}"
-    # run_lib opens .dat before KEEPDAT decides whether to retain it.  Guard it
-    # unconditionally, alongside every output that this flow-only invocation writes.
-    for artifact in "$DATA_DIR/$tag.flow.txt" "$DATA_DIR/$tag.stdout" \
-      "$DATA_DIR/$tag.idmap" "$DATA_DIR/$tag.dat" "$DATA_DIR/$tag.ascii.tmp"; do
-      [ ! -e "$artifact" ] || {
-        echo "ERROR: collision: refusing to overwrite $artifact" >&2
-        exit 1
-      }
+if ! "$replace_laps"; then
+  for failed in "${FAILEDS[@]}"; do
+    for seed in "${SEEDS[@]}"; do
+      tag="expA_laps_f${failed}_s${seed}"
+      # run_lib opens .dat before KEEPDAT decides whether to retain it.  Guard it
+      # unconditionally, alongside every output that this flow-only invocation writes.
+      for artifact in "$DATA_DIR/$tag.flow.txt" "$DATA_DIR/$tag.stdout" \
+        "$DATA_DIR/$tag.idmap" "$DATA_DIR/$tag.dat" "$DATA_DIR/$tag.ascii.tmp"; do
+        [ ! -e "$artifact" ] || {
+          echo "ERROR: collision: refusing to overwrite $artifact" >&2
+          exit 1
+        }
+      done
     done
   done
-done
+fi
+
+if "$replace_laps"; then
+  remove_replacement_targets
+fi
 
 idmap_existed=false
 idmap_backup=""

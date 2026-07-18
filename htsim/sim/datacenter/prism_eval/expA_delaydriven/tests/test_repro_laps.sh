@@ -35,6 +35,12 @@ awk '
   exit 1
 }
 
+if bash "$RUNNER" --replace-laps --unknown >"$TMP/invalid-args.txt" 2>&1; then
+  echo "runner accepted an invalid replacement argument combination" >&2
+  exit 1
+fi
+grep -q 'usage:' "$TMP/invalid-args.txt"
+
 data_dir="$TMP/data"
 mkdir -p "$data_dir"
 touch "$data_dir/m2m.cm" "$data_dir/expA_laps_f0_s13.flow.txt"
@@ -47,6 +53,10 @@ set -euo pipefail
 printf 'stub was invoked\n' >>"${STUB_MARK:?}"
 shared_idmap="$(cd "$(dirname "$0")/../.." && pwd)/idmap.txt"
 printf 'generated idmap\n' >"$shared_idmap"
+[ ! -e "$9/$8.idmap" ] || {
+  echo "stale tagged idmap was not removed: $9/$8.idmap" >&2
+  exit 88
+}
 cp "$shared_idmap" "$9/$8.idmap"
 if [ "${STUB_WAIT_FOR_TERM:-0}" = 1 ]; then
   : "${STUB_READY:?}"
@@ -56,6 +66,93 @@ fi
 exit "${STUB_EXIT_CODE:-0}"
 EOF
 chmod +x "$stub"
+
+replacement_data_dir="$TMP/replacement-data"
+replacement_figs_dir="$TMP/replacement-figs"
+mkdir -p "$replacement_data_dir" "$replacement_figs_dir"
+touch "$replacement_data_dir/m2m.cm"
+for failed in 0 2 4 6 8 10 12; do
+  for seed in 13 14 15 16 17; do
+    tag="expA_laps_f${failed}_s${seed}"
+    for suffix in flow.txt stdout idmap dat ascii.tmp; do
+      printf 'stale LAPS %s\n' "$suffix" >"$replacement_data_dir/$tag.$suffix"
+    done
+  done
+done
+for stem in figA1dd_goodput_laps figA1dd_avg_fct_laps figA1dd_p99_fct_laps figA1dd_legend_laps; do
+  for extension in pdf png; do
+    printf 'stale LAPS figure %s.%s\n' "$stem" "$extension" >"$replacement_figs_dir/$stem.$extension"
+  done
+done
+printf 'OPS fixture must survive\n' >"$replacement_data_dir/expA_ops_f0_s13.flow.txt"
+printf 'original figure must survive\n' >"$replacement_figs_dir/figA1dd_goodput.pdf"
+ops_before="$(cksum "$replacement_data_dir/expA_ops_f0_s13.flow.txt")"
+original_fig_before="$(cksum "$replacement_figs_dir/figA1dd_goodput.pdf")"
+
+replacement_dry_run="$TMP/replacement-dry-run.txt"
+DATA_DIR="$replacement_data_dir" FIGS_DIR="$replacement_figs_dir" RUN_LIB="$stub" \
+  STUB_MARK="$TMP/replacement-dry-stub-ran" bash "$RUNNER" --replace-laps --dry-run \
+  >"$replacement_dry_run"
+replacement_dry_count="$(grep -c '^PATHS=8 END_MS=8 EXTRA_ARGS=-disable_trim bash ' "$replacement_dry_run")"
+[ "$replacement_dry_count" -eq 35 ] || {
+  echo "expected 35 replacement dry-run commands, got $replacement_dry_count" >&2
+  exit 1
+}
+replacement_dry_tags="$(grep -o 'expA_laps_f[0-9]*_s[0-9]*' "$replacement_dry_run" | sort -u | wc -l | tr -d ' ')"
+[ "$replacement_dry_tags" -eq 35 ] || {
+  echo "expected 35 replacement dry-run tags, got $replacement_dry_tags" >&2
+  exit 1
+}
+replacement_target_count="$(grep -c '^LAPS replacement target: ' "$replacement_dry_run")"
+[ "$replacement_target_count" -eq 183 ] || {
+  echo "expected 183 explicitly enumerated replacement targets, got $replacement_target_count" >&2
+  exit 1
+}
+[ "$(find "$replacement_data_dir" -name 'expA_laps_f*_s*' -type f | wc -l | tr -d ' ')" -eq 175 ] || {
+  echo "replacement dry-run deleted a LAPS data artifact" >&2
+  exit 1
+}
+[ "$(find "$replacement_figs_dir" -name '*_laps.*' -type f | wc -l | tr -d ' ')" -eq 8 ] || {
+  echo "replacement dry-run deleted a LAPS overlay figure" >&2
+  exit 1
+}
+[ "$ops_before" = "$(cksum "$replacement_data_dir/expA_ops_f0_s13.flow.txt")" ]
+[ "$original_fig_before" = "$(cksum "$replacement_figs_dir/figA1dd_goodput.pdf")" ]
+
+replacement_marker="$TMP/replacement-stub-ran"
+DATA_DIR="$replacement_data_dir" FIGS_DIR="$replacement_figs_dir" RUN_LIB="$stub" \
+  STUB_MARK="$replacement_marker" bash "$RUNNER" --replace-laps >"$TMP/replacement-run.txt"
+[ "$(wc -l <"$replacement_marker" | tr -d ' ')" -eq 35 ] || {
+  echo "expected 35 replacement stub runs" >&2
+  exit 1
+}
+for failed in 0 2 4 6 8 10 12; do
+  for seed in 13 14 15 16 17; do
+    tag="expA_laps_f${failed}_s${seed}"
+    for suffix in flow.txt stdout dat ascii.tmp; do
+      [ ! -e "$replacement_data_dir/$tag.$suffix" ] || {
+        echo "replacement retained stale LAPS artifact: $tag.$suffix" >&2
+        exit 1
+      }
+    done
+    [ -f "$replacement_data_dir/$tag.idmap" ] || {
+      echo "replacement did not run LAPS cell: $tag" >&2
+      exit 1
+    }
+  done
+done
+[ "$(find "$replacement_figs_dir" -name '*_laps.*' -type f | wc -l | tr -d ' ')" -eq 0 ] || {
+  echo "replacement retained a stale LAPS overlay figure" >&2
+  exit 1
+}
+[ "$ops_before" = "$(cksum "$replacement_data_dir/expA_ops_f0_s13.flow.txt")" ] || {
+  echo "replacement modified an OPS artifact" >&2
+  exit 1
+}
+[ "$original_fig_before" = "$(cksum "$replacement_figs_dir/figA1dd_goodput.pdf")" ] || {
+  echo "replacement modified an original figure" >&2
+  exit 1
+}
 
 if DATA_DIR="$data_dir" RUN_LIB="$stub" STUB_MARK="$TMP/stub-ran" bash "$RUNNER" >"$TMP/real-run.txt" 2>&1; then
   echo "runner accepted an existing LAPS artifact" >&2
