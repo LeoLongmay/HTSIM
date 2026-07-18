@@ -55,4 +55,22 @@ fi
 }
 grep -q 'collision' "$TMP/real-run.txt"
 
+for suffix in idmap dat; do
+  collision_data_dir="$TMP/data-$suffix"
+  mkdir -p "$collision_data_dir"
+  touch "$collision_data_dir/m2m.cm" "$collision_data_dir/expA_laps_f0_s13.$suffix"
+  stub_marker="$TMP/$suffix-stub-ran"
+
+  if DATA_DIR="$collision_data_dir" RUN_LIB="$stub" STUB_MARK="$stub_marker" bash "$RUNNER" \
+    >"$TMP/$suffix-real-run.txt" 2>&1; then
+    echo "runner accepted an existing LAPS .$suffix artifact" >&2
+    exit 1
+  fi
+  [ ! -e "$stub_marker" ] || {
+    echo "runner invoked run_lib after detecting an .$suffix collision" >&2
+    exit 1
+  }
+  grep -q 'collision' "$TMP/$suffix-real-run.txt"
+done
+
 echo "ok: 35 LAPS dry-run cells and collision refusal"

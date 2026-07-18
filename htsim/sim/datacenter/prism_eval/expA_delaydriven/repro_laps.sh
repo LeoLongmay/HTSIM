@@ -54,7 +54,10 @@ fi
 for failed in "${FAILEDS[@]}"; do
   for seed in "${SEEDS[@]}"; do
     tag="expA_laps_f${failed}_s${seed}"
-    for artifact in "$DATA_DIR/$tag.flow.txt" "$DATA_DIR/$tag.stdout"; do
+    # run_lib opens .dat before KEEPDAT decides whether to retain it.  Guard it
+    # unconditionally, alongside every output that this flow-only invocation writes.
+    for artifact in "$DATA_DIR/$tag.flow.txt" "$DATA_DIR/$tag.stdout" \
+      "$DATA_DIR/$tag.idmap" "$DATA_DIR/$tag.dat" "$DATA_DIR/$tag.ascii.tmp"; do
       [ ! -e "$artifact" ] || {
         echo "ERROR: collision: refusing to overwrite $artifact" >&2
         exit 1
