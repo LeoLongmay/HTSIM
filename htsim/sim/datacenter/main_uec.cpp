@@ -185,6 +185,8 @@ int main(int argc, char **argv) {
     bool motivation_residual_recycle = false;
     bool motivation_residual_threshold_set = false;
     double motivation_residual_threshold_us = 10.0;
+    bool motivation_ecmp_hash_seed_set = false;
+    uint32_t motivation_ecmp_hash_seed = 0;
     bool prism_coordination_mode_set = false;
     PrismCoordinationMode prism_coordination_mode = PrismCoordinationMode::DISABLED;
     vector<MotivationBackgroundSpec> motivation_background_specs;
@@ -703,6 +705,21 @@ int main(int argc, char **argv) {
             degraded_capacity_set = true;
             cout << "degraded_capacity_gbps " << degraded_capacity_gbps << endl;
             i++;
+        } else if (!strcmp(argv[i],"-motivation_ecmp_hash_seed")){
+            if (i + 1 >= argc) {
+                cerr << "missing operand for -motivation_ecmp_hash_seed" << endl;
+                return 1;
+            }
+            if (motivation_ecmp_hash_seed_set) {
+                cerr << "duplicate -motivation_ecmp_hash_seed" << endl;
+                return 1;
+            }
+            if (!parse_degraded_count("-motivation_ecmp_hash_seed", argv[i+1],
+                                      motivation_ecmp_hash_seed))
+                return 1;
+            motivation_ecmp_hash_seed_set = true;
+            cout << "motivation_ecmp_hash_seed " << motivation_ecmp_hash_seed << endl;
+            i++;
         } else if (!strcmp(argv[i],"-linkspeed")){
             // linkspeed specified is in Mbps
             linkspeed = speedFromMbps(atof(argv[i+1]));
@@ -875,6 +892,12 @@ int main(int argc, char **argv) {
         cerr << "-motivation_residual_recycle requires -sender_cc_algo prism" << endl;
         return 1;
     }
+    if (motivation_ecmp_hash_seed_set &&
+        motivation_scenario != "M3_residual_spread_coordination") {
+        cerr << "-motivation_ecmp_hash_seed is only supported by "
+                "M3_residual_spread_coordination" << endl;
+        return 1;
+    }
     UecSrc::_motivation_residual_recycle = motivation_residual_recycle;
     UecSrc::_motivation_residual_threshold = timeFromUs(motivation_residual_threshold_us);
     UecSrc::_prism_coordination_mode = prism_coordination_mode;
@@ -902,6 +925,8 @@ int main(int argc, char **argv) {
 
     srand(seed);
     srandom(seed);
+    if (motivation_ecmp_hash_seed_set)
+        FatTreeSwitch::setMotivationEcmpHashSeed(motivation_ecmp_hash_seed);
     UecSrc::_prism_oracle_seed = seed;
     cout << "Parsed args\n";
     Packet::set_packet_size(packet_size);

@@ -19,7 +19,7 @@ enum class PrismCoordinationMode {
     FULL_PRISM,
     OUTCOME_RECYCLE,
 };
-enum class PrismCoordinationAction { RETAIN, INVALIDATE, PENDING,
+enum class PrismCoordinationAction { RETAIN, INVALIDATE, PENDING, RESERVE,
                                     ROUND_COMPLETE_PROGRESS, ROUND_COMPLETE_HANDOFF,
                                     ROUND_COMPLETE_RETRY, ROUND_COMPLETE_CLEAN };
 
@@ -54,6 +54,8 @@ struct PrismCoordinationResult {
 };
 
 struct PrismOutcomeWindow {
+    simtime_picosec start_ps = 0;
+    simtime_picosec end_ps = 0;
     uint64_t classified_bytes = 0;
     uint64_t harmful_bytes = 0;
     double exposure = 0.0;
@@ -76,13 +78,19 @@ public:
 
     void observeAck(uint64_t epoch_id, uint16_t slot, uint64_t generation,
                     simtime_picosec qdelay, bool ecn, bool genuine);
-    void observeReplacementAdmission(uint16_t slot, uint64_t generation);
+    void observeReplacementReservation(uint16_t slot, uint64_t generation);
+    void observeConsumedHighResidual(uint64_t epoch_id, uint16_t slot,
+                                     uint64_t generation, uint32_t entropy,
+                                     simtime_picosec residual_ps);
+    bool observeReplacementAdmission(uint16_t slot, uint64_t generation);
+    bool isOutcomeReplacement(uint16_t slot, uint64_t generation) const;
     void observeReplacementReuse(uint16_t slot, uint64_t generation,
                                  simtime_picosec residual_ps, bool ecn, bool genuine,
                                  simtime_picosec timestamp);
     void observeClassifiedAck(simtime_picosec timestamp, simtime_picosec residual_ps,
                               bool ecn, bool genuine, uint64_t acked_bytes);
     void setOutcomeBaseRtt(simtime_picosec base_rtt);
+    bool outcomeTracking() const;
     bool outcomeReplacementsValidated() const;
     std::optional<PrismOutcome> takeOutcome();
     PrismCoordinationResult closeEpoch(const PrismCoordinationEpoch& epoch);
@@ -125,15 +133,22 @@ private:
         uint64_t harmful_bytes = 0;
     };
 
+    struct ConsumedHighResidual {
+        uint32_t entropy = 0;
+        simtime_picosec residual_ps = 0;
+    };
+
     bool enabled() const;
     bool outcomeEnabled() const;
     void beginOutcomeReplacement(uint16_t slot, uint64_t generation);
     void resetOutcomeValidationProgress();
     void resetOutcomeState();
+    void observeOutcomeBaseline(simtime_picosec timestamp, simtime_picosec residual_ps,
+                                bool ecn, uint64_t acked_bytes);
     void completeOutcomeBucket(const OutcomeBucket& bucket);
     void snapshotOutcomePre(simtime_picosec timestamp);
-    static PrismOutcomeWindow makeOutcomeWindow(const OutcomeBucket& bucket);
-    void resetRound();
+    PrismOutcomeWindow makeOutcomeWindow(const OutcomeBucket& bucket) const;
+    void resetRound(bool reset_outcome = true);
     void addSlotAction(PrismCoordinationResult& result, const UecMpCacheSlot& slot,
                        PrismCoordinationAction action, simtime_picosec residual_ps,
                        const char* reason) const;
@@ -151,8 +166,10 @@ private:
     std::map<uint16_t, uint64_t> _invalidated_generations;
     std::map<ObservationKey, Observation> _observations;
     std::map<uint16_t, ReplacementState> _outcome_replacements;
+    std::map<ObservationKey, ConsumedHighResidual> _outcome_consumed_high_residuals;
     bool _outcome_tracking = false;
     bool _outcome_replacements_validated = false;
+    std::optional<OutcomeBucket> _outcome_baseline_bucket;
     std::optional<OutcomeBucket> _outcome_active_bucket;
     std::optional<OutcomeBucket> _outcome_last_pre_bucket;
     std::optional<PrismOutcomeWindow> _outcome_pre;

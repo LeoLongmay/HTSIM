@@ -57,13 +57,15 @@ def scenario_capacity(scenario: str) -> ScenarioCapacity:
     return capacity
 
 
-def add_workload_capacity(manifest_path: Path, capacity: ScenarioCapacity) -> None:
+def add_workload_capacity(manifest_path: Path, capacity: ScenarioCapacity,
+                          workload_seed: int) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="ascii"))
     manifest["workload_capacity"] = {
         "foreground_flows": capacity.foreground_flows,
         "source_nic_capacity_gbps": SOURCE_NIC_CAPACITY_GBPS,
         "source_offered_ceiling_gbps": capacity.source_offered_ceiling_gbps,
         "healthy_capacity_gbps": capacity.healthy_capacity_gbps,
+        "workload_seed": workload_seed,
     }
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n",
@@ -88,15 +90,22 @@ def _formal_rows() -> tuple[dict, ...]:
 
 
 def _run_one(*, phase: str, output: Path, mode: str, scenario: str, seed: int,
-             degraded_links: int | None = None, degraded_capacity_gbps: float = 25.0) -> None:
+             degraded_links: int | None = None, degraded_capacity_gbps: float = 25.0,
+             workload_seed: int | None = None,
+             motivation_ecmp_hash_seed: int | None = None,
+             motivation_ecn_threshold_packets: int | None = None) -> None:
     capacity = scenario_capacity(scenario)
     if degraded_links is None:
         degraded_links = capacity.degraded_links
     if degraded_links != capacity.degraded_links:
         raise ValueError(f"{scenario} requires {capacity.degraded_links} degraded links")
-    workload = output / "workloads" / f"{scenario}_s{seed}.cm"
+    if workload_seed is None:
+        workload_seed = seed
+    if type(workload_seed) is not int or workload_seed < 0 or workload_seed > 2**31 - 1:
+        raise ValueError("workload_seed must be an integer in [0, 2147483647]")
+    workload = output / "workloads" / f"{scenario}_w{workload_seed}_s{seed}.cm"
     if not workload.exists():
-        write_workload(workload, foreground_flows=capacity.foreground_flows, seed=seed)
+        write_workload(workload, foreground_flows=capacity.foreground_flows, seed=workload_seed)
     run_id = f"{phase}_{mode}_{scenario}_s{seed}"
     manifest_path = run_case(
         experiment="M3_residual_spread_coordination",
@@ -110,6 +119,8 @@ def _run_one(*, phase: str, output: Path, mode: str, scenario: str, seed: int,
         trace_prefix=output / run_id,
         load_balancing_algo="reps_actual",
         prism_coordination_mode=mode,
+        motivation_ecmp_hash_seed=motivation_ecmp_hash_seed,
+        motivation_ecn_threshold_packets=motivation_ecn_threshold_packets,
         degraded_links=degraded_links,
         degraded_capacity_gbps=degraded_capacity_gbps,
         analysis_config={
@@ -121,7 +132,7 @@ def _run_one(*, phase: str, output: Path, mode: str, scenario: str, seed: int,
             "seed": seed,
         },
     )
-    add_workload_capacity(manifest_path, capacity)
+    add_workload_capacity(manifest_path, capacity, workload_seed)
     print(run_id)
 
 

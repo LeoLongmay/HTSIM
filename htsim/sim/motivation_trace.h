@@ -117,15 +117,35 @@ struct MotivationOutcomeRecord {
     uint64_t flow_id;
     uint64_t round_id;
     uint64_t window_ps;
+    uint64_t pre_start_ps;
+    uint64_t pre_end_ps;
     uint64_t pre_classified_bytes;
     uint64_t pre_harmful_bytes;
     double pre_exposure;
+    uint64_t post1_start_ps;
+    uint64_t post1_end_ps;
     uint64_t post1_classified_bytes;
     uint64_t post1_harmful_bytes;
     double post1_exposure;
+    uint64_t post2_start_ps;
+    uint64_t post2_end_ps;
     uint64_t post2_classified_bytes;
     uint64_t post2_harmful_bytes;
     double post2_exposure;
+};
+
+struct MotivationOutcomeStageRecord {
+    uint64_t event_seq;
+    uint64_t time_ps;
+    uint64_t flow_id;
+    uint64_t epoch_id;
+    uint32_t cache_slot;
+    uint64_t cache_generation;
+    std::string stage;
+    uint64_t residual_ps;
+    bool ecn;
+    bool genuine_sample;
+    std::string reason;
 };
 
 class MotivationTraceWriter {
@@ -152,6 +172,7 @@ public:
     void logLink(const MotivationLinkRecord& record);
     void logCoordination(const MotivationCoordinationRecord& record);
     void logOutcome(const MotivationOutcomeRecord& record);
+    void logOutcomeStage(const MotivationOutcomeStageRecord& record);
 
     void close();
 
@@ -167,6 +188,7 @@ private:
     std::ofstream _link;
     std::ofstream _coordination;
     std::ofstream _outcome;
+    std::ofstream _outcome_stage;
 };
 
 #endif

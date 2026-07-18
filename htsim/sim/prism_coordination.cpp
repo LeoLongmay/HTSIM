@@ -24,20 +24,45 @@ void PrismResidualCoordinator::observeAck(uint64_t epoch_id, uint16_t slot,
     _observations[{epoch_id, {slot, generation}}] = {qdelay, ecn};
 }
 
-void PrismResidualCoordinator::observeReplacementAdmission(uint16_t slot,
-                                                            uint64_t generation) {
-    if (!outcomeEnabled()) {
+void PrismResidualCoordinator::observeReplacementReservation(uint16_t slot,
+                                                              uint64_t generation) {
+    beginOutcomeReplacement(slot, generation);
+}
+
+void PrismResidualCoordinator::observeConsumedHighResidual(uint64_t epoch_id, uint16_t slot,
+                                                            uint64_t generation, uint32_t entropy,
+                                                            simtime_picosec residual_ps) {
+    if (!outcomeEnabled() || residual_ps < _t_spray) {
         return;
+    }
+    _outcome_consumed_high_residuals[{epoch_id, {slot, generation}}] = {
+        entropy, residual_ps};
+}
+
+bool PrismResidualCoordinator::observeReplacementAdmission(uint16_t slot,
+                                                            uint64_t generation) {
+    if (!outcomeEnabled() || !_outcome_tracking) {
+        return false;
     }
     const auto replacement = _outcome_replacements.find(slot);
     if (replacement == _outcome_replacements.end() ||
-        generation <= replacement->second.invalidated_generation) {
-        return;
+        replacement->second.admitted || generation <= replacement->second.invalidated_generation) {
+        return false;
     }
     replacement->second.replacement_generation = generation;
     replacement->second.admitted = true;
     replacement->second.reuse_validated = false;
     _outcome_replacements_validated = false;
+    return true;
+}
+
+bool PrismResidualCoordinator::isOutcomeReplacement(uint16_t slot, uint64_t generation) const {
+    if (!outcomeEnabled() || !_outcome_tracking) {
+        return false;
+    }
+    const auto replacement = _outcome_replacements.find(slot);
+    return replacement != _outcome_replacements.end() && replacement->second.admitted &&
+           replacement->second.replacement_generation == generation;
 }
 
 void PrismResidualCoordinator::observeReplacementReuse(uint16_t slot,
@@ -69,8 +94,11 @@ void PrismResidualCoordinator::observeClassifiedAck(simtime_picosec timestamp,
                                                      simtime_picosec residual_ps,
                                                      bool ecn, bool genuine,
                                                      uint64_t acked_bytes) {
-    if (!outcomeEnabled() || !_outcome_tracking || !genuine || acked_bytes == 0 ||
-        _outcome_window_ps == 0) {
+    if (!outcomeEnabled() || !genuine || acked_bytes == 0 || _outcome_window_ps == 0) {
+        return;
+    }
+    if (!_outcome_tracking) {
+        observeOutcomeBaseline(timestamp, residual_ps, ecn, acked_bytes);
         return;
     }
     if (!_outcome_active_bucket.has_value()) {
@@ -113,6 +141,10 @@ void PrismResidualCoordinator::setOutcomeBaseRtt(simtime_picosec base_rtt) {
     resetOutcomeState();
 }
 
+bool PrismResidualCoordinator::outcomeTracking() const {
+    return _outcome_tracking;
+}
+
 bool PrismResidualCoordinator::outcomeReplacementsValidated() const {
     return _outcome_replacements_validated;
 }
@@ -127,7 +159,7 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
     PrismCoordinationResult result;
 
     if (!enabled() || epoch.region != prism::HOLD) {
-        resetRound();
+        resetRound(!outcomeEnabled() || !_outcome_tracking);
         _observations.clear();
         return result;
     }
@@ -139,7 +171,50 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
 
     const bool eligible = epoch.floor < _t_cc && epoch.spread >= _t_spray;
     if (!eligible) {
-        resetRound();
+        resetRound(!outcomeEnabled() || !_outcome_tracking);
+        _observations.clear();
+        return result;
+    }
+
+    if (outcomeEnabled()) {
+        std::set<SlotGeneration> scheduled;
+        for (auto entry = _outcome_consumed_high_residuals.begin();
+             entry != _outcome_consumed_high_residuals.end();) {
+            if (entry->first.epoch_id < epoch.epoch_id) {
+                entry = _outcome_consumed_high_residuals.erase(entry);
+                continue;
+            }
+            if (entry->first.epoch_id > epoch.epoch_id) {
+                ++entry;
+                continue;
+            }
+
+            const SlotGeneration consumed = entry->first.slot_generation;
+            const ConsumedHighResidual candidate = entry->second;
+            const auto current = std::find_if(
+                epoch.slots.begin(), epoch.slots.end(),
+                [&candidate](const UecMpCacheSlot& slot) {
+                    return slot.valid && slot.entropy == candidate.entropy;
+                });
+            if (current != epoch.slots.end()) {
+                const SlotGeneration current_key{current->slot, current->generation};
+                if (scheduled.insert(current_key).second) {
+                    addSlotAction(result, *current, PrismCoordinationAction::INVALIDATE,
+                                  candidate.residual_ps, "recycled_high_residual");
+                }
+            } else if (scheduled.insert(consumed).second) {
+                UecMpCacheSlot vacant;
+                vacant.slot = consumed.slot;
+                vacant.generation = consumed.generation;
+                vacant.entropy = candidate.entropy;
+                addSlotAction(result, vacant, PrismCoordinationAction::RESERVE,
+                              candidate.residual_ps, "consumed_high_residual");
+            }
+            entry = _outcome_consumed_high_residuals.erase(entry);
+        }
+        if (!result.slot_actions.empty()) {
+            result.round_id = ++_round_id;
+        }
         _observations.clear();
         return result;
     }
@@ -183,7 +258,6 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
                 _completed_slots.erase(slot.slot);
                 _invalidated_generations[slot.slot] = slot.generation;
                 _round_had_invalidation = true;
-                beginOutcomeReplacement(slot.slot, slot.generation);
                 addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
                               "ecn_marked");
                 continue;
@@ -192,7 +266,6 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
                 _completed_slots.erase(slot.slot);
                 _invalidated_generations[slot.slot] = slot.generation;
                 _round_had_invalidation = true;
-                beginOutcomeReplacement(slot.slot, slot.generation);
                 addSlotAction(result, slot, PrismCoordinationAction::INVALIDATE, residual,
                               "residual_threshold");
                 continue;
@@ -268,7 +341,6 @@ void PrismResidualCoordinator::beginOutcomeReplacement(uint16_t slot, uint64_t g
     if (!_outcome_tracking) {
         _outcome_tracking = true;
         _outcome_replacements.clear();
-        _outcome_last_pre_bucket.reset();
         _outcome_pre.reset();
     }
     resetOutcomeValidationProgress();
@@ -287,12 +359,40 @@ void PrismResidualCoordinator::resetOutcomeState() {
     _outcome_tracking = false;
     _outcome_replacements.clear();
     _outcome_replacements_validated = false;
+    _outcome_baseline_bucket.reset();
     _outcome_active_bucket.reset();
     _outcome_last_pre_bucket.reset();
     _outcome_pre.reset();
     _outcome_post1.reset();
     _outcome_post2.reset();
     _outcome_event.reset();
+}
+
+void PrismResidualCoordinator::observeOutcomeBaseline(simtime_picosec timestamp,
+                                                       simtime_picosec residual_ps, bool ecn,
+                                                       uint64_t acked_bytes) {
+    if (!_outcome_baseline_bucket.has_value()) {
+        _outcome_baseline_bucket = OutcomeBucket{timestamp, 0, 0};
+    }
+    if (timestamp < _outcome_baseline_bucket->start) {
+        return;
+    }
+    while (timestamp >= _outcome_baseline_bucket->start + _outcome_window_ps) {
+        if (_outcome_baseline_bucket->classified_bytes > 0) {
+            _outcome_last_pre_bucket = *_outcome_baseline_bucket;
+        }
+        const simtime_picosec next_start =
+            _outcome_baseline_bucket->start + _outcome_window_ps;
+        _outcome_baseline_bucket = OutcomeBucket{next_start, 0, 0};
+        if (timestamp >= next_start + _outcome_window_ps) {
+            _outcome_baseline_bucket = OutcomeBucket{timestamp, 0, 0};
+            break;
+        }
+    }
+    _outcome_baseline_bucket->classified_bytes += acked_bytes;
+    if (ecn || residual_ps >= _t_spray) {
+        _outcome_baseline_bucket->harmful_bytes += acked_bytes;
+    }
 }
 
 void PrismResidualCoordinator::completeOutcomeBucket(const OutcomeBucket& bucket) {
@@ -317,34 +417,49 @@ void PrismResidualCoordinator::completeOutcomeBucket(const OutcomeBucket& bucket
         _outcome_event = PrismOutcome{_round_id, _outcome_window_ps, *_outcome_pre,
                                       *_outcome_post1, *_outcome_post2};
         _outcome_tracking = false;
+        _outcome_replacements.clear();
+        _outcome_replacements_validated = false;
+        _outcome_baseline_bucket.reset();
+        _outcome_last_pre_bucket.reset();
         _outcome_active_bucket.reset();
     }
 }
 
 void PrismResidualCoordinator::snapshotOutcomePre(simtime_picosec timestamp) {
-    if (!_outcome_last_pre_bucket.has_value() ||
-        _outcome_last_pre_bucket->classified_bytes == 0) {
+    const OutcomeBucket* pre_bucket = nullptr;
+    if (_outcome_last_pre_bucket.has_value() &&
+        _outcome_last_pre_bucket->classified_bytes > 0) {
+        pre_bucket = &*_outcome_last_pre_bucket;
+    } else if (_outcome_baseline_bucket.has_value() &&
+               _outcome_baseline_bucket->classified_bytes > 0) {
+        pre_bucket = &*_outcome_baseline_bucket;
+    }
+    if (pre_bucket == nullptr) {
         _outcome_active_bucket.reset();
         return;
     }
-    _outcome_pre = makeOutcomeWindow(*_outcome_last_pre_bucket);
+    _outcome_pre = makeOutcomeWindow(*pre_bucket);
     _outcome_active_bucket = OutcomeBucket{timestamp, 0, 0};
 }
 
-PrismOutcomeWindow PrismResidualCoordinator::makeOutcomeWindow(const OutcomeBucket& bucket) {
-    return {bucket.classified_bytes, bucket.harmful_bytes,
+PrismOutcomeWindow PrismResidualCoordinator::makeOutcomeWindow(const OutcomeBucket& bucket) const {
+    return {bucket.start, bucket.start + _outcome_window_ps,
+            bucket.classified_bytes, bucket.harmful_bytes,
             static_cast<double>(bucket.harmful_bytes) /
                 static_cast<double>(bucket.classified_bytes)};
 }
 
-void PrismResidualCoordinator::resetRound() {
+void PrismResidualCoordinator::resetRound(bool reset_outcome) {
     _round_active = false;
     _round_had_invalidation = false;
     _spread_ref = 0;
     _round_slots.clear();
     _completed_slots.clear();
     _invalidated_generations.clear();
-    resetOutcomeState();
+    _outcome_consumed_high_residuals.clear();
+    if (reset_outcome) {
+        resetOutcomeState();
+    }
 }
 
 void PrismResidualCoordinator::addSlotAction(PrismCoordinationResult& result,
@@ -363,6 +478,8 @@ void PrismResidualCoordinator::addSlotAction(PrismCoordinationResult& result,
         break;
     case PrismCoordinationAction::PENDING:
         result.pending_slots.push_back(slot.slot);
+        break;
+    case PrismCoordinationAction::RESERVE:
         break;
     case PrismCoordinationAction::ROUND_COMPLETE_PROGRESS:
     case PrismCoordinationAction::ROUND_COMPLETE_HANDOFF:

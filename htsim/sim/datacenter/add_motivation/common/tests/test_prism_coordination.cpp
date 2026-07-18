@@ -375,16 +375,13 @@ void no_progress_handoff_applies_one_gentle_cut() {
 
 void outcome_replacement_requires_a_reused_clean_matching_generation() {
     PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
-    auto slots = four_slots();
+    coordinator.observeReplacementReservation(3, 1);
 
-    for (uint16_t slot = 0; slot < 4; ++slot) {
-        coordinator.observeAck(1, slot, 1, slot == 3 ? 12 : 3, false, true);
-    }
-    const auto invalidated = coordinator.closeEpoch(hold_epoch(1, 2, 16, slots));
-    assert(invalidated.invalidated_slots == std::vector<uint16_t>({3}));
-    assert(!invalidated.handoff_requested);
-
-    coordinator.observeReplacementAdmission(3, 2);
+    assert(!coordinator.observeReplacementAdmission(0, 2));
+    assert(coordinator.observeReplacementAdmission(3, 2));
+    assert(!coordinator.observeReplacementAdmission(3, 3));
+    assert(coordinator.isOutcomeReplacement(3, 2));
+    assert(!coordinator.isOutcomeReplacement(3, 1));
     assert(!coordinator.outcomeReplacementsValidated());
 
     coordinator.observeReplacementReuse(3, 1, 0, false, true, 40);
@@ -400,13 +397,7 @@ void outcome_replacement_requires_a_reused_clean_matching_generation() {
 
 void outcome_uses_three_complete_classified_ack_windows() {
     PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
-    auto slots = four_slots();
-
-    for (uint16_t slot = 0; slot < 4; ++slot) {
-        coordinator.observeAck(1, slot, 1, slot == 3 ? 12 : 3, false, true);
-    }
-    assert(coordinator.closeEpoch(hold_epoch(1, 2, 16, slots)).invalidated_slots ==
-           std::vector<uint16_t>({3}));
+    coordinator.observeReplacementReservation(3, 1);
 
     coordinator.observeClassifiedAck(0, 0, false, true, 100);
     coordinator.observeClassifiedAck(40, 0, false, true, 1);
@@ -435,15 +426,38 @@ void outcome_uses_three_complete_classified_ack_windows() {
     assert(outcome->post2.exposure == 0.5);
 }
 
+void outcome_validation_survives_a_non_hold_epoch() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
+    auto slots = four_slots();
+    coordinator.observeReplacementReservation(3, 1);
+    assert(coordinator.observeReplacementAdmission(3, 2));
+
+    coordinator.closeEpoch({2, 2, 0, prism::INCREASE, false, slots});
+    coordinator.observeReplacementReuse(3, 2, 0, false, true, 40);
+    assert(coordinator.outcomeReplacementsValidated());
+}
+
+void outcome_uses_the_completed_window_before_reservation_as_pre() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
+    coordinator.observeClassifiedAck(0, 0, false, true, 100);
+    coordinator.observeClassifiedAck(40, 0, false, true, 1);
+
+    coordinator.observeReplacementReservation(3, 1);
+    assert(coordinator.observeReplacementAdmission(3, 2));
+    coordinator.observeReplacementReuse(3, 2, 0, false, true, 41);
+
+    coordinator.observeClassifiedAck(42, 0, false, true, 100);
+    coordinator.observeClassifiedAck(81, 0, false, true, 1);
+    coordinator.observeClassifiedAck(82, 0, false, true, 100);
+    coordinator.observeClassifiedAck(121, 0, false, true, 1);
+    const auto outcome = coordinator.takeOutcome();
+    assert(outcome.has_value());
+    assert(outcome->pre.classified_bytes == 100);
+}
+
 void later_invalidation_restarts_outcome_validation_and_post_windows() {
     PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
-    const auto slots = four_slots();
-
-    for (uint16_t slot = 0; slot < 4; ++slot) {
-        coordinator.observeAck(1, slot, 1, slot == 3 ? 12 : 3, false, true);
-    }
-    assert(coordinator.closeEpoch(hold_epoch(1, 2, 16, slots)).invalidated_slots ==
-           std::vector<uint16_t>({3}));
+    coordinator.observeReplacementReservation(3, 1);
 
     coordinator.observeClassifiedAck(0, 0, false, true, 100);
     coordinator.observeClassifiedAck(40, 0, false, true, 1);
@@ -454,9 +468,7 @@ void later_invalidation_restarts_outcome_validation_and_post_windows() {
     coordinator.observeClassifiedAck(41, 0, false, true, 100);
     coordinator.observeClassifiedAck(80, 0, false, true, 1);
 
-    coordinator.observeAck(2, 2, 1, 12, false, true);
-    assert(coordinator.closeEpoch(hold_epoch(2, 2, 16, slots)).invalidated_slots ==
-           std::vector<uint16_t>({2}));
+    coordinator.observeReplacementReservation(2, 1);
     assert(!coordinator.outcomeReplacementsValidated());
 
     coordinator.observeClassifiedAck(81, 0, false, true, 100);
@@ -474,6 +486,27 @@ void later_invalidation_restarts_outcome_validation_and_post_windows() {
     coordinator.observeClassifiedAck(161, 0, false, true, 100);
     coordinator.observeClassifiedAck(200, 0, false, true, 1);
     assert(coordinator.takeOutcome().has_value());
+}
+
+void outcome_mode_leaves_consumed_slots_to_ack_time_reservation() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
+    auto slots = four_slots();
+    slots[3].valid = false;
+    coordinator.observeConsumedHighResidual(1, 3, 1, 9, 12);
+
+    const auto result = coordinator.closeEpoch(hold_epoch(1, 2, 16, slots));
+    assert(has_action(result, PrismCoordinationAction::RESERVE));
+    assert(result.invalidated_slots.empty());
+}
+
+void outcome_mode_invalidates_the_current_readded_high_residual_entropy() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::OUTCOME_RECYCLE, 10, 10, 10);
+    auto slots = four_slots();
+    coordinator.observeConsumedHighResidual(1, 3, 1, 9, 12);
+
+    const auto result = coordinator.closeEpoch(hold_epoch(1, 2, 16, slots));
+    assert(result.invalidated_slots == std::vector<uint16_t>({3}));
+    assert(result.slot_actions[0].reason == "recycled_high_residual");
 }
 
 }  // namespace
@@ -498,5 +531,9 @@ int main() {
     no_progress_handoff_applies_one_gentle_cut();
     outcome_replacement_requires_a_reused_clean_matching_generation();
     outcome_uses_three_complete_classified_ack_windows();
+    outcome_validation_survives_a_non_hold_epoch();
+    outcome_uses_the_completed_window_before_reservation_as_pre();
     later_invalidation_restarts_outcome_validation_and_post_windows();
+    outcome_mode_leaves_consumed_slots_to_ack_time_reservation();
+    outcome_mode_invalidates_the_current_readded_high_residual_entropy();
 }

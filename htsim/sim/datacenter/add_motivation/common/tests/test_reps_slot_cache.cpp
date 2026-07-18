@@ -116,6 +116,23 @@ void reserved_invalid_slot_is_refilled_before_the_circular_head() {
     assert(reps.lastAdmission().cache_slot == 0);
 }
 
+void consumed_recycled_slot_can_be_reserved_for_a_clean_replacement() {
+    UecMpReps reps(16, false, true);
+    fill_cache(reps);
+
+    (void)reps.nextEntropy(0, 8);
+    const UecMpSelection consumed = reps.lastSelection();
+    assert(consumed.source == UecMpSelection::RECYCLED);
+    assert(!reps.cacheSlots()[consumed.cache_slot].valid);
+    assert(reps.reserveCacheSlot(consumed.cache_slot, consumed.cache_generation));
+
+    reps.processEv(32, UecMultipath::PATH_GOOD);
+    const UecMpAdmission replacement = reps.lastAdmission();
+    assert(replacement.written);
+    assert(replacement.cache_slot == consumed.cache_slot);
+    assert(replacement.cache_generation > consumed.cache_generation);
+}
+
 void reserved_head_slot_advances_after_replacement_admission() {
     UecMpReps reps(16, false, true);
     fill_cache(reps);
@@ -131,6 +148,57 @@ void reserved_head_slot_advances_after_replacement_admission() {
     reps.processEv(33, UecMultipath::PATH_GOOD);
     assert(reps.lastAdmission().cache_slot == 1);
     assert(reps.cacheSlots()[0].generation == replacement.cache_generation);
+}
+
+void reserved_replacement_is_not_overwritten_before_release() {
+    UecMpReps reps(16, false, true);
+    fill_cache(reps);
+
+    const auto original = reps.cacheSlots()[3];
+    assert(reps.invalidateCacheSlot(original.slot, original.generation));
+    assert(reps.reserveCacheSlot(original.slot, original.generation));
+
+    reps.processEv(32, UecMultipath::PATH_GOOD);
+    const UecMpAdmission replacement = reps.lastAdmission();
+    assert(replacement.cache_slot == 3);
+
+    for (uint32_t entropy = 33; entropy < 41; ++entropy) {
+        reps.processEv(entropy, UecMultipath::PATH_GOOD);
+    }
+    const auto protected_slot = reps.cacheSlots()[3];
+    assert(protected_slot.valid);
+    assert(protected_slot.generation == replacement.cache_generation);
+    assert(protected_slot.entropy == replacement.entropy);
+
+    reps.clearReservedCacheSlots();
+    for (uint32_t entropy = 41; entropy < 49; ++entropy) {
+        reps.processEv(entropy, UecMultipath::PATH_GOOD);
+    }
+    assert(reps.cacheSlots()[3].generation > replacement.cache_generation);
+}
+
+void reserved_replacement_is_selected_before_regular_cache_entries() {
+    UecMpReps reps(16, false, true);
+    UecMpTokenEvent selection_event{UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                                    UecMpSelection::NO_TOKEN, 0, 0, 0};
+    reps.setTokenObserver([&](const UecMpTokenEvent& event) { selection_event = event; });
+    fill_cache(reps);
+
+    const auto original = reps.cacheSlots()[3];
+    assert(reps.invalidateCacheSlot(original.slot, original.generation));
+    assert(reps.reserveCacheSlot(original.slot, original.generation));
+    reps.processEv(32, UecMultipath::PATH_GOOD);
+    const UecMpAdmission replacement = reps.lastAdmission();
+    assert(replacement.cache_slot == 3);
+
+    assert(reps.nextEntropy(0, 8) == 32);
+    const UecMpSelection selection = reps.lastSelection();
+    assert(selection.source == UecMpSelection::RECYCLED);
+    assert(selection.cache_slot == replacement.cache_slot);
+    assert(selection.cache_generation == replacement.cache_generation);
+    assert(selection_event.operation == UecMpTokenEvent::DEQUEUE_RECYCLE);
+    assert(selection_event.cache_slot == replacement.cache_slot);
+    assert(selection_event.cache_generation == replacement.cache_generation);
 }
 
 void reset_buffer_clears_reserved_slot_before_path_good_admission() {
@@ -164,6 +232,9 @@ int main() {
     stale_generation_cannot_invalidate_a_replacement();
     non_good_feedback_clears_last_admission();
     reserved_invalid_slot_is_refilled_before_the_circular_head();
+    consumed_recycled_slot_can_be_reserved_for_a_clean_replacement();
     reserved_head_slot_advances_after_replacement_admission();
+    reserved_replacement_is_not_overwritten_before_release();
+    reserved_replacement_is_selected_before_regular_cache_entries();
     reset_buffer_clears_reserved_slot_before_path_good_admission();
 }

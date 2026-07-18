@@ -31,6 +31,20 @@ template <typename T> typename CircularBufferREPS<T>::Admission CircularBufferRE
         slot = *reserved_cache_slots.begin();
         reserved_cache_slots.erase(reserved_cache_slots.begin());
         reserved_slot = true;
+        protected_cache_slots.insert(slot);
+    } else {
+        bool found_writable_slot = false;
+        for (uint16_t scanned = 0; scanned < max_size; ++scanned) {
+            const uint16_t candidate = (head + scanned) % max_size;
+            if (protected_cache_slots.find(candidate) == protected_cache_slots.end()) {
+                slot = candidate;
+                found_writable_slot = true;
+                break;
+            }
+        }
+        if (!found_writable_slot) {
+            return {};
+        }
     }
     if (!buffer[slot].isValid) {
         number_fresh_entropies++;
@@ -99,11 +113,21 @@ template <typename T> typename CircularBufferREPS<T>::Selection CircularBufferRE
     }
 
     uint16_t offset = head;
-    for (uint16_t scanned = 0; scanned < max_size; ++scanned) {
-        const uint16_t candidate = (head + scanned) % max_size;
+    bool selected_protected_replacement = false;
+    for (uint16_t candidate : protected_cache_slots) {
         if (buffer[candidate].isValid) {
             offset = candidate;
+            selected_protected_replacement = true;
             break;
+        }
+    }
+    if (!selected_protected_replacement) {
+        for (uint16_t scanned = 0; scanned < max_size; ++scanned) {
+            const uint16_t candidate = (head + scanned) % max_size;
+            if (buffer[candidate].isValid) {
+                offset = candidate;
+                break;
+            }
         }
     }
     Selection selection = {offset, buffer[offset].generation, buffer[offset].value};
@@ -189,6 +213,7 @@ template <typename T> void CircularBufferREPS<T>::resetBuffer() {
     head_round = 0;
     number_fresh_entropies = 0;
     reserved_cache_slots.clear();
+    protected_cache_slots.clear();
 }
 
 // Returns the number of elements in the buffer
@@ -245,6 +270,7 @@ template <typename T> bool CircularBufferREPS<T>::reserveCacheSlot(uint16_t slot
 
 template <typename T> void CircularBufferREPS<T>::clearReservedCacheSlots() {
     reserved_cache_slots.clear();
+    protected_cache_slots.clear();
 }
 
 // Prints the elements of the buffer

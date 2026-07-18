@@ -55,6 +55,19 @@ TRACE_HEADERS = {
         "spread_ref_ps", "residual_ps", "action", "reason", "refresh_complete",
         "progress", "handoff", "cwnd_bytes", "control_state",
     ),
+    "outcome": (
+        "schema_version", "run_id", "seed", "scenario", "event_seq", "time_ps",
+        "flow_id", "round_id", "window_ps", "pre_start_ps", "pre_end_ps",
+        "pre_classified_bytes", "pre_harmful_bytes", "pre_exposure", "post1_start_ps",
+        "post1_end_ps", "post1_classified_bytes", "post1_harmful_bytes", "post1_exposure",
+        "post2_start_ps", "post2_end_ps", "post2_classified_bytes", "post2_harmful_bytes",
+        "post2_exposure",
+    ),
+    "outcome_stage": (
+        "schema_version", "run_id", "seed", "scenario", "event_seq", "time_ps",
+        "flow_id", "epoch_id", "cache_slot", "cache_generation", "stage", "residual_ps",
+        "ecn", "genuine_sample", "reason",
+    ),
 }
 
 
@@ -202,6 +215,8 @@ class RunCaseTest(unittest.TestCase):
                 "pathmap",
                 "linkmap",
                 "coordination",
+                "outcome",
+                "outcome_stage",
                 "manifest",
             },
         )
@@ -274,6 +289,51 @@ class RunCaseTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("-prism_coordination_mode") + 1], "full_prism")
         manifest = json.loads(manifest_path.read_text(encoding="ascii"))
         self.assertEqual(manifest["config"]["prism_coordination_mode"], "full_prism")
+
+    def test_m3_can_lock_ecmp_mapping_without_reusing_the_run_seed(self):
+        module = load_run_case_module()
+        with mock.patch.object(module.subprocess, "run", side_effect=self.completed) as run:
+            manifest_path = self.invoke(
+                module,
+                experiment="M3_residual_spread_coordination",
+                cc="prism",
+                load_balancing_algo="reps_actual",
+                prism_coordination_mode="outcome_recycle",
+                motivation_ecmp_hash_seed=13,
+            )
+
+        argv = run.call_args_list[-1].args[0]
+        self.assertEqual(argv[argv.index("-motivation_ecmp_hash_seed") + 1], "13")
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+        self.assertEqual(manifest["config"]["motivation_ecmp_hash_seed"], 13)
+
+    def test_ecmp_mapping_seed_is_rejected_outside_m3(self):
+        module = load_run_case_module()
+        with mock.patch.object(module.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "only supported by M3"):
+                self.invoke(module, motivation_ecmp_hash_seed=13)
+        run.assert_not_called()
+
+    def test_m3_can_raise_ecn_threshold_for_pre_ecn_residual_observation(self):
+        module = load_run_case_module()
+        with mock.patch.object(module.subprocess, "run", side_effect=self.completed) as run:
+            manifest_path = self.invoke(
+                module,
+                experiment="M3_residual_spread_coordination",
+                motivation_ecn_threshold_packets=211,
+            )
+
+        argv = run.call_args_list[-1].args[0]
+        self.assertEqual(argv[argv.index("-ecn") + 1:argv.index("-ecn") + 3], ["211", "211"])
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+        self.assertEqual(manifest["config"]["motivation_ecn_threshold_packets"], 211)
+
+    def test_m3_ecn_threshold_is_rejected_outside_m3(self):
+        module = load_run_case_module()
+        with mock.patch.object(module.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "only supported by M3"):
+                self.invoke(module, motivation_ecn_threshold_packets=211)
+        run.assert_not_called()
 
     def test_rejects_invalid_prism_coordination_mode_before_running(self):
         module = load_run_case_module()

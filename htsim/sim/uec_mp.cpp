@@ -257,7 +257,11 @@ uint32_t UecMpReps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
                                  UecMpSelection::NO_TOKEN,
                                  _crt_path,
                                  fresh_before,
-                                 circular_buffer_reps->getNumberFreshEntropies()});
+                                 circular_buffer_reps->getNumberFreshEntropies(),
+                                 UecMpTokenEvent::NO_EVENT,
+                                 selection.slot,
+                                 selection.generation,
+                                 false});
             }
             return _crt_path;
         }
@@ -285,7 +289,11 @@ uint32_t UecMpReps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
                                  UecMpSelection::NO_TOKEN,
                                  _crt_path,
                                  fresh_before,
-                                 circular_buffer_reps->getNumberFreshEntropies()});
+                                 circular_buffer_reps->getNumberFreshEntropies(),
+                                 UecMpTokenEvent::NO_EVENT,
+                                 selection.slot,
+                                 selection.generation,
+                                 false});
             }
             return _crt_path;
         }

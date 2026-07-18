@@ -26,7 +26,7 @@ run_case.VALID_PHASES.add("outcome_recycle")
 
 def _validate_outcome_recycle_rows(rows: list[dict[str, str]]) -> tuple[dict[str, str], ...]:
     expected = {
-        (mode, "recoverable", seed, 2, 25.0)
+        (mode, "recoverable", seed, 13, 13, 211, 2, 25.0)
         for mode in MODES
         for seed in SEEDS
     }
@@ -36,6 +36,9 @@ def _validate_outcome_recycle_rows(rows: list[dict[str, str]]) -> tuple[dict[str
                 row["mode"],
                 row["scenario"],
                 int(row["seed"]),
+                int(row["workload_seed"]),
+                int(row["route_hash_seed"]),
+                int(row["ecn_threshold_packets"]),
                 int(row["degraded_links"]),
                 float(row["degraded_capacity_gbps"]),
             )
@@ -68,6 +71,9 @@ def main(argv=None) -> int:
             mode=row["mode"],
             scenario=row["scenario"],
             seed=int(row["seed"]),
+            workload_seed=int(row["workload_seed"]),
+            motivation_ecmp_hash_seed=int(row["route_hash_seed"]),
+            motivation_ecn_threshold_packets=int(row["ecn_threshold_packets"]),
             degraded_links=int(row["degraded_links"]),
             degraded_capacity_gbps=float(row["degraded_capacity_gbps"]),
         )

@@ -1,7 +1,7 @@
-mode,scenario,seed,degraded_links,degraded_capacity_gbps
-prism_recycle,recoverable,13,2,25
-outcome_recycle,recoverable,13,2,25
-prism_recycle,recoverable,14,2,25
-outcome_recycle,recoverable,14,2,25
-prism_recycle,recoverable,15,2,25
-outcome_recycle,recoverable,15,2,25
+mode,scenario,seed,workload_seed,route_hash_seed,ecn_threshold_packets,degraded_links,degraded_capacity_gbps
+prism_recycle,recoverable,13,13,13,211,2,25
+outcome_recycle,recoverable,13,13,13,211,2,25
+prism_recycle,recoverable,14,13,13,211,2,25
+outcome_recycle,recoverable,14,13,13,211,2,25
+prism_recycle,recoverable,15,13,13,211,2,25
+outcome_recycle,recoverable,15,13,13,211,2,25

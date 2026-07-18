@@ -6,7 +6,16 @@
 #include "queue_lossless.h"
 #include "queue_lossless_output.h"
 
+#include <algorithm>
+
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
+bool FatTreeSwitch::_motivation_ecmp_hash_seed_set = false;
+uint32_t FatTreeSwitch::_motivation_ecmp_hash_seed = 0;
+
+void FatTreeSwitch::setMotivationEcmpHashSeed(uint32_t seed) {
+    _motivation_ecmp_hash_seed_set = true;
+    _motivation_ecmp_hash_seed = seed;
+}
 
 FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint32_t id,simtime_picosec delay, FatTreeTopology* ft): Switch(eventlist, s) {
     _id = id;
@@ -15,7 +24,9 @@ FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint
     _uproutes = NULL;
     _ft = ft;
     _crt_route = 0;
-    _hash_salt = random();
+    _hash_salt = _motivation_ecmp_hash_seed_set
+        ? freeBSDHash(_motivation_ecmp_hash_seed, static_cast<uint32_t>(t), id)
+        : random();
     _last_choice = eventlist.now();
     _fib = new RouteTable();
 }
@@ -306,6 +317,21 @@ int8_t FatTreeSwitch::compare_pb(FibEntry* left, FibEntry* right){
 }
 
 void FatTreeSwitch::permute_paths(vector<FibEntry *>* uproutes) {
+    if (_motivation_ecmp_hash_seed_set) {
+        // FIB construction normally shuffles next hops with the run RNG.  M3
+        // locks both this order and the ECMP salt, so an entropy denotes the
+        // same physical path in every repetition.
+        std::sort(uproutes->begin(), uproutes->end(),
+                  [](FibEntry* left, FibEntry* right) {
+                      BaseQueue* left_queue =
+                          dynamic_cast<BaseQueue*>(left->getEgressPort()->at(0));
+                      BaseQueue* right_queue =
+                          dynamic_cast<BaseQueue*>(right->getEgressPort()->at(0));
+                      assert(left_queue && right_queue);
+                      return left_queue->queueName() < right_queue->queueName();
+                  });
+        return;
+    }
     int len = uproutes->size();
     for (int i = 0; i < len; i++) {
         int ix = random() % (len - i);

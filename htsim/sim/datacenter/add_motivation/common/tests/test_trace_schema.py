@@ -53,10 +53,16 @@ HEADERS = {
     ),
     "outcome": (
         "schema_version", "run_id", "seed", "scenario", "event_seq", "time_ps",
-        "flow_id", "round_id", "window_ps", "pre_classified_bytes",
-        "pre_harmful_bytes", "pre_exposure", "post1_classified_bytes",
-        "post1_harmful_bytes", "post1_exposure", "post2_classified_bytes",
-        "post2_harmful_bytes", "post2_exposure",
+        "flow_id", "round_id", "window_ps", "pre_start_ps", "pre_end_ps",
+        "pre_classified_bytes", "pre_harmful_bytes", "pre_exposure",
+        "post1_start_ps", "post1_end_ps", "post1_classified_bytes",
+        "post1_harmful_bytes", "post1_exposure", "post2_start_ps", "post2_end_ps",
+        "post2_classified_bytes", "post2_harmful_bytes", "post2_exposure",
+    ),
+    "outcome_stage": (
+        "schema_version", "run_id", "seed", "scenario", "event_seq", "time_ps",
+        "flow_id", "epoch_id", "cache_slot", "cache_generation", "stage",
+        "residual_ps", "ecn", "genuine_sample", "reason",
     ),
 }
 
@@ -129,22 +135,38 @@ def valid_rows():
                 "schema_version": "2", "run_id": "fixture", "seed": "13",
                 "scenario": "unit", "event_seq": "101", "time_ps": "1100",
                 "flow_id": "7", "round_id": "1", "window_ps": "40",
+                "pre_start_ps": "900", "pre_end_ps": "940",
                 "pre_classified_bytes": "100", "pre_harmful_bytes": "0",
-                "pre_exposure": "0.0", "post1_classified_bytes": "100",
+                "pre_exposure": "0.0", "post1_start_ps": "940", "post1_end_ps": "980",
+                "post1_classified_bytes": "100",
                 "post1_harmful_bytes": "30", "post1_exposure": "0.3",
+                "post2_start_ps": "980", "post2_end_ps": "1020",
                 "post2_classified_bytes": "100", "post2_harmful_bytes": "50",
                 "post2_exposure": "0.5",
+            },
+        ],
+        "outcome_stage": [
+            {
+                "schema_version": "2", "run_id": "fixture", "seed": "13",
+                "scenario": "unit", "event_seq": "102", "time_ps": "1150",
+                "flow_id": "7", "epoch_id": "3", "cache_slot": "2",
+                "cache_generation": "10", "stage": "replacement_admitted",
+                "residual_ps": "500000", "ecn": "0", "genuine_sample": "1",
+                "reason": "low_residual",
             },
         ],
     }
 
 
-def write_trace(directory, rows=None, headers=None, *, include_outcome=False):
+def write_trace(directory, rows=None, headers=None, *, include_outcome=False,
+                include_outcome_stage=False):
     prefix = Path(directory) / "fixture"
     rows = valid_rows() if rows is None else rows
     headers = HEADERS if headers is None else headers
     for kind, fieldnames in headers.items():
         if kind == "outcome" and not include_outcome:
+            continue
+        if kind == "outcome_stage" and not include_outcome_stage:
             continue
         with Path(f"{prefix}.{kind}.csv").open("w", newline="", encoding="utf-8") as stream:
             writer = csv.DictWriter(stream, fieldnames=fieldnames)
@@ -154,6 +176,37 @@ def write_trace(directory, rows=None, headers=None, *, include_outcome=False):
 
 
 class TraceSchemaTests(unittest.TestCase):
+    def test_accepts_dequeue_token_with_cache_slot_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rows = valid_rows()
+            token = rows["token"][0]
+            token.update({
+                "operation": "dequeue_recycle", "reason": "recycle",
+                "cache_slot": "3", "cache_generation": "5", "admission_written": "0",
+            })
+            bundle = load_trace(write_trace(directory, rows=rows))
+
+        self.assertEqual(bundle.token[0]["cache_slot"], 3)
+        self.assertEqual(bundle.token[0]["cache_generation"], 5)
+
+    def test_accepts_recycled_ack_outcome_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rows = valid_rows()
+            rows["outcome_stage"][0]["stage"] = "recycled_ack"
+            prefix = write_trace(directory, rows=rows, include_outcome_stage=True)
+            bundle = load_trace(prefix)
+
+        self.assertEqual(bundle.outcome_stage[0]["stage"], "recycled_ack")
+
+    def test_loads_optional_outcome_stage_trace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, include_outcome_stage=True)
+            bundle = load_trace(prefix)
+
+        self.assertEqual(len(bundle.outcome_stage), 1)
+        self.assertEqual(bundle.outcome_stage[0]["stage"], "replacement_admitted")
+        self.assertEqual(bundle.outcome_stage[0]["cache_generation"], 10)
+
     def test_compact_loader_preserves_all_values_events_and_source_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             prefix = write_trace(directory, include_outcome=True)
@@ -371,6 +424,14 @@ class TraceSchemaTests(unittest.TestCase):
                 r"fixture\.coordination\.csv.*refresh_complete",
             ):
                 load_trace(prefix)
+
+    def test_allows_reserve_coordination_action(self):
+        rows = valid_rows()
+        rows["coordination"][0].update({"action": "reserve", "refresh_complete": "0"})
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows)
+            bundle = load_trace(prefix)
+        self.assertEqual(bundle.coordination[0]["action"], "reserve")
 
     def test_rejects_handoff_without_round_complete_handoff_action(self):
         rows = valid_rows()

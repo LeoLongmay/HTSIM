@@ -127,6 +127,8 @@ public:
 
     static void set_strategy(routing_strategy s) { assert (_strategy==NIX); _strategy = s; }
     static void set_ar_fraction(uint16_t f) { assert(f>=1);_ar_fraction = f;} 
+    // Motivation-only override: keep entropy-to-ECMP mapping independent of run RNG.
+    static void setMotivationEcmpHashSeed(uint32_t seed);
 
     static routing_strategy _strategy;
     static uint16_t _ar_fraction;
@@ -136,6 +138,8 @@ public:
     static double _speculative_threshold_fraction;
     static uint16_t _trim_size;
     static bool _disable_trim;
+    static bool _motivation_ecmp_hash_seed_set;
+    static uint32_t _motivation_ecmp_hash_seed;
 private:
     switch_type _type;
     Pipe* _pipe;

@@ -53,6 +53,7 @@ template <typename T> class CircularBufferREPS {
     bool frozen_mode = false;
     bool circle_mode = true;
     std::set<uint16_t> reserved_cache_slots;
+    std::set<uint16_t> protected_cache_slots;
 
   public:
     CircularBufferREPS(uint16_t bufferSize = 8); // Default size is 8

@@ -13,7 +13,7 @@ constexpr const char* kPrefix = "/tmp/motivation_writer_test";
 
 const char* const kSuffixes[] = {
     ".ack.csv", ".token.csv", ".epoch.csv", ".background.csv", ".pathmap.csv",
-    ".linkmap.csv", ".coordination.csv", ".outcome.csv"};
+    ".linkmap.csv", ".coordination.csv", ".outcome.csv", ".outcome_stage.csv"};
 
 void removeTraceFiles(const std::string& prefix) {
     for (const char* suffix : kSuffixes) {
@@ -107,8 +107,12 @@ int main() {
     writer.logCoordination({writer.nextEventSeq(), 1275, 7, 2, 1, UINT32_MAX, UINT64_MAX,
                             500, 300, 350, 0, "round_complete_clean", "spread_not_reduced",
                             true, false, false, 3200, "hold"});
-    writer.logOutcome({writer.nextEventSeq(), 1300, 7, 1, 40, 100, 0, 0.0, 100, 30, 0.3,
-                       100, 50, 0.5});
+    writer.logOutcome({writer.nextEventSeq(), 1300, 7, 1, 40,
+                       1100, 1140, 100, 0, 0.0,
+                       1140, 1180, 100, 30, 0.3,
+                       1180, 1220, 100, 50, 0.5});
+    writer.logOutcomeStage({writer.nextEventSeq(), 1325, 7, 2, 3, 9, "reserved",
+                            500, false, true, "residual_threshold"});
     writer.logBackground({writer.nextEventSeq(), 1350, 9, "start", 1, 2, 3, 25, 0,
                           "q1|q2"});
     writer.logAck({writer.nextEventSeq(), 1400, 7, 3, 42, 4, 6, 710, 500, 210, false,
@@ -150,9 +154,13 @@ int main() {
            "refresh_complete,progress,handoff,cwnd_bytes,control_state");
     assert(lineAt(std::string(kPrefix) + ".outcome.csv", 1) ==
            "schema_version,run_id,seed,scenario,event_seq,time_ps,flow_id,round_id,window_ps,"
-           "pre_classified_bytes,pre_harmful_bytes,pre_exposure,post1_classified_bytes,"
-           "post1_harmful_bytes,post1_exposure,post2_classified_bytes,post2_harmful_bytes,"
-           "post2_exposure");
+           "pre_start_ps,pre_end_ps,pre_classified_bytes,pre_harmful_bytes,pre_exposure,"
+           "post1_start_ps,post1_end_ps,post1_classified_bytes,post1_harmful_bytes,"
+           "post1_exposure,post2_start_ps,post2_end_ps,post2_classified_bytes,"
+           "post2_harmful_bytes,post2_exposure");
+    assert(lineAt(std::string(kPrefix) + ".outcome_stage.csv", 1) ==
+           "schema_version,run_id,seed,scenario,event_seq,time_ps,flow_id,epoch_id,cache_slot,"
+           "cache_generation,stage,residual_ps,ecn,genuine_sample,reason");
     assert(lineAt(std::string(kPrefix) + ".token.csv", 2) ==
            "2,run,0,1000,7,enqueue_good_ack,good_ack,18446744073709551615,3,0,1,19,0,1,1");
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 2) ==
@@ -167,19 +175,22 @@ int main() {
            "2,run,5,1275,7,2,1,4294967295,18446744073709551615,500,300,350,0,"
            "round_complete_clean,spread_not_reduced,1,0,0,3200,hold");
     assert(lineAt(std::string(kPrefix) + ".outcome.csv", 2) ==
-           "2,run,13,scenario,6,1300,7,1,40,100,0,0,100,30,0.3,100,50,0.5");
+           "2,run,13,scenario,6,1300,7,1,40,1100,1140,100,0,0,1140,1180,100,30,0.3,"
+           "1180,1220,100,50,0.5");
+    assert(lineAt(std::string(kPrefix) + ".outcome_stage.csv", 2) ==
+           "2,run,13,scenario,7,1325,7,2,3,9,reserved,500,0,1,residual_threshold");
     assert(lineAt(std::string(kPrefix) + ".background.csv", 2) ==
-           "2,run,7,1350,9,start,1,2,3,25,0,q1|q2");
+           "2,run,8,1350,9,start,1,2,3,25,0,q1|q2");
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 3) ==
-           "2,run,13,scenario,8,1400,7,3,42,4,6,710,500,210,0,1,0,90,first_window,18,1300,"
+           "2,run,13,scenario,9,1400,7,3,42,4,6,710,500,210,0,1,0,90,first_window,18,1300,"
            "7700,3300");
     assert(lineAt(std::string(kPrefix) + ".background.csv", 3) ==
-           "2,run,9,1450,9,finish,1,2,3,25,6000,q1|q2");
+           "2,run,10,1450,9,finish,1,2,3,25,6000,q1|q2");
     assert(lineAt(std::string(kPrefix) + ".background.csv", 4) ==
-           "2,run,10,1500,10,start,4,5,6,0.123046875,0,q3");
+           "2,run,11,1500,10,start,4,5,6,0.123046875,0,q3");
     const std::string boundary_row = lineAt(std::string(kPrefix) + ".background.csv", 5);
     assert(boundary_row ==
-           "2,run,11,1550,11,start,7,8,9,9007199.2547409926,0,q4");
+           "2,run,12,1550,11,start,7,8,9,9007199.2547409926,0,q4");
     assert(boundary_row.find(formatMotivationBackgroundRateGbps(
                speedAsGbps(kMaximumExactTraceRate))) != std::string::npos);
     assert(speedFromGbps(std::stod("9007199.2547409926")) == kMaximumExactTraceRate);

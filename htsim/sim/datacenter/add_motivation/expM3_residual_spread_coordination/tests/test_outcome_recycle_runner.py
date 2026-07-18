@@ -15,12 +15,14 @@ class OutcomeRecycleRunnerTests(unittest.TestCase):
             {
                 (
                     row["mode"], row["scenario"], int(row["seed"]),
+                    int(row["workload_seed"]), int(row["route_hash_seed"]),
+                    int(row["ecn_threshold_packets"]),
                     int(row["degraded_links"]), float(row["degraded_capacity_gbps"]),
                 )
                 for row in rows
             },
             {
-                (mode, "recoverable", seed, 2, 25.0)
+                (mode, "recoverable", seed, 13, 13, 211, 2, 25.0)
                 for mode in ("prism_recycle", "outcome_recycle")
                 for seed in (13, 14, 15)
             },
@@ -43,12 +45,15 @@ class OutcomeRecycleRunnerTests(unittest.TestCase):
                 (
                     call.kwargs["phase"], call.kwargs["output"], call.kwargs["mode"],
                     call.kwargs["scenario"], call.kwargs["seed"],
+                    call.kwargs["workload_seed"],
+                    call.kwargs["motivation_ecmp_hash_seed"],
+                    call.kwargs["motivation_ecn_threshold_packets"],
                     call.kwargs["degraded_links"], call.kwargs["degraded_capacity_gbps"],
                 )
                 for call in run_one.call_args_list
             },
             {
-                ("outcome_recycle", Path(directory), mode, "recoverable", seed, 2, 25.0)
+                ("outcome_recycle", Path(directory), mode, "recoverable", seed, 13, 13, 211, 2, 25.0)
                 for mode in ("prism_recycle", "outcome_recycle")
                 for seed in (13, 14, 15)
             },

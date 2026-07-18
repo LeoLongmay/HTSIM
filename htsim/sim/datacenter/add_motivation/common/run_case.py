@@ -45,6 +45,7 @@ VALID_LOAD_BALANCERS = {"reps", "reps_actual"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 TRACE_SUFFIXES = (
     "ack", "token", "epoch", "background", "pathmap", "linkmap", "coordination",
+    "outcome", "outcome_stage",
 )
 M2_EXPERIMENT = "M2_redistribution_progress"
 M2_SIMULATION_END_MS = 3
@@ -198,7 +199,8 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
              degraded_capacity_gbps=100.0, background_config=None,
              analysis_config=None, motivation_residual_recycle=False,
              motivation_residual_threshold_us=10.0, load_balancing_algo="reps",
-             prism_coordination_mode="disabled"):
+             prism_coordination_mode="disabled", motivation_ecmp_hash_seed=None,
+             motivation_ecn_threshold_packets=None):
     experiment = validate_identifier(experiment, "experiment")
     run_id = validate_identifier(run_id, "run_id")
     if phase not in VALID_PHASES:
@@ -231,6 +233,25 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         raise ValueError("motivation_residual_recycle requires cc='prism'")
     if type(seed) is not int or seed < 0 or seed > 2**31 - 1:
         raise ValueError("seed must be an integer in [0, 2147483647]")
+    if motivation_ecmp_hash_seed is not None:
+        if (
+            type(motivation_ecmp_hash_seed) is not int
+            or motivation_ecmp_hash_seed < 0
+            or motivation_ecmp_hash_seed > 2**32 - 1
+        ):
+            raise ValueError("motivation_ecmp_hash_seed must be an integer in [0, 4294967295]")
+        if experiment != "M3_residual_spread_coordination":
+            raise ValueError("motivation_ecmp_hash_seed is only supported by M3")
+    if motivation_ecn_threshold_packets is not None:
+        if (
+            type(motivation_ecn_threshold_packets) is not int
+            or not 1 <= motivation_ecn_threshold_packets <= QUEUE_PACKETS
+        ):
+            raise ValueError(
+                f"motivation_ecn_threshold_packets must be an integer in [1, {QUEUE_PACKETS}]"
+            )
+        if experiment != "M3_residual_spread_coordination":
+            raise ValueError("motivation_ecn_threshold_packets is only supported by M3")
     if experiment == M2_EXPERIMENT and analysis_config is None:
         raise ValueError("M2 runs require analysis_config")
     simulation_end_ms = M2_SIMULATION_END_MS if experiment == M2_EXPERIMENT else 12
@@ -318,6 +339,12 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         "-prism_kappa", "1",
         "-prism_n_min", "3",
         *(
+            ["-ecn", str(motivation_ecn_threshold_packets),
+             str(motivation_ecn_threshold_packets)]
+            if motivation_ecn_threshold_packets is not None
+            else []
+        ),
+        *(
             [
                 "-motivation_residual_recycle",
                 "-motivation_residual_threshold_us", _number_arg(motivation_residual_threshold_us),
@@ -342,6 +369,11 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
         ),
         "-degraded_links", str(degraded_links),
         "-degraded_capacity_gbps", _number_arg(degraded_capacity_gbps),
+        *(
+            ["-motivation_ecmp_hash_seed", str(motivation_ecmp_hash_seed)]
+            if motivation_ecmp_hash_seed is not None
+            else []
+        ),
         "-seed", str(seed),
         *(
             ["-motivation_background_config", background_value]
@@ -412,6 +444,8 @@ def run_case(*, experiment, phase, run_id, cc, seed, topology, traffic,
             "motivation_residual_recycle": motivation_residual_recycle,
             "motivation_residual_threshold_us": motivation_residual_threshold_us,
             "prism_coordination_mode": prism_coordination_mode,
+            "motivation_ecmp_hash_seed": motivation_ecmp_hash_seed,
+            "motivation_ecn_threshold_packets": motivation_ecn_threshold_packets,
         },
         "output_filenames": output_filenames,
     }

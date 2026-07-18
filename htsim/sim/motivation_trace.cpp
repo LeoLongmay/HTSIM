@@ -93,6 +93,7 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
         openCsv(_link, _config.prefix + ".linkmap.csv");
         openCsv(_coordination, _config.prefix + ".coordination.csv");
         openCsv(_outcome, _config.prefix + ".outcome.csv");
+        openCsv(_outcome_stage, _config.prefix + ".outcome_stage.csv");
     } catch (...) {
         close();
         throw;
@@ -118,9 +119,12 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
                      "cache_slot,cache_generation,floor_ps,spread_ps,spread_ref_ps,residual_ps,"
                      "action,reason,refresh_complete,progress,handoff,cwnd_bytes,control_state\n";
     _outcome << "schema_version,run_id,seed,scenario,event_seq,time_ps,flow_id,round_id,window_ps,"
-                "pre_classified_bytes,pre_harmful_bytes,pre_exposure,post1_classified_bytes,"
-                "post1_harmful_bytes,post1_exposure,post2_classified_bytes,post2_harmful_bytes,"
-                "post2_exposure\n";
+                "pre_start_ps,pre_end_ps,pre_classified_bytes,pre_harmful_bytes,pre_exposure,"
+                "post1_start_ps,post1_end_ps,post1_classified_bytes,post1_harmful_bytes,"
+                "post1_exposure,post2_start_ps,post2_end_ps,post2_classified_bytes,"
+                "post2_harmful_bytes,post2_exposure\n";
+    _outcome_stage << "schema_version,run_id,seed,scenario,event_seq,time_ps,flow_id,epoch_id,"
+                      "cache_slot,cache_generation,stage,residual_ps,ecn,genuine_sample,reason\n";
     _enabled = true;
 }
 
@@ -232,17 +236,35 @@ void MotivationTraceWriter::logOutcome(const MotivationOutcomeRecord& record) {
     _outcome << kSchemaVersion << ',' << _config.run_id << ',' << _config.seed << ','
              << _config.scenario << ',' << record.event_seq << ',' << record.time_ps << ','
              << record.flow_id << ',' << record.round_id << ',' << record.window_ps << ','
+             << record.pre_start_ps << ',' << record.pre_end_ps << ','
              << record.pre_classified_bytes << ',' << record.pre_harmful_bytes << ','
-             << record.pre_exposure << ',' << record.post1_classified_bytes << ','
+             << record.pre_exposure << ',' << record.post1_start_ps << ','
+             << record.post1_end_ps << ',' << record.post1_classified_bytes << ','
              << record.post1_harmful_bytes << ',' << record.post1_exposure << ','
+             << record.post2_start_ps << ',' << record.post2_end_ps << ','
              << record.post2_classified_bytes << ',' << record.post2_harmful_bytes << ','
              << record.post2_exposure << '\n';
 }
 
+void MotivationTraceWriter::logOutcomeStage(const MotivationOutcomeStageRecord& record) {
+    if (!_enabled) {
+        return;
+    }
+    validateCsvIdentity("outcome stage", record.stage);
+    validateCsvIdentity("outcome stage reason", record.reason);
+    _outcome_stage << kSchemaVersion << ',' << _config.run_id << ',' << _config.seed << ','
+                   << _config.scenario << ',' << record.event_seq << ',' << record.time_ps << ','
+                   << record.flow_id << ',' << record.epoch_id << ',' << record.cache_slot << ','
+                   << record.cache_generation << ',' << record.stage << ',' << record.residual_ps
+                   << ',' << record.ecn << ',' << record.genuine_sample << ',' << record.reason
+                   << '\n';
+}
+
 void MotivationTraceWriter::close() {
     _enabled = false;
-    const std::array<std::ofstream*, 8> streams = {
-        &_ack, &_token, &_epoch, &_background, &_path, &_link, &_coordination, &_outcome};
+    const std::array<std::ofstream*, 9> streams = {
+        &_ack, &_token, &_epoch, &_background, &_path, &_link, &_coordination, &_outcome,
+        &_outcome_stage};
     for (std::ofstream* stream : streams) {
         if (stream->is_open()) {
             stream->close();

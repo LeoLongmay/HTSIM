@@ -78,6 +78,7 @@ class TraceBundle:
     coordination: tuple[dict, ...]
     events: tuple[EventRef, ...]
     outcome: tuple[dict, ...] = ()
+    outcome_stage: tuple[dict, ...] = ()
 
 
 def _parse_bounded_int(value: str, minimum: int, maximum: int) -> int:
@@ -189,25 +190,40 @@ _SCHEMAS: dict[str, tuple[tuple[str, Callable[[str], object]], ...]] = {
         ("schema_version", _U32), ("run_id", _S), ("seed", _U32), ("scenario", _S),
         ("event_seq", _U64), ("time_ps", _U64), ("flow_id", _U64),
         ("round_id", _U64), ("window_ps", _U64),
+        ("pre_start_ps", _U64), ("pre_end_ps", _U64),
         ("pre_classified_bytes", _U64), ("pre_harmful_bytes", _U64),
-        ("pre_exposure", _F), ("post1_classified_bytes", _U64),
-        ("post1_harmful_bytes", _U64), ("post1_exposure", _F),
+        ("pre_exposure", _F), ("post1_start_ps", _U64), ("post1_end_ps", _U64),
+        ("post1_classified_bytes", _U64), ("post1_harmful_bytes", _U64),
+        ("post1_exposure", _F), ("post2_start_ps", _U64), ("post2_end_ps", _U64),
         ("post2_classified_bytes", _U64), ("post2_harmful_bytes", _U64),
         ("post2_exposure", _F),
     ),
+    "outcome_stage": (
+        ("schema_version", _U32), ("run_id", _S), ("seed", _U32), ("scenario", _S),
+        ("event_seq", _U64), ("time_ps", _U64), ("flow_id", _U64),
+        ("epoch_id", _U64), ("cache_slot", _U32), ("cache_generation", _U64),
+        ("stage", _S), ("residual_ps", _U64), ("ecn", _B),
+        ("genuine_sample", _B), ("reason", _S),
+    ),
 }
 
-_OPTIONAL_TRACE_KINDS = ("outcome",)
+_OPTIONAL_TRACE_KINDS = ("outcome", "outcome_stage")
 _REQUIRED_TRACE_KINDS = tuple(kind for kind in _SCHEMAS if kind not in _OPTIONAL_TRACE_KINDS)
-_EVENT_KINDS = ("ack", "token", "epoch", "background", "coordination", "outcome")
+_EVENT_KINDS = (
+    "ack", "token", "epoch", "background", "coordination", "outcome", "outcome_stage",
+)
 _COORDINATION_ACTIONS = frozenset({
     "retain",
     "invalidate",
     "pending",
+    "reserve",
     "round_complete_progress",
     "round_complete_handoff",
     "round_complete_clean",
     "round_complete_retry",
+})
+_OUTCOME_STAGES = frozenset({
+    "reserved", "replacement_admitted", "replacement_reused", "recycled_ack",
 })
 
 
@@ -252,6 +268,8 @@ def _validate_coordination_row(path: Path, row: dict) -> None:
 
 def _validate_outcome_row(path: Path, row: dict) -> None:
     for window in ("pre", "post1", "post2"):
+        start = row[f"{window}_start_ps"]
+        end = row[f"{window}_end_ps"]
         classified = row[f"{window}_classified_bytes"]
         harmful = row[f"{window}_harmful_bytes"]
         exposure = row[f"{window}_exposure"]
@@ -259,6 +277,17 @@ def _validate_outcome_row(path: Path, row: dict) -> None:
             raise _error(path, f"{window}_harmful_bytes", "cannot exceed classified bytes")
         if not 0.0 <= exposure <= 1.0:
             raise _error(path, f"{window}_exposure", "must be in [0, 1]")
+        if end <= start:
+            raise _error(path, f"{window}_end_ps", "must be later than start")
+        if end - start != row["window_ps"]:
+            raise _error(path, f"{window}_end_ps", "must span window_ps")
+
+
+def _validate_outcome_stage_row(path: Path, row: dict) -> None:
+    if row["stage"] not in _OUTCOME_STAGES:
+        raise _error(path, "stage", f"unknown outcome stage {row['stage']!r}")
+    if row["stage"] == "reserved" and row["cache_generation"] == 0:
+        raise _error(path, "cache_generation", "reserved stage requires a generation")
 
 
 def _validate_token_admission_provenance(token: dict) -> None:
@@ -278,6 +307,13 @@ def _validate_token_admission_provenance(token: dict) -> None:
                 "cache_generation",
                 "written admission requires a nonzero cache generation",
             )
+        return
+
+    if token["operation"] == "dequeue_recycle":
+        if token["cache_slot"] == _NO_CACHE_SLOT:
+            raise _error(token.source_path, "cache_slot", "dequeue requires a cache slot")
+        if token["cache_generation"] == 0:
+            raise _error(token.source_path, "cache_generation", "dequeue requires a generation")
         return
 
     if token["cache_slot"] != _NO_CACHE_SLOT:
@@ -339,6 +375,8 @@ def _load_file(prefix: Path, kind: str) -> tuple[dict, ...]:
                 _validate_coordination_row(path, parsed)
             if kind == "outcome":
                 _validate_outcome_row(path, parsed)
+            if kind == "outcome_stage":
+                _validate_outcome_stage_row(path, parsed)
 
             if kind in _EVENT_KINDS:
                 event_seq = parsed["event_seq"]
@@ -416,6 +454,8 @@ def _load_file_compact(prefix: Path, kind: str) -> tuple[_CompactTraceRow, ...]:
                 _validate_coordination_row(path, row)
             if kind == "outcome":
                 _validate_outcome_row(path, row)
+            if kind == "outcome_stage":
+                _validate_outcome_stage_row(path, row)
 
             if kind in _EVENT_KINDS:
                 event_seq = row["event_seq"]
@@ -612,6 +652,7 @@ def _build_bundle(trace_prefix: Path, loaded: dict[str, tuple], *, compact: bool
         coordination=loaded["coordination"],
         events=events,
         outcome=loaded["outcome"],
+        outcome_stage=loaded["outcome_stage"],
     )
 
 
