@@ -10,44 +10,87 @@ LapsRecoveryDomain::LapsRecoveryDomain(EventList& eventlist)
       timer_handle_(eventlist.nullHandle()),
       timer_deadline_(0) {}
 
-void LapsRecoveryDomain::sent(LapsPathKey path, LapsRecoveryOwner& owner,
-                              UecBasePacket::seq_t seq, mem_b bytes) {
+LapsAttempt LapsRecoveryDomain::sent(LapsPathKey path, LapsRecoveryOwner& owner,
+                                     UecBasePacket::seq_t seq, mem_b bytes) {
     const auto path_it = paths_.try_emplace(path).first;
     PathState& state = path_it->second;
-    state.records.push_back({&owner, seq, bytes});
+    const LapsAttempt attempt(next_attempt_id_++);
+    state.records.push_back({attempt, &owner, seq, bytes});
     state.deadline = EventList::now() + kRto;
     updateTimer();
+    return attempt;
 }
 
-bool LapsRecoveryDomain::acknowledge(LapsPathKey path, LapsRecoveryOwner& owner,
-                                     UecBasePacket::seq_t seq, mem_b bytes) {
-    const auto path_it = paths_.find(path);
-    if (path_it == paths_.end()) {
+bool LapsRecoveryDomain::acknowledge(LapsAttempt attempt) {
+    return detachWithInference(attempt);
+}
+
+bool LapsRecoveryDomain::nack(LapsAttempt attempt) {
+    return detachWithInference(attempt);
+}
+
+bool LapsRecoveryDomain::retire(LapsAttempt attempt) {
+    if (!attempt) {
         return false;
     }
 
-    PathState& state = path_it->second;
-    const auto matched = std::find_if(state.records.begin(), state.records.end(),
-                                      [&](const Record& record) {
-                                          return record.owner == &owner && record.seq == seq &&
-                                                 record.bytes == bytes;
-                                      });
-    if (matched == state.records.end()) {
+    for (auto path_it = paths_.begin(); path_it != paths_.end(); ++path_it) {
+        PathState& state = path_it->second;
+        const auto record_it = std::find_if(state.records.begin(), state.records.end(),
+                                            [&](const Record& record) {
+                                                return record.attempt == attempt;
+                                            });
+        if (record_it == state.records.end()) {
+            continue;
+        }
+
+        state.records.erase(record_it);
+        if (state.records.empty()) {
+            paths_.erase(path_it);
+        } else {
+            state.deadline = EventList::now() + kRto;
+        }
+        updateTimer();
+        return true;
+    }
+    return false;
+}
+
+bool LapsRecoveryDomain::detachWithInference(LapsAttempt attempt) {
+    if (!attempt) {
         return false;
     }
 
-    for (auto record_it = state.records.begin(); record_it != matched; ++record_it) {
-        record_it->owner->lapsRecover(record_it->seq, record_it->bytes);
-    }
-    state.records.erase(state.records.begin(), std::next(matched));
+    for (auto path_it = paths_.begin(); path_it != paths_.end(); ++path_it) {
+        PathState& state = path_it->second;
+        const auto matched = std::find_if(state.records.begin(), state.records.end(),
+                                          [&](const Record& record) {
+                                              return record.attempt == attempt;
+                                          });
+        if (matched == state.records.end()) {
+            continue;
+        }
 
-    if (state.records.empty()) {
-        paths_.erase(path_it);
-    } else {
-        state.deadline = EventList::now() + kRto;
+        std::vector<Record> inferred_losses;
+        for (auto record_it = state.records.begin(); record_it != matched; ++record_it) {
+            inferred_losses.push_back(*record_it);
+        }
+        state.records.erase(state.records.begin(), std::next(matched));
+
+        if (state.records.empty()) {
+            paths_.erase(path_it);
+        } else {
+            state.deadline = EventList::now() + kRto;
+        }
+        // The old attempts are no longer visible before a callback can send
+        // again and register a new handle.
+        updateTimer();
+        for (const Record& record : inferred_losses) {
+            record.owner->lapsRecover(record.attempt, record.seq, record.bytes);
+        }
+        return true;
     }
-    updateTimer();
-    return true;
+    return false;
 }
 
 void LapsRecoveryDomain::removeOwner(LapsRecoveryOwner& owner) {
@@ -82,10 +125,12 @@ void LapsRecoveryDomain::doNextEvent() {
         }
     }
 
-    for (const Record& record : expired_records) {
-        record.owner->lapsRecover(record.seq, record.bytes);
-    }
+    // Re-arm from the still-live paths before owner callbacks can register
+    // fresh attempts for an expired physical path.
     updateTimer();
+    for (const Record& record : expired_records) {
+        record.owner->lapsRecover(record.attempt, record.seq, record.bytes);
+    }
 }
 
 void LapsRecoveryDomain::updateTimer() {
