@@ -182,6 +182,12 @@ if ( ENABLE_TESTS )
     add_test(NAME laps_multipath COMMAND test_laps_multipath)
     set_tests_properties(laps_multipath PROPERTIES LABELS "laps;unit" TIMEOUT 60)
 
+    add_executable(test_laps_packet_feedback
+        datacenter/add_motivation/common/tests/test_laps_packet_feedback.cpp)
+    target_link_libraries(test_laps_packet_feedback PRIVATE htsim)
+    add_test(NAME laps_packet_feedback COMMAND test_laps_packet_feedback)
+    set_tests_properties(laps_packet_feedback PROPERTIES LABELS "laps;unit" TIMEOUT 60)
+
     add_executable(test_prism_coordination
         datacenter/add_motivation/common/tests/test_prism_coordination.cpp)
     target_link_libraries(test_prism_coordination PRIVATE htsim)

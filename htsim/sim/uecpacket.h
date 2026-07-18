@@ -50,6 +50,7 @@ public:
         p->_type = UECDATA;
         p->_is_header = false;
         p->_bounced = false;
+        p->resetLapsMetadata();
         p->_epsn = epsn;
         p->_packet_type = pkttype;
         
@@ -110,6 +111,12 @@ public:
 
     inline int32_t trim_hop() const {return _trim_hop.value_or(INT32_MAX);}
     inline packet_direction trim_direction() const {return _trim_direction;}
+    inline void setLapsSendTime(simtime_picosec send_time) {
+        _laps_send_time = send_time;
+        _laps_send_time_valid = true;
+    }
+    inline simtime_picosec lapsSendTime() const { return _laps_send_time; }
+    inline bool lapsSendTimeValid() const { return _laps_send_time_valid; }
 
     inline int32_t path_id() const {if (_pathid!=UINT32_MAX) return _pathid; else return _route->path_id();}
 
@@ -136,6 +143,13 @@ protected:
     //trim information, need to see if this stays here or goes to separate header.
     std::optional<int32_t> _trim_hop;
     packet_direction _trim_direction;
+
+private:
+    void resetLapsMetadata();
+    simtime_picosec _laps_send_time;
+    bool _laps_send_time_valid;
+
+protected:
     static PacketDB<UecDataPacket> _packetdb;
 };
 
@@ -204,6 +218,7 @@ public:
         p->_type = UECACK;
         p->_is_header = true;
         p->_bounced = false;
+        p->resetLapsMetadata();
         p->_ref_ack = ref_ack;
         p->_acked_psn = acked_psn;
 
@@ -244,6 +259,12 @@ public:
     inline bool is_probe_ack() const {return _is_probe_ack;}
     inline void set_rtx_echo(bool rtx_bit){_rtx_echo = rtx_bit;};
     inline bool rtx_echo() const {return _rtx_echo;}
+    inline void setLapsOneWayDelay(simtime_picosec delay) {
+        _laps_one_way_delay = delay;
+        _laps_delay_valid = true;
+    }
+    inline simtime_picosec lapsOneWayDelay() const { return _laps_one_way_delay; }
+    inline bool lapsDelayValid() const { return _laps_delay_valid; }
 
     virtual ~UecAckPacket(){}
 
@@ -268,6 +289,12 @@ protected:
     uint32_t _out_of_order_count;
     bool _is_probe_ack;
 
+private:
+    void resetLapsMetadata();
+    simtime_picosec _laps_one_way_delay;
+    bool _laps_delay_valid;
+
+protected:
     static PacketDB<UecAckPacket> _packetdb;
 };
 

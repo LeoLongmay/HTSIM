@@ -702,7 +702,9 @@ class UecSink : public DataReceiver {
     UecBasePacket::seq_t sackBitmapBase(UecBasePacket::seq_t epsn);
     UecBasePacket::seq_t sackBitmapBaseIdeal();
     uint64_t buildSackBitmap(UecBasePacket::seq_t ref_epsn);
-    UecAckPacket* sack(uint32_t path_id, UecBasePacket::seq_t seqno, UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo);
+    UecAckPacket* sack(uint32_t path_id, UecBasePacket::seq_t seqno,
+                       UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo,
+                       const UecDataPacket* received_data = nullptr);
 
     UecNackPacket* nack(uint32_t path_id, UecBasePacket::seq_t seqno, bool last_hop, bool ecn_echo);
 

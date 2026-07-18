@@ -3410,6 +3410,9 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
              << " ar " << p->ar()
              << endl;
     }
+    if (dynamic_cast<UecMpLaps*>(_mp.get()) != nullptr) {
+        p->setLapsSendTime(eventlist().now());
+    }
     p->sendOn();
     if (_motivation_trace_writer.enabledFor(flowId())) {
         _motivation_new_data_bytes_sent_total += full_pkt_size;
@@ -3458,6 +3461,9 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
              << " in_flight " << _in_flight << " pull_target " << _pull_target << " pull " << _pull << endl;
     }
     p->set_ar(true);
+    if (dynamic_cast<UecMpLaps*>(_mp.get()) != nullptr) {
+        p->setLapsSendTime(eventlist().now());
+    }
     p->sendOn();
     _stats.rtx_pkts_sent++;
     startRTO(eventlist().now());
@@ -3958,7 +3964,7 @@ void UecSink::processData(UecDataPacket& pkt) {
     bool force_ack = false;
     if (pkt.packet_type() == UecBasePacket::DATA_PROBE){
         UecAckPacket* ack_packet =
-            sack(pkt.path_id(), sackBitmapBase(pkt.epsn()), pkt.epsn(), (bool)(pkt.flags() & ECN_CE), pkt.retransmitted());
+            sack(pkt.path_id(), sackBitmapBase(pkt.epsn()), pkt.epsn(), (bool)(pkt.flags() & ECN_CE), pkt.retransmitted(), &pkt);
         ack_packet->set_probe_ack(true);
         _nic.sendControlPacket(ack_packet, NULL, this);   
         return;     
@@ -4034,7 +4040,7 @@ void UecSink::processData(UecDataPacket& pkt) {
         // this code is different from the proposed hardware implementation, as it keeps track of
         // the ACK state of OOO packets.
         UecAckPacket* ack_packet =
-            sack(pkt.path_id(), ecn ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted());
+            sack(pkt.path_id(), ecn ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted(), &pkt);
         _nic.sendControlPacket(ack_packet, NULL, this);
 
         _accepted_bytes = 0;  // careful about this one.
@@ -4104,7 +4110,7 @@ void UecSink::processData(UecDataPacket& pkt) {
     }
     if (ecn || shouldSack() || force_ack) {
         UecAckPacket* ack_packet =
-            sack(pkt.path_id(), (ecn || pkt.ar()) ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted());
+            sack(pkt.path_id(), (ecn || pkt.ar()) ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted(), &pkt);
 
         if (_src->debug()) {
             cout << " UecSink " << _nodename << " src " << _src->nodename()
@@ -4150,7 +4156,7 @@ void UecSink::processTrimmed(const UecDataPacket& pkt) {
                  << " time " << timeAsNs(getSrc()->eventlist().now()) << " flow"
                  << _src->flow()->str() << endl;
 
-        UecAckPacket* ack_packet = sack(pkt.path_id(), sackBitmapBase(pkt.epsn()), pkt.epsn(), false, pkt.retransmitted());
+        UecAckPacket* ack_packet = sack(pkt.path_id(), sackBitmapBase(pkt.epsn()), pkt.epsn(), false, pkt.retransmitted(), &pkt);
         //ack_packet->sendOn();
         _nic.sendControlPacket(ack_packet, NULL, this);
         return;
@@ -4398,7 +4404,9 @@ uint64_t UecSink::buildSackBitmap(UecBasePacket::seq_t ref_epsn) {
     return bitmap;
 }
 
-UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno, UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo) {
+UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
+                            UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo,
+                            const UecDataPacket* received_data) {
     uint64_t bitmap = buildSackBitmap(seqno);
     UecAckPacket* pkt =
         UecAckPacket::newpkt(_flow, NULL, _expected_epsn, seqno, acked_psn, path_id, ce, _recvd_bytes,_rcv_cwnd_pen,_srcaddr);
@@ -4408,6 +4416,12 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno, UecBas
     pkt->set_rtx_echo(rtx_echo);
     pkt->set_probe_ack(false);
     pkt->set_hop_count(0);
+    if (received_data != nullptr && received_data->lapsSendTimeValid()) {
+        const simtime_picosec now = _nic.eventlist().now();
+        if (now >= received_data->lapsSendTime()) {
+            pkt->setLapsOneWayDelay(now - received_data->lapsSendTime());
+        }
+    }
     return pkt;
 }
 
