@@ -1757,7 +1757,7 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         cout << "At " << timeAsUs(eventlist().now()) << " " << _flow.str() << " " << _nodename << " processAck: " << cum_ack << " flow " << _flow.str() << " cwnd " << _cwnd << " flightsize " << _in_flight << " delay " << timeAsUs(delay) << " newlyrecvd " << newly_recvd_bytes << " skip " << pkt.ecn_echo() << " raw rtt " << raw_rtt << endl;
     }
 
-    if (_sender_based_cc && _enable_sleek) {
+    if (_sender_based_cc && _enable_sleek && !isStrictLaps()) {
         //probe packets
         if (_probe_timer_when != 0){
             if (_probe_timer_handle->second != this){
@@ -2915,6 +2915,13 @@ uint16_t UecSrc::get_avg_pktsize(){
 }
 
 void UecSrc::runSleek(uint32_t ooo, UecBasePacket::seq_t cum_ack) {
+    // Strict LAPS owns data-record recovery through the NIC-scoped attempt
+    // domain.  SLEEK erases records directly, so it must never run here even
+    // if a caller bypasses the normal processAck dispatch gate.
+    if (isStrictLaps()) {
+        return;
+    }
+
     mem_b avg_size = get_avg_pktsize();
     mem_b threshold = min((mem_b)(loss_retx_factor*_cwnd), _maxwnd);
     threshold = max(threshold, min_retx_config*avg_size);
@@ -3128,7 +3135,7 @@ void UecSrc::doNextEvent() {
         startConnection();
     }
 
-    if (_sender_based_cc && _enable_sleek) {
+    if (_sender_based_cc && _enable_sleek && !isStrictLaps()) {
         if (_probe_timer_when != 0 && _probe_timer_when == eventlist().now()){
             if ( _flow.flow_id() == _debug_flowid || _debug_src ) {
                 cout << timeAsUs(eventlist().now())<< " doNextEvent probe " <<  _rtx_timeout_pending << " flowid " << _flow.flow_id() << endl;
@@ -4042,7 +4049,7 @@ void UecSrc::rtxTimerExpired() {
 
     //Yanfang: this is a hack, we remove timestamp for these seqno, 
     //I would expect that that the fast loss recovery will retransmit this packet, when the send_times record the sending timestamp for this packet
-    if (_sender_based_cc && _enable_sleek) {
+    if (_sender_based_cc && _enable_sleek && !isStrictLaps()) {
         if (_loss_recovery_mode) {
             if (_rtx_times[seqno] < 1) {
                 recalculateRTO();

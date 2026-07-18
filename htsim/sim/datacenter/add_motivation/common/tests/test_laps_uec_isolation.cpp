@@ -207,6 +207,44 @@ void strict_laps_data_never_arms_the_generic_rto(EventList& eventlist) {
     source.cancelRTO();
 }
 
+void strict_laps_ignores_sleek_before_ack_retires_its_attempt(EventList& eventlist) {
+    setStrictGlobals();
+    UecSrc::_enable_sleek = true;
+
+    UecNIC nic(5, eventlist, speedFromGbps(100), 1);
+    UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(1, false, 1.0), nic, 1);
+    source.setFlowId(42);
+    source._cwnd = 1'500;
+    source._maxwnd = 3'000;
+    source._highest_sent = 1;
+
+    LapsRecoveryDomain& domain = nic.lapsRecovery();
+    installStrictRecord(source, domain, LapsPathKey("10:sleek-path"), 0, 0, 1'500);
+
+    // SLEEK would otherwise move seq 0 to the RTX queue without retiring
+    // its strict recovery attempt.  The paired strict-LAPS path must leave it
+    // live until a real ACK performs the domain retirement.
+    UecAckPacket* sleek_ack = UecAckPacket::newpkt(*source.flow(), nullptr, 0, 99, 99, 0,
+                                                   false, 0, 255);
+    sleek_ack->set_ooo(5);
+    source.processAck(*sleek_ack);
+    sleek_ack->free();
+    assert(source._tx_bitmap.count(0) == 1);
+    assert(source._rtx_queue.empty());
+
+    UecAckPacket* retirement_ack = UecAckPacket::newpkt(*source.flow(), nullptr, 1, 99, 99,
+                                                         0, false, 0, 255);
+    source.processAck(*retirement_ack);
+    retirement_ack->free();
+    assert(source._tx_bitmap.empty());
+    assert(source._rtx_queue.empty());
+    // The ACK retired the only attempt, so no stale 8 ms recovery callback or
+    // duplicate retransmission can remain after SLEEK activity.
+    assert(!EventList::doNextEvent());
+
+    UecSrc::_enable_sleek = false;
+}
+
 void unpaired_laps_preserves_legacy_uec_behavior(EventList& eventlist) {
     setStrictGlobals();
 
@@ -234,6 +272,8 @@ int main() {
     laps_pacer_uses_packet_serialization_at_current_rate(eventlist);
     assert(EventList::getPendingSources().empty());
     strict_laps_data_never_arms_the_generic_rto(eventlist);
+    assert(EventList::getPendingSources().empty());
+    strict_laps_ignores_sleek_before_ack_retires_its_attempt(eventlist);
     assert(EventList::getPendingSources().empty());
     unpaired_laps_preserves_legacy_uec_behavior(eventlist);
     assert(EventList::getPendingSources().empty());
