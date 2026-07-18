@@ -304,7 +304,9 @@ void nack_detaches_the_old_attempt_before_retry(EventList& eventlist, LapsRecove
     owner.lapsRecover(old_attempt, 40, 1300);
     assert(owner.recovered.empty());
     assert(EventList::doNextEvent());
-    assert(EventList::now() == retry_sent_at + LapsRecoveryDomain::kBootstrapRto);
+    // This owner/path was sampled above, and its empty state retains that
+    // sample for a later retry on the same path.
+    assert(EventList::now() == retry_sent_at + 2 * timeFromUs(uint32_t{7}));
     assert((owner.recovered ==
             std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{40, 1300}}));
     assert(owner.callbacks.back().attempt == retry);

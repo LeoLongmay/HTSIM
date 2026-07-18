@@ -3,6 +3,7 @@
 #define LAPS_RECOVERY_H
 
 #include <cstdint>
+#include <functional>
 #include <list>
 #include <map>
 #include <optional>
@@ -67,6 +68,19 @@ public:
     void doNextEvent() override;
 
 private:
+    struct OwnerPathKey {
+        LapsPathKey path;
+        LapsRecoveryOwner* owner = nullptr;
+
+        bool operator<(const OwnerPathKey& other) const {
+            if (path < other.path)
+                return true;
+            if (other.path < path)
+                return false;
+            return std::less<LapsRecoveryOwner*>{}(owner, other.owner);
+        }
+    };
+
     struct Record {
         LapsAttempt attempt;
         LapsRecoveryOwner* owner;
@@ -76,13 +90,21 @@ private:
 
     struct PathState {
         std::list<Record> records;
-        simtime_picosec deadline;
+        std::optional<simtime_picosec> one_way_delay;
+        simtime_picosec deadline = 0;
     };
 
-    bool detachWithInference(LapsAttempt attempt);
+    struct LocatedAttempt {
+        PathState* state;
+        std::list<Record>::iterator record;
+    };
+
+    std::optional<LocatedAttempt> findAttempt(LapsAttempt attempt);
+    bool detach(LapsAttempt attempt);
+    void arm(PathState& state);
     void updateTimer();
 
-    std::map<LapsPathKey, PathState> paths_;
+    std::map<OwnerPathKey, PathState> paths_;
     EventList::Handle timer_handle_;
     simtime_picosec timer_deadline_;
     uint64_t next_attempt_id_ = 1;

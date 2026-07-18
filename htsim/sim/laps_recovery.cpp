@@ -5,6 +5,16 @@
 #include <iterator>
 #include <limits>
 
+namespace {
+
+simtime_picosec twiceOrMax(simtime_picosec delay) {
+    return delay > std::numeric_limits<simtime_picosec>::max() / 2
+               ? std::numeric_limits<simtime_picosec>::max()
+               : 2 * delay;
+}
+
+}  // namespace
+
 LapsRecoveryDomain::LapsRecoveryDomain(EventList& eventlist)
     : EventSource(eventlist, "laps recovery"),
       timer_handle_(eventlist.nullHandle()),
@@ -12,26 +22,50 @@ LapsRecoveryDomain::LapsRecoveryDomain(EventList& eventlist)
 
 LapsAttempt LapsRecoveryDomain::sent(LapsPathKey path, LapsRecoveryOwner& owner,
                                      UecBasePacket::seq_t seq, mem_b bytes) {
-    const auto path_it = paths_.try_emplace(path).first;
+    const auto path_it = paths_.try_emplace(OwnerPathKey{std::move(path), &owner}).first;
     PathState& state = path_it->second;
     const LapsAttempt attempt(next_attempt_id_++);
     state.records.push_back({attempt, &owner, seq, bytes});
-    state.deadline = EventList::now() + kRto;
+    arm(state);
     updateTimer();
     return attempt;
 }
 
-bool LapsRecoveryDomain::acknowledge(LapsAttempt attempt) {
-    return detachWithInference(attempt);
+bool LapsRecoveryDomain::acknowledge(
+    LapsAttempt attempt, std::optional<simtime_picosec> one_way_delay) {
+    const auto located = findAttempt(attempt);
+    if (!located) {
+        return false;
+    }
+
+    PathState& state = *located->state;
+    if (one_way_delay && *one_way_delay != 0) {
+        state.one_way_delay = *one_way_delay;
+    }
+    std::vector<Record> inferred_losses(state.records.begin(), located->record);
+    state.records.erase(state.records.begin(), std::next(located->record));
+    if (!state.records.empty()) {
+        arm(state);
+    }
+    updateTimer();
+    for (const Record& record : inferred_losses) {
+        record.owner->lapsRecover(record.attempt, record.seq, record.bytes);
+    }
+    return true;
 }
 
 bool LapsRecoveryDomain::nack(LapsAttempt attempt) {
-    return detachWithInference(attempt);
+    return detach(attempt);
 }
 
 bool LapsRecoveryDomain::retire(LapsAttempt attempt) {
+    return detach(attempt);
+}
+
+std::optional<LapsRecoveryDomain::LocatedAttempt> LapsRecoveryDomain::findAttempt(
+    LapsAttempt attempt) {
     if (!attempt) {
-        return false;
+        return std::nullopt;
     }
 
     for (auto path_it = paths_.begin(); path_it != paths_.end(); ++path_it) {
@@ -40,70 +74,42 @@ bool LapsRecoveryDomain::retire(LapsAttempt attempt) {
                                             [&](const Record& record) {
                                                 return record.attempt == attempt;
                                             });
-        if (record_it == state.records.end()) {
-            continue;
+        if (record_it != state.records.end()) {
+            return LocatedAttempt{&state, record_it};
         }
-
-        state.records.erase(record_it);
-        if (state.records.empty()) {
-            paths_.erase(path_it);
-        } else {
-            state.deadline = EventList::now() + kRto;
-        }
-        updateTimer();
-        return true;
     }
-    return false;
+    return std::nullopt;
 }
 
-bool LapsRecoveryDomain::detachWithInference(LapsAttempt attempt) {
-    if (!attempt) {
+bool LapsRecoveryDomain::detach(LapsAttempt attempt) {
+    const auto located = findAttempt(attempt);
+    if (!located) {
         return false;
     }
 
-    for (auto path_it = paths_.begin(); path_it != paths_.end(); ++path_it) {
-        PathState& state = path_it->second;
-        const auto matched = std::find_if(state.records.begin(), state.records.end(),
-                                          [&](const Record& record) {
-                                              return record.attempt == attempt;
-                                          });
-        if (matched == state.records.end()) {
-            continue;
-        }
-
-        std::vector<Record> inferred_losses;
-        for (auto record_it = state.records.begin(); record_it != matched; ++record_it) {
-            inferred_losses.push_back(*record_it);
-        }
-        state.records.erase(state.records.begin(), std::next(matched));
-
-        if (state.records.empty()) {
-            paths_.erase(path_it);
-        } else {
-            state.deadline = EventList::now() + kRto;
-        }
-        // The old attempts are no longer visible before a callback can send
-        // again and register a new handle.
-        updateTimer();
-        for (const Record& record : inferred_losses) {
-            record.owner->lapsRecover(record.attempt, record.seq, record.bytes);
-        }
-        return true;
+    PathState& state = *located->state;
+    state.records.erase(located->record);
+    if (!state.records.empty()) {
+        arm(state);
     }
-    return false;
+    updateTimer();
+    return true;
+}
+
+void LapsRecoveryDomain::arm(PathState& state) {
+    const simtime_picosec interval = state.one_way_delay
+                                         ? twiceOrMax(*state.one_way_delay)
+                                         : kBootstrapRto;
+    state.deadline = EventList::now() > std::numeric_limits<simtime_picosec>::max() - interval
+                         ? std::numeric_limits<simtime_picosec>::max()
+                         : EventList::now() + interval;
 }
 
 void LapsRecoveryDomain::removeOwner(LapsRecoveryOwner& owner) {
     for (auto path_it = paths_.begin(); path_it != paths_.end();) {
-        PathState& state = path_it->second;
-        const size_t old_size = state.records.size();
-        state.records.remove_if([&](const Record& record) { return record.owner == &owner; });
-        if (state.records.empty()) {
+        if (path_it->first.owner == &owner) {
             path_it = paths_.erase(path_it);
         } else {
-            if (state.records.size() != old_size) {
-                state.deadline = EventList::now() + kRto;
-            }
             ++path_it;
         }
     }
@@ -115,13 +121,10 @@ void LapsRecoveryDomain::doNextEvent() {
     timer_deadline_ = 0;
 
     std::vector<Record> expired_records;
-    for (auto path_it = paths_.begin(); path_it != paths_.end();) {
-        if (path_it->second.deadline <= EventList::now()) {
-            const PathState& state = path_it->second;
+    for (auto& [path, state] : paths_) {
+        if (!state.records.empty() && state.deadline <= EventList::now()) {
             expired_records.insert(expired_records.end(), state.records.begin(), state.records.end());
-            path_it = paths_.erase(path_it);
-        } else {
-            ++path_it;
+            state.records.clear();
         }
     }
 
@@ -134,18 +137,20 @@ void LapsRecoveryDomain::doNextEvent() {
 }
 
 void LapsRecoveryDomain::updateTimer() {
-    if (paths_.empty()) {
+    simtime_picosec earliest_deadline = std::numeric_limits<simtime_picosec>::max();
+    for (const auto& [path, state] : paths_) {
+        if (!state.records.empty()) {
+            earliest_deadline = std::min(earliest_deadline, state.deadline);
+        }
+    }
+
+    if (earliest_deadline == std::numeric_limits<simtime_picosec>::max()) {
         if (timer_handle_ != eventlist().nullHandle()) {
             eventlist().cancelPendingSourceByHandle(*this, timer_handle_);
             timer_handle_ = eventlist().nullHandle();
         }
         timer_deadline_ = 0;
         return;
-    }
-
-    simtime_picosec earliest_deadline = std::numeric_limits<simtime_picosec>::max();
-    for (const auto& [path, state] : paths_) {
-        earliest_deadline = std::min(earliest_deadline, state.deadline);
     }
 
     if (timer_handle_ != eventlist().nullHandle() && timer_deadline_ == earliest_deadline) {
