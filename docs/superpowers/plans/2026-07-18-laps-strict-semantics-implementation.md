@@ -153,7 +153,8 @@
   struct LapsPathKey { uint32_t destination; uint32_t entropy; };
   class LapsRecoveryDomain final : public EventSource {
   public:
-      static constexpr simtime_picosec kRto = timeFromUs(8000);
+      // timeFromUs() is runtime-only in this C++17 codebase; 8000 us == 8 ms.
+      static constexpr simtime_picosec kRto = 8000ULL * 1000000ULL;
       void sent(LapsPathKey, LapsRecoveryOwner&, UecBasePacket::seq_t, mem_b);
       bool acknowledge(LapsPathKey, LapsRecoveryOwner&, UecBasePacket::seq_t, mem_b);
       void removeOwner(LapsRecoveryOwner&);
