@@ -1579,9 +1579,13 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         }
     }
 
+    const std::optional<simtime_picosec> laps_one_way_delay =
+        pkt.lapsDelayValid() && pkt.lapsOneWayDelay() != 0
+            ? std::optional<simtime_picosec>(pkt.lapsOneWayDelay())
+            : std::nullopt;
     if (isStrictLaps() && valid_normal_send_attempt && i->second.strict_laps_data) {
         assert(i->second.laps_attempt.has_value());
-        _nic.lapsRecovery().acknowledge(*i->second.laps_attempt);
+        _nic.lapsRecovery().acknowledge(*i->second.laps_attempt, laps_one_way_delay);
     }
 
     const bool valid_laps_probe_ack = pkt.is_probe_ack() &&
