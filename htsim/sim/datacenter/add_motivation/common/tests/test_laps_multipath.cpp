@@ -8,7 +8,7 @@ namespace {
 
 void low_latency_path_receives_more_softmax_selections() {
     srandom(17);
-    UecMpLaps laps(4, false, 8.0);
+    UecMpLaps laps(4, false, 1.0);
     for (uint32_t path = 0; path != 4; ++path) {
         laps.observeLapsDelay(path, path == 0 ? 10 : 100, 1'000);
     }
@@ -19,6 +19,7 @@ void low_latency_path_receives_more_softmax_selections() {
     }
     for (uint32_t path = 1; path != 4; ++path) {
         assert(counts[0] > counts[path]);
+        assert(counts[path] > 0);
     }
 }
 
@@ -40,16 +41,35 @@ void zero_beta_sprays_uniformly_across_paths() {
 }
 
 void signal_is_not_ready_until_every_path_has_a_sample() {
-    UecMpLaps laps(4, false, 8.0);
+    UecMpLaps laps(4, false, 1.0);
     laps.observeLapsDelay(0, 10, 1'000);
     laps.observeLapsDelay(1, 100, 1'000);
     laps.observeLapsDelay(2, 100, 1'000);
-    assert(!laps.lapsSignal(1'000, 0).ready);
+    assert(!laps.lapsSignal(1'000).calibrated);
 
     laps.observeLapsDelay(3, 100, 1'000);
-    const UecMpLapsSignal signal = laps.lapsSignal(1'000, 0);
-    assert(signal.ready);
+    const UecMpLapsSignal signal = laps.lapsSignal(1'000);
+    assert(signal.calibrated);
+    assert(signal.target_delay == 100);
+    assert(signal.max_delay == 100);
     assert(!signal.all_paths_high);
+}
+
+void strict_all_path_high_uses_the_calibrated_target_delay() {
+    UecMpLaps laps(4, false, 1.0);
+    for (uint32_t path = 0; path != 4; ++path) {
+        laps.observeLapsDelay(path, path == 0 ? 10 : 100, 0);
+    }
+
+    assert(!laps.lapsSignal(0).all_paths_high);
+    for (uint32_t path = 0; path != 4; ++path) {
+        laps.observeLapsDelay(path, 101, 1);
+    }
+    const UecMpLapsSignal signal = laps.lapsSignal(1);
+    assert(signal.calibrated);
+    assert(signal.target_delay == 100);
+    assert(signal.max_delay == 101);
+    assert(signal.all_paths_high);
 }
 
 void stale_path_is_probed_and_probe_feedback_refreshes_it() {
@@ -100,8 +120,8 @@ void stale_samples_block_all_path_high_until_refreshed() {
     }
 
     laps.observeLapsDelay(0, 30, 60);
-    const UecMpLapsSignal stale_signal = laps.lapsSignal(60, 10);
-    assert(!stale_signal.ready);
+    const UecMpLapsSignal stale_signal = laps.lapsSignal(60);
+    assert(!stale_signal.calibrated);
     assert(!stale_signal.all_paths_high);
 
     for (uint32_t path = 1; path != 4; ++path) {
@@ -109,15 +129,15 @@ void stale_samples_block_all_path_high_until_refreshed() {
         assert(probe.has_value());
         assert((*probe & 3) == path);
     }
-    const UecMpLapsSignal probed_signal = laps.lapsSignal(60, 10);
-    assert(!probed_signal.ready);
+    const UecMpLapsSignal probed_signal = laps.lapsSignal(60);
+    assert(!probed_signal.calibrated);
     assert(!probed_signal.all_paths_high);
 
     for (uint32_t path = 1; path != 4; ++path) {
         laps.observeLapsProbe(path, 30, 60);
     }
-    const UecMpLapsSignal refreshed_signal = laps.lapsSignal(60, 10);
-    assert(refreshed_signal.ready);
+    const UecMpLapsSignal refreshed_signal = laps.lapsSignal(60);
+    assert(refreshed_signal.calibrated);
     assert(refreshed_signal.all_paths_high);
 }
 
@@ -137,6 +157,7 @@ int main() {
     low_latency_path_receives_more_softmax_selections();
     zero_beta_sprays_uniformly_across_paths();
     signal_is_not_ready_until_every_path_has_a_sample();
+    strict_all_path_high_uses_the_calibrated_target_delay();
     stale_path_is_probed_and_probe_feedback_refreshes_it();
     multiple_stale_paths_are_probed_in_rotation();
     path_at_exact_stale_timeout_is_probed();

@@ -105,24 +105,24 @@ void UecMpLaps::observeLapsProbe(uint32_t path_id, simtime_picosec delay,
 }
 
 uint32_t UecMpLaps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
-    bool has_valid_state = false;
-    simtime_picosec max_base_latency = 0;
+    simtime_picosec target_delay = 0;
     simtime_picosec min_real_latency = std::numeric_limits<simtime_picosec>::max();
     for (const LapsPathState& state : _paths) {
         if (!state.valid) {
-            continue;
+            const uint32_t path_id = _bootstrap_path++ & (_no_of_paths - 1);
+            return entropyForPath(path_id);
         }
-        has_valid_state = true;
-        max_base_latency = std::max(max_base_latency, state.base_latency);
+        target_delay = std::max(target_delay, state.base_latency);
         min_real_latency = std::min(min_real_latency, state.real_latency);
     }
 
-    if (!has_valid_state || _beta == 0.0) {
+    if (_beta == 0.0) {
         const uint32_t path_id = _bootstrap_path++ & (_no_of_paths - 1);
         return entropyForPath(path_id);
     }
 
-    const double temperature = static_cast<double>(std::max<simtime_picosec>(max_base_latency, 1));
+    const double temperature =
+        static_cast<double>(std::max<simtime_picosec>(target_delay, 1));
     vector<double> weights(_no_of_paths, 1.0);
     double total_weight = 0.0;
     for (uint32_t path_id = 0; path_id != _no_of_paths; ++path_id) {
@@ -165,8 +165,7 @@ optional<uint32_t> UecMpLaps::nextLapsProbeEntropy(simtime_picosec now) {
     return {};
 }
 
-UecMpLapsSignal UecMpLaps::lapsSignal(simtime_picosec now,
-                                      simtime_picosec queue_margin) const {
+UecMpLapsSignal UecMpLaps::lapsSignal(simtime_picosec now) const {
     UecMpLapsSignal signal;
     simtime_picosec max_base_latency = 0;
     bool has_stale_sample = false;
@@ -177,19 +176,17 @@ UecMpLapsSignal UecMpLaps::lapsSignal(simtime_picosec now,
         ++signal.sampled_paths;
         has_stale_sample = has_stale_sample || isControllerStale(state, now);
         max_base_latency = std::max(max_base_latency, state.base_latency);
-        signal.max_real_latency = std::max(signal.max_real_latency, state.real_latency);
+        signal.max_delay = std::max(signal.max_delay, state.real_latency);
     }
-    signal.threshold = max_base_latency > std::numeric_limits<simtime_picosec>::max() - queue_margin
-                           ? std::numeric_limits<simtime_picosec>::max()
-                           : max_base_latency + queue_margin;
-    signal.ready = signal.sampled_paths == _no_of_paths && !has_stale_sample;
-    if (!signal.ready) {
+    signal.target_delay = max_base_latency;
+    signal.calibrated = signal.sampled_paths == _no_of_paths && !has_stale_sample;
+    if (!signal.calibrated) {
         return signal;
     }
 
     signal.all_paths_high = true;
     for (const LapsPathState& state : _paths) {
-        if (!state.valid || state.real_latency <= signal.threshold) {
+        if (!state.valid || state.real_latency <= signal.target_delay) {
             signal.all_paths_high = false;
             break;
         }

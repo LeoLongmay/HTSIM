@@ -19,7 +19,6 @@
 #include "modular_vector.h"
 #include "pciemodel.h"
 #include "oversubscribed_cc.h"
-#include "laps_cc.h"
 #include "laps_rate.h"
 #include "laps_recovery.h"
 #include "uec_mp.h"
@@ -464,9 +463,8 @@ public:
     static double          _prism_engage_mult;
     static double          _prism_disengage_ratio;
     static uint32_t        _prism_n_min;     // minimum genuine ACK samples needed to close an epoch
-    static double          _laps_beta;           // Softmax inverse-temperature; default 8.0
+    static double          _laps_beta;           // Softmax inverse-temperature; default 1.0
     static simtime_picosec _laps_probe_interval; // microseconds on CLI; default 50us
-    static simtime_picosec _laps_queue_margin;   // microseconds on CLI; default 0us
     // Motivation-only REPS admission gate. Disabled unless explicitly requested.
     static bool            _motivation_residual_recycle;
     static simtime_picosec _motivation_residual_threshold;

@@ -62,11 +62,11 @@ struct UecMpTokenEvent {
 };
 
 struct UecMpLapsSignal {
-    bool ready = false;
+    bool calibrated = false;
     bool all_paths_high = false;
     uint16_t sampled_paths = 0;
-    simtime_picosec threshold = 0;
-    simtime_picosec max_real_latency = 0;
+    simtime_picosec target_delay = 0;
+    simtime_picosec max_delay = 0;
 };
 
 class UecMultipath {
@@ -99,7 +99,7 @@ public:
     virtual void observeLapsDelay(uint32_t, simtime_picosec, simtime_picosec) {}
     virtual void observeLapsProbe(uint32_t, simtime_picosec, simtime_picosec) {}
     virtual optional<uint32_t> nextLapsProbeEntropy(simtime_picosec) { return {}; }
-    virtual UecMpLapsSignal lapsSignal(simtime_picosec, simtime_picosec) const { return {}; }
+    virtual UecMpLapsSignal lapsSignal(simtime_picosec) const { return {}; }
 protected:
     bool _debug;
     string _debug_tag;
@@ -128,8 +128,7 @@ public:
     void observeLapsProbe(uint32_t path_id, simtime_picosec delay,
                           simtime_picosec now) override;
     optional<uint32_t> nextLapsProbeEntropy(simtime_picosec now) override;
-    UecMpLapsSignal lapsSignal(simtime_picosec now,
-                               simtime_picosec queue_margin) const override;
+    UecMpLapsSignal lapsSignal(simtime_picosec now) const override;
 private:
     struct LapsPathState {
         bool valid = false;

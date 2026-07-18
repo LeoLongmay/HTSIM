@@ -172,9 +172,8 @@ double          UecSrc::_prism_engage_beta      = 0.1;
 double          UecSrc::_prism_engage_mult      = 0.0;
 double          UecSrc::_prism_disengage_ratio  = 0.7;
 uint32_t        UecSrc::_prism_n_min            = 3;
-double          UecSrc::_laps_beta              = 8.0;
+double          UecSrc::_laps_beta              = 1.0;
 simtime_picosec UecSrc::_laps_probe_interval    = timeFromUs(50u);
-simtime_picosec UecSrc::_laps_queue_margin      = 0;
 bool            UecSrc::_prism_oracle_validation = false;
 std::string     UecSrc::_prism_oracle_log_path = "";
 std::string     UecSrc::_prism_oracle_run_id = "";
@@ -3775,12 +3774,12 @@ void UecSrc::setLapsSafetyWindow(simtime_picosec target_delay) {
 
 void UecSrc::updateLapsRate(simtime_picosec now) {
     assert(isStrictLaps());
-    const UecMpLapsSignal sampled = _mp->lapsSignal(now, 0);
-    const LapsRateSignal signal = {sampled.ready, sampled.all_paths_high,
-                                   sampled.threshold, sampled.max_real_latency};
+    const UecMpLapsSignal sampled = _mp->lapsSignal(now);
+    const LapsRateSignal signal = {sampled.calibrated, sampled.all_paths_high,
+                                   sampled.target_delay, sampled.max_delay};
     _laps_rate = advanceLapsRate(_laps_rate, signal, now, _nic.linkspeed());
-    if (sampled.ready) {
-        setLapsSafetyWindow(sampled.threshold);
+    if (sampled.calibrated) {
+        setLapsSafetyWindow(sampled.target_delay);
     }
 }
 

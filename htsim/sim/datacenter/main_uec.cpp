@@ -84,7 +84,7 @@ bool parse_degraded_capacity(const char* text, double& value) {
 }
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-cwnd cwnd_size]\n\t[-q queue_size]\n\t[-queue_type composite|ecn|random|lossless|lossless_input|]\n\t[-tm traffic_matrix_file]\n\t[-strat route_strategy (single,rand,perm,pull,ecmp,\n\tecmp_host path_count,ecmp_ar,ecmp_rr,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-hop_latency x] per hop wire latency in us,default 1\n\t[-target_q_delay x] target_queuing_delay in us, default is 6us \n\t[-switch_latency x] switching latency in us, default 0\n\t[-host_queue_type  swift|prio|fair_prio]\n\t[-laps_beta x] LAPS Softmax beta, default 8\n\t[-laps_probe_interval x] LAPS probe interval in us, default 50\n\t[-laps_queue_margin x] LAPS queue margin in us, default 0\n\t[-logtime dt] sample time for sinklogger, etc\n\t[-conn_reuse] enable connection reuse" << endl;
+    cout << "Usage " << progr << " [-nodes N]\n\t[-cwnd cwnd_size]\n\t[-q queue_size]\n\t[-queue_type composite|ecn|random|lossless|lossless_input|]\n\t[-tm traffic_matrix_file]\n\t[-strat route_strategy (single,rand,perm,pull,ecmp,\n\tecmp_host path_count,ecmp_ar,ecmp_rr,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-hop_latency x] per hop wire latency in us,default 1\n\t[-target_q_delay x] target_queuing_delay in us, default is 6us \n\t[-switch_latency x] switching latency in us, default 0\n\t[-host_queue_type  swift|prio|fair_prio]\n\t[-laps_beta x] LAPS Softmax beta, default 1\n\t[-laps_probe_interval x] LAPS probe interval in us, default 50\n\t[-logtime dt] sample time for sinklogger, etc\n\t[-conn_reuse] enable connection reuse" << endl;
     exit(1);
 }
 
@@ -296,9 +296,9 @@ int main(int argc, char **argv) {
             cout << "laps_probe_interval " << atof(argv[i+1]) << " us" << endl;
             i++;
         } else if (!strcmp(argv[i],"-laps_queue_margin")) {
-            UecSrc::_laps_queue_margin = timeFromUs(atof(argv[i+1]));
-            cout << "laps_queue_margin " << atof(argv[i+1]) << " us" << endl;
-            i++;
+            cerr << "-laps_queue_margin is not supported by strict LAPS; "
+                 << "remove this legacy knob" << endl;
+            return 1;
         } else if (!strcmp(argv[i],"-enable_prism_oracle_validation")) {
             UecSrc::_prism_oracle_validation = (atoi(argv[i+1]) != 0);
             cout << "enable_prism_oracle_validation " << UecSrc::_prism_oracle_validation << endl;
