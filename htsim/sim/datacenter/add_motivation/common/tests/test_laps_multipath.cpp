@@ -13,12 +13,13 @@ void low_latency_path_receives_more_softmax_selections() {
         laps.observeLapsDelay(path, path == 0 ? 10 : 100, 1'000);
     }
 
-    unsigned low = 0;
-    unsigned high = 0;
+    unsigned counts[4] = {};
     for (uint64_t seq = 0; seq != 4'000; ++seq) {
-        ((laps.nextEntropy(seq, 16) & 3) == 0 ? low : high)++;
+        ++counts[laps.nextEntropy(seq, 16) & 3];
     }
-    assert(low > high / 3);
+    for (uint32_t path = 1; path != 4; ++path) {
+        assert(counts[0] > counts[path]);
+    }
 }
 
 void zero_beta_sprays_uniformly_across_paths() {
@@ -91,6 +92,35 @@ void path_at_exact_stale_timeout_is_probed() {
     assert((*probe & 3) == 0);
 }
 
+void stale_samples_block_all_path_high_until_refreshed() {
+    UecMpLaps laps(4, false, 8.0);
+    for (uint32_t path = 0; path != 4; ++path) {
+        laps.observeLapsDelay(path, 10, 0);
+        laps.observeLapsDelay(path, 30, 0);
+    }
+
+    laps.observeLapsDelay(0, 30, 60);
+    const UecMpLapsSignal stale_signal = laps.lapsSignal(60, 10);
+    assert(!stale_signal.ready);
+    assert(!stale_signal.all_paths_high);
+
+    for (uint32_t path = 1; path != 4; ++path) {
+        const auto probe = laps.nextLapsProbeEntropy(60);
+        assert(probe.has_value());
+        assert((*probe & 3) == path);
+    }
+    const UecMpLapsSignal probed_signal = laps.lapsSignal(60, 10);
+    assert(!probed_signal.ready);
+    assert(!probed_signal.all_paths_high);
+
+    for (uint32_t path = 1; path != 4; ++path) {
+        laps.observeLapsProbe(path, 30, 60);
+    }
+    const UecMpLapsSignal refreshed_signal = laps.lapsSignal(60, 10);
+    assert(refreshed_signal.ready);
+    assert(refreshed_signal.all_paths_high);
+}
+
 void rejects_non_power_of_two_path_count() {
     bool rejected = false;
     try {
@@ -110,5 +140,6 @@ int main() {
     stale_path_is_probed_and_probe_feedback_refreshes_it();
     multiple_stale_paths_are_probed_in_rotation();
     path_at_exact_stale_timeout_is_probed();
+    stale_samples_block_all_path_high_until_refreshed();
     rejects_non_power_of_two_path_count();
 }

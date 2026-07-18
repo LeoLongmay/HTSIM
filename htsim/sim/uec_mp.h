@@ -135,6 +135,7 @@ private:
         bool valid = false;
         simtime_picosec base_latency = 0;
         simtime_picosec real_latency = 0;
+        simtime_picosec observed_latency = 0;
         simtime_picosec last_update = 0;
         simtime_picosec last_probe = 0;
     };
@@ -142,6 +143,7 @@ private:
     uint32_t pathIndex(uint32_t entropy) const;
     uint32_t entropyForPath(uint32_t path_id) const;
     bool isStale(const LapsPathState& state, simtime_picosec now) const;
+    bool isControllerStale(const LapsPathState& state, simtime_picosec now) const;
     void observe(uint32_t path_id, simtime_picosec delay, simtime_picosec now);
 
     uint16_t _no_of_paths;

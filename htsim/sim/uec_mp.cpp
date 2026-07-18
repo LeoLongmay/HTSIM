@@ -69,6 +69,18 @@ bool UecMpLaps::isStale(const LapsPathState& state, simtime_picosec now) const {
     return now - state.last_update >= stale_after;
 }
 
+bool UecMpLaps::isControllerStale(const LapsPathState& state,
+                                  simtime_picosec now) const {
+    if (!state.valid || now < state.last_update) {
+        return false;
+    }
+    const simtime_picosec stale_after =
+        state.observed_latency > std::numeric_limits<simtime_picosec>::max() / 2
+            ? std::numeric_limits<simtime_picosec>::max()
+            : 2 * state.observed_latency;
+    return now - state.last_update >= stale_after;
+}
+
 void UecMpLaps::observe(uint32_t path_id, simtime_picosec delay, simtime_picosec now) {
     LapsPathState& state = _paths[pathIndex(path_id)];
     if (!state.valid) {
@@ -78,6 +90,7 @@ void UecMpLaps::observe(uint32_t path_id, simtime_picosec delay, simtime_picosec
         state.base_latency = std::min(state.base_latency, delay);
     }
     state.real_latency = delay;
+    state.observed_latency = delay;
     state.last_update = now;
 }
 
@@ -156,18 +169,20 @@ UecMpLapsSignal UecMpLaps::lapsSignal(simtime_picosec now,
                                       simtime_picosec queue_margin) const {
     UecMpLapsSignal signal;
     simtime_picosec max_base_latency = 0;
+    bool has_stale_sample = false;
     for (const LapsPathState& state : _paths) {
         if (!state.valid) {
             continue;
         }
         ++signal.sampled_paths;
+        has_stale_sample = has_stale_sample || isControllerStale(state, now);
         max_base_latency = std::max(max_base_latency, state.base_latency);
         signal.max_real_latency = std::max(signal.max_real_latency, state.real_latency);
     }
     signal.threshold = max_base_latency > std::numeric_limits<simtime_picosec>::max() - queue_margin
                            ? std::numeric_limits<simtime_picosec>::max()
                            : max_base_latency + queue_margin;
-    signal.ready = signal.sampled_paths == _no_of_paths;
+    signal.ready = signal.sampled_paths == _no_of_paths && !has_stale_sample;
     if (!signal.ready) {
         return signal;
     }
