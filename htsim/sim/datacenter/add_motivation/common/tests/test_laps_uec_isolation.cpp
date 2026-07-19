@@ -336,6 +336,26 @@ void strict_laps_retransmission_keeps_the_original_pid_and_path(EventList& event
     assert(source._laps_rtx_routes.empty());
 }
 
+void strict_laps_control_retransmission_keeps_legacy_selection(EventList& eventlist) {
+    setStrictGlobals();
+    UecNIC nic(8, eventlist, speedFromGbps(100), 1);
+    UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(2, false, 1.0), nic, 1);
+    assert(source.isStrictLaps());
+
+    // Strict source-control records use generic RTO recovery and therefore
+    // have no strict-data replay identity to retain.
+    source.queueForRtx(80, UecBasePacket::get_ack_size());
+    assert(source._laps_rtx_routes.empty());
+    const UecSrc::RtxPathSelection selection = source.selectRtxPath(80);
+    assert((selection.entropy & 1) == 0);
+    assert(!selection.strict_laps_path.has_value());
+    assert(selection.selection.entropy == 0);
+    assert(selection.selection.source == UecMpSelection::UNKNOWN);
+    assert(source._laps_rtx_routes.empty());
+    source._rtx_queue.clear();
+    source._rtx_backlog = 0;
+}
+
 void legacy_retransmission_never_consults_laps_replay_state(EventList& eventlist) {
     setStrictGlobals();
     UecNIC nic(9, eventlist, speedFromGbps(100), 1);
@@ -387,6 +407,8 @@ int main() {
     strict_laps_ignores_sleek_before_ack_retires_its_attempt(eventlist);
     assert(EventList::getPendingSources().empty());
     strict_laps_retransmission_keeps_the_original_pid_and_path(eventlist);
+    assert(EventList::getPendingSources().empty());
+    strict_laps_control_retransmission_keeps_legacy_selection(eventlist);
     assert(EventList::getPendingSources().empty());
     legacy_retransmission_never_consults_laps_replay_state(eventlist);
     assert(EventList::getPendingSources().empty());
