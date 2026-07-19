@@ -291,6 +291,46 @@ void strict_laps_ignores_sleek_before_ack_retires_its_attempt(EventList& eventli
     UecSrc::_enable_sleek = false;
 }
 
+void strict_laps_retransmission_keeps_the_original_pid_and_path(EventList& eventlist) {
+    setStrictGlobals();
+    Queue original_queue(speedFromGbps(100), 100'000, eventlist, nullptr);
+    Queue other_queue(speedFromGbps(100), 100'000, eventlist, nullptr);
+    original_queue.forceName("original-path");
+    other_queue.forceName("resprayed-path");
+    UecNIC nic(7, eventlist, speedFromGbps(100), 1);
+    UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(8, false, 1.0), nic, 1);
+    Route send_route;
+    source.getPort(0)->setRoute(send_route);
+    source.lapsSetPathResolver([&](uint32_t, uint32_t entropy, uint32_t,
+                                   vector<const BaseQueue*>& queues) {
+        queues = {entropy == 7 ? &original_queue : &other_queue};
+        return true;
+    });
+    LapsPathKey original_path;
+    assert(source.lapsResolvePath(7, send_route, original_path));
+    const UecMpSelection original_selection = {7, UecMpSelection::FIRST_WINDOW, 91, 3, 12};
+    source.createSendRecord(7, 70, 1'200, original_selection, true, original_path);
+    source._in_flight += 1'200;
+    const LapsAttempt attempt = nic.lapsRecovery().sent(original_path, source, 70, 1'200);
+    source._tx_bitmap.at(70).laps_attempt = attempt;
+    source.lapsRecover(attempt, 70, 1'200);
+
+    assert(source._tx_bitmap.empty());
+    assert(source._rtx_queue.count(70) == 1);
+    const UecSrc::RtxPathSelection replay = source.selectRtxPath(70);
+    assert(replay.entropy == 7);
+    assert(replay.selection.entropy == 7);
+    assert(replay.selection.source == UecMpSelection::FIRST_WINDOW);
+    assert(replay.selection.token_id == 91);
+    assert(replay.selection.cache_slot == 3);
+    assert(replay.selection.cache_generation == 12);
+    assert(replay.strict_laps_path.has_value());
+    assert(replay.strict_laps_path->queue_fingerprint == original_path.queue_fingerprint);
+    LapsPathKey resolved;
+    assert(source.lapsResolvePath(replay.entropy, send_route, resolved));
+    assert(resolved.queue_fingerprint == replay.strict_laps_path->queue_fingerprint);
+}
+
 void unpaired_laps_preserves_legacy_uec_behavior(EventList& eventlist) {
     setStrictGlobals();
 
@@ -322,6 +362,8 @@ int main() {
     strict_laps_data_never_arms_the_generic_rto(eventlist);
     assert(EventList::getPendingSources().empty());
     strict_laps_ignores_sleek_before_ack_retires_its_attempt(eventlist);
+    assert(EventList::getPendingSources().empty());
+    strict_laps_retransmission_keeps_the_original_pid_and_path(eventlist);
     assert(EventList::getPendingSources().empty());
     unpaired_laps_preserves_legacy_uec_behavior(eventlist);
     assert(EventList::getPendingSources().empty());
