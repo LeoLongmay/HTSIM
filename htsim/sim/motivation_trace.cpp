@@ -94,6 +94,7 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
         openCsv(_coordination, _config.prefix + ".coordination.csv");
         openCsv(_outcome, _config.prefix + ".outcome.csv");
         openCsv(_outcome_stage, _config.prefix + ".outcome_stage.csv");
+        openCsv(_handoff, _config.prefix + ".handoff.csv");
     } catch (...) {
         close();
         throw;
@@ -125,6 +126,10 @@ void MotivationTraceWriter::configure(const MotivationTraceConfig& config) {
                 "post2_harmful_bytes,post2_exposure\n";
     _outcome_stage << "schema_version,run_id,seed,scenario,event_seq,time_ps,flow_id,epoch_id,"
                       "cache_slot,cache_generation,stage,residual_ps,ecn,genuine_sample,reason\n";
+    _handoff << "schema_version,run_id,event_seq,time_ps,flow_id,first_round_id,second_round_id,"
+                 "base_rtt_ps,pre_acked_bytes,pre_harmful_bytes,post1_acked_bytes,"
+                 "post1_harmful_bytes,post2_acked_bytes,post2_harmful_bytes,handoff_requested,"
+                 "handoff_applied\n";
     _enabled = true;
 }
 
@@ -260,11 +265,24 @@ void MotivationTraceWriter::logOutcomeStage(const MotivationOutcomeStageRecord& 
                    << '\n';
 }
 
+void MotivationTraceWriter::logHandoff(const MotivationHandoffRecord& record) {
+    if (!_enabled) {
+        return;
+    }
+    _handoff << kSchemaVersion << ',' << _config.run_id << ',' << record.event_seq << ','
+             << record.time_ps << ',' << record.flow_id << ',' << record.first_round_id << ','
+             << record.second_round_id << ',' << record.base_rtt_ps << ','
+             << record.pre_acked_bytes << ',' << record.pre_harmful_bytes << ','
+             << record.post1_acked_bytes << ',' << record.post1_harmful_bytes << ','
+             << record.post2_acked_bytes << ',' << record.post2_harmful_bytes << ','
+             << record.handoff_requested << ',' << record.handoff_applied << '\n';
+}
+
 void MotivationTraceWriter::close() {
     _enabled = false;
-    const std::array<std::ofstream*, 9> streams = {
+    const std::array<std::ofstream*, 10> streams = {
         &_ack, &_token, &_epoch, &_background, &_path, &_link, &_coordination, &_outcome,
-        &_outcome_stage};
+        &_outcome_stage, &_handoff};
     for (std::ofstream* stream : streams) {
         if (stream->is_open()) {
             stream->close();

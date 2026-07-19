@@ -66,6 +66,13 @@ HEADERS = {
     ),
 }
 
+HANDOFF_HEADER = (
+    "schema_version", "run_id", "event_seq", "time_ps", "flow_id", "first_round_id",
+    "second_round_id", "base_rtt_ps", "pre_acked_bytes", "pre_harmful_bytes",
+    "post1_acked_bytes", "post1_harmful_bytes", "post2_acked_bytes",
+    "post2_harmful_bytes", "handoff_requested", "handoff_applied",
+)
+
 
 def valid_rows():
     return {
@@ -155,11 +162,22 @@ def valid_rows():
                 "reason": "low_residual",
             },
         ],
+        "handoff": [
+            {
+                "schema_version": "2", "run_id": "fixture", "event_seq": "103",
+                "time_ps": "1200", "flow_id": "7", "first_round_id": "1",
+                "second_round_id": "2", "base_rtt_ps": "100",
+                "pre_acked_bytes": "1000", "pre_harmful_bytes": "1000",
+                "post1_acked_bytes": "1000", "post1_harmful_bytes": "1000",
+                "post2_acked_bytes": "800", "post2_harmful_bytes": "800",
+                "handoff_requested": "1", "handoff_applied": "1",
+            },
+        ],
     }
 
 
 def write_trace(directory, rows=None, headers=None, *, include_outcome=False,
-                include_outcome_stage=False):
+                include_outcome_stage=False, include_handoff=False):
     prefix = Path(directory) / "fixture"
     rows = valid_rows() if rows is None else rows
     headers = HEADERS if headers is None else headers
@@ -172,10 +190,43 @@ def write_trace(directory, rows=None, headers=None, *, include_outcome=False,
             writer = csv.DictWriter(stream, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows[kind])
+    if include_handoff:
+        with Path(f"{prefix}.handoff.csv").open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=HANDOFF_HEADER)
+            writer.writeheader()
+            writer.writerows(rows["handoff"])
     return prefix
 
 
 class TraceSchemaTests(unittest.TestCase):
+    def test_loads_optional_handoff_trace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, include_handoff=True)
+            for loader in (load_trace, load_trace_compact):
+                with self.subTest(loader=loader.__name__):
+                    bundle = loader(prefix)
+                    self.assertEqual(len(bundle.handoff), 1)
+                    self.assertEqual(bundle.handoff[0]["first_round_id"], 1)
+                    self.assertTrue(bundle.handoff[0]["handoff_requested"])
+                    self.assertTrue(bundle.handoff[0]["handoff_applied"])
+                    self.assertEqual(
+                        [(event.event_seq, event.kind) for event in bundle.events],
+                        [(0, "ack"), (1, "token"), (2, "epoch"),
+                         (100, "coordination"), (103, "handoff")],
+                    )
+
+    def test_rejects_nonbinary_handoff_requested(self):
+        rows = valid_rows()
+        rows["handoff"][0]["handoff_requested"] = "2"
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = write_trace(directory, rows, include_handoff=True)
+            for loader in (load_trace, load_trace_compact):
+                with self.subTest(loader=loader.__name__):
+                    with self.assertRaisesRegex(
+                        TraceValidationError, r"fixture\.handoff\.csv.*handoff_requested"
+                    ):
+                        loader(prefix)
+
     def test_accepts_dequeue_token_with_cache_slot_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             rows = valid_rows()
@@ -337,6 +388,7 @@ class TraceSchemaTests(unittest.TestCase):
                 with self.subTest(loader=loader.__name__):
                     bundle = loader(prefix)
                     self.assertEqual(bundle.outcome, ())
+                    self.assertEqual(bundle.handoff, ())
 
     def test_rejects_nonfinite_outcome_exposure(self):
         rows = valid_rows()

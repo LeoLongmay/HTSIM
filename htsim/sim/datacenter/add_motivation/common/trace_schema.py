@@ -79,6 +79,7 @@ class TraceBundle:
     events: tuple[EventRef, ...]
     outcome: tuple[dict, ...] = ()
     outcome_stage: tuple[dict, ...] = ()
+    handoff: tuple[dict, ...] = ()
 
 
 def _parse_bounded_int(value: str, minimum: int, maximum: int) -> int:
@@ -205,12 +206,22 @@ _SCHEMAS: dict[str, tuple[tuple[str, Callable[[str], object]], ...]] = {
         ("stage", _S), ("residual_ps", _U64), ("ecn", _B),
         ("genuine_sample", _B), ("reason", _S),
     ),
+    "handoff": (
+        ("schema_version", _U32), ("run_id", _S), ("event_seq", _U64),
+        ("time_ps", _U64), ("flow_id", _U64), ("first_round_id", _U64),
+        ("second_round_id", _U64), ("base_rtt_ps", _U64),
+        ("pre_acked_bytes", _U64), ("pre_harmful_bytes", _U64),
+        ("post1_acked_bytes", _U64), ("post1_harmful_bytes", _U64),
+        ("post2_acked_bytes", _U64), ("post2_harmful_bytes", _U64),
+        ("handoff_requested", _B), ("handoff_applied", _B),
+    ),
 }
 
-_OPTIONAL_TRACE_KINDS = ("outcome", "outcome_stage")
+_OPTIONAL_TRACE_KINDS = ("outcome", "outcome_stage", "handoff")
 _REQUIRED_TRACE_KINDS = tuple(kind for kind in _SCHEMAS if kind not in _OPTIONAL_TRACE_KINDS)
 _EVENT_KINDS = (
     "ack", "token", "epoch", "background", "coordination", "outcome", "outcome_stage",
+    "handoff",
 )
 _COORDINATION_ACTIONS = frozenset({
     "retain",
@@ -288,6 +299,14 @@ def _validate_outcome_stage_row(path: Path, row: dict) -> None:
         raise _error(path, "stage", f"unknown outcome stage {row['stage']!r}")
     if row["stage"] == "reserved" and row["cache_generation"] == 0:
         raise _error(path, "cache_generation", "reserved stage requires a generation")
+
+
+def _validate_handoff_row(path: Path, row: dict) -> None:
+    for key in ("flow_id", "first_round_id", "second_round_id", "base_rtt_ps"):
+        if row[key] == 0:
+            raise _error(path, key, "must be positive")
+    if row["handoff_applied"] and not row["handoff_requested"]:
+        raise _error(path, "handoff_applied", "requires handoff_requested")
 
 
 def _validate_token_admission_provenance(token: dict) -> None:
@@ -377,6 +396,8 @@ def _load_file(prefix: Path, kind: str) -> tuple[dict, ...]:
                 _validate_outcome_row(path, parsed)
             if kind == "outcome_stage":
                 _validate_outcome_stage_row(path, parsed)
+            if kind == "handoff":
+                _validate_handoff_row(path, parsed)
 
             if kind in _EVENT_KINDS:
                 event_seq = parsed["event_seq"]
@@ -456,6 +477,8 @@ def _load_file_compact(prefix: Path, kind: str) -> tuple[_CompactTraceRow, ...]:
                 _validate_outcome_row(path, row)
             if kind == "outcome_stage":
                 _validate_outcome_stage_row(path, row)
+            if kind == "handoff":
+                _validate_handoff_row(path, row)
 
             if kind in _EVENT_KINDS:
                 event_seq = row["event_seq"]
@@ -653,6 +676,7 @@ def _build_bundle(trace_prefix: Path, loaded: dict[str, tuple], *, compact: bool
         events=events,
         outcome=loaded["outcome"],
         outcome_stage=loaded["outcome_stage"],
+        handoff=loaded["handoff"],
     )
 
 

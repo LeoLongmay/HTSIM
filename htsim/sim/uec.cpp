@@ -2589,6 +2589,17 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         }
         const bool handoff_applied = coordination_result.handoff_requested &&
             applyPrismNoProgressHandoff(_cwnd, _min_cwnd);
+        if (coordination_result.handoff_evidence.has_value() &&
+            _motivation_trace_writer.enabledFor(flowId())) {
+            const PrismFullHandoffEvidence& evidence = *coordination_result.handoff_evidence;
+            _motivation_trace_writer.logHandoff({
+                _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                evidence.first_round_id, evidence.second_round_id, evidence.base_rtt_ps,
+                evidence.pre.acked_bytes, evidence.pre.harmful_bytes,
+                evidence.post1.acked_bytes, evidence.post1.harmful_bytes,
+                evidence.post2.acked_bytes, evidence.post2.harmful_bytes,
+                evidence.handoff_requested, handoff_applied});
+        }
         if (coordination_result.handoff_requested) {
             cut = handoff_applied;
             region = prism::DECREASE;

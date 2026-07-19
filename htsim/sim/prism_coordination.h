@@ -42,6 +42,21 @@ struct PrismCoordinationSlotAction {
     std::string reason;
 };
 
+struct PrismHandoffWindow {
+    uint64_t acked_bytes;
+    uint64_t harmful_bytes;
+};
+
+struct PrismFullHandoffEvidence {
+    uint64_t first_round_id;
+    uint64_t second_round_id;
+    simtime_picosec base_rtt_ps;
+    PrismHandoffWindow pre;
+    PrismHandoffWindow post1;
+    PrismHandoffWindow post2;
+    bool handoff_requested;
+};
+
 struct PrismCoordinationResult {
     uint64_t round_id = 0;
     simtime_picosec spread_ref_ps = 0;
@@ -53,6 +68,7 @@ struct PrismCoordinationResult {
     bool round_complete = false;
     bool progress = false;
     bool handoff_requested = false;
+    std::optional<PrismFullHandoffEvidence> handoff_evidence;
 };
 
 struct PrismOutcomeWindow {
@@ -69,21 +85,6 @@ struct PrismOutcome {
     PrismOutcomeWindow pre;
     PrismOutcomeWindow post1;
     PrismOutcomeWindow post2;
-};
-
-struct PrismHandoffWindow {
-    uint64_t acked_bytes;
-    uint64_t harmful_bytes;
-};
-
-struct PrismFullHandoffEvidence {
-    uint64_t first_round_id;
-    uint64_t second_round_id;
-    simtime_picosec base_rtt_ps;
-    PrismHandoffWindow pre;
-    PrismHandoffWindow post1;
-    PrismHandoffWindow post2;
-    bool handoff_requested;
 };
 
 bool applyPrismNoProgressHandoff(mem_b& cwnd, mem_b min_cwnd);

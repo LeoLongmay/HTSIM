@@ -148,6 +148,23 @@ struct MotivationOutcomeStageRecord {
     std::string reason;
 };
 
+struct MotivationHandoffRecord {
+    uint64_t event_seq;
+    uint64_t time_ps;
+    uint64_t flow_id;
+    uint64_t first_round_id;
+    uint64_t second_round_id;
+    uint64_t base_rtt_ps;
+    uint64_t pre_acked_bytes;
+    uint64_t pre_harmful_bytes;
+    uint64_t post1_acked_bytes;
+    uint64_t post1_harmful_bytes;
+    uint64_t post2_acked_bytes;
+    uint64_t post2_harmful_bytes;
+    bool handoff_requested;
+    bool handoff_applied;
+};
+
 class MotivationTraceWriter {
 public:
     MotivationTraceWriter() = default;
@@ -173,6 +190,7 @@ public:
     void logCoordination(const MotivationCoordinationRecord& record);
     void logOutcome(const MotivationOutcomeRecord& record);
     void logOutcomeStage(const MotivationOutcomeStageRecord& record);
+    void logHandoff(const MotivationHandoffRecord& record);
 
     void close();
 
@@ -189,6 +207,7 @@ private:
     std::ofstream _coordination;
     std::ofstream _outcome;
     std::ofstream _outcome_stage;
+    std::ofstream _handoff;
 };
 
 #endif

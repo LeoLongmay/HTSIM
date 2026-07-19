@@ -234,9 +234,12 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
 
     if (fullHandoffEnabled()) {
         const std::optional<PrismFullHandoffEvidence> evidence = takeFullHandoffEvidence();
-        if (evidence.has_value() && evidence->handoff_requested) {
-            result.handoff_requested = true;
-            result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_HANDOFF);
+        if (evidence.has_value()) {
+            result.handoff_evidence = evidence;
+            if (evidence->handoff_requested) {
+                result.handoff_requested = true;
+                result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_HANDOFF);
+            }
         }
     }
 

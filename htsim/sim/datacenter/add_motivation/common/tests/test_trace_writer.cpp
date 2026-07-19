@@ -13,7 +13,8 @@ constexpr const char* kPrefix = "/tmp/motivation_writer_test";
 
 const char* const kSuffixes[] = {
     ".ack.csv", ".token.csv", ".epoch.csv", ".background.csv", ".pathmap.csv",
-    ".linkmap.csv", ".coordination.csv", ".outcome.csv", ".outcome_stage.csv"};
+    ".linkmap.csv", ".coordination.csv", ".outcome.csv", ".outcome_stage.csv",
+    ".handoff.csv"};
 
 void removeTraceFiles(const std::string& prefix) {
     for (const char* suffix : kSuffixes) {
@@ -124,6 +125,8 @@ int main() {
     constexpr linkspeed_bps kMaximumExactTraceRate = UINT64_C(1) << 53;
     writer.logBackground({writer.nextEventSeq(), 1550, 11, "start", 7, 8, 9,
                           speedAsGbps(kMaximumExactTraceRate), 0, "q4"});
+    writer.logHandoff({writer.nextEventSeq(), 1600, 7, 1, 2, 100,
+                       1000, 1000, 1000, 1000, 800, 800, true, true});
     writer.close();
 
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 1) ==
@@ -161,6 +164,11 @@ int main() {
     assert(lineAt(std::string(kPrefix) + ".outcome_stage.csv", 1) ==
            "schema_version,run_id,seed,scenario,event_seq,time_ps,flow_id,epoch_id,cache_slot,"
            "cache_generation,stage,residual_ps,ecn,genuine_sample,reason");
+    assert(lineAt(std::string(kPrefix) + ".handoff.csv", 1) ==
+           "schema_version,run_id,event_seq,time_ps,flow_id,first_round_id,second_round_id,"
+           "base_rtt_ps,pre_acked_bytes,pre_harmful_bytes,post1_acked_bytes,"
+           "post1_harmful_bytes,post2_acked_bytes,post2_harmful_bytes,handoff_requested,"
+           "handoff_applied");
     assert(lineAt(std::string(kPrefix) + ".token.csv", 2) ==
            "2,run,0,1000,7,enqueue_good_ack,good_ack,18446744073709551615,3,0,1,19,0,1,1");
     assert(lineAt(std::string(kPrefix) + ".ack.csv", 2) ==
@@ -194,6 +202,8 @@ int main() {
     assert(boundary_row.find(formatMotivationBackgroundRateGbps(
                speedAsGbps(kMaximumExactTraceRate))) != std::string::npos);
     assert(speedFromGbps(std::stod("9007199.2547409926")) == kMaximumExactTraceRate);
+    assert(lineAt(std::string(kPrefix) + ".handoff.csv", 2) ==
+           "2,run,13,1600,7,1,2,100,1000,1000,1000,1000,800,800,1,1");
 
     removeTraceFiles(kPrefix);
 }
