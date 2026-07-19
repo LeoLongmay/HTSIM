@@ -2,6 +2,7 @@
 #define PRISM_COORDINATION_H
 
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <optional>
 #include <set>
@@ -30,6 +31,7 @@ struct PrismCoordinationEpoch {
     prism::Region region;
     bool frozen;
     std::vector<UecMpCacheSlot> slots;
+    simtime_picosec end_ps = 0;
 };
 
 struct PrismCoordinationSlotAction {
@@ -69,6 +71,21 @@ struct PrismOutcome {
     PrismOutcomeWindow post2;
 };
 
+struct PrismHandoffWindow {
+    uint64_t acked_bytes;
+    uint64_t harmful_bytes;
+};
+
+struct PrismFullHandoffEvidence {
+    uint64_t first_round_id;
+    uint64_t second_round_id;
+    simtime_picosec base_rtt_ps;
+    PrismHandoffWindow pre;
+    PrismHandoffWindow post1;
+    PrismHandoffWindow post2;
+    bool handoff_requested;
+};
+
 bool applyPrismNoProgressHandoff(mem_b& cwnd, mem_b min_cwnd);
 
 class PrismResidualCoordinator {
@@ -89,10 +106,14 @@ public:
                                  simtime_picosec timestamp);
     void observeClassifiedAck(simtime_picosec timestamp, simtime_picosec residual_ps,
                               bool ecn, bool genuine, uint64_t acked_bytes);
+    void observeFullHandoffAck(simtime_picosec timestamp, simtime_picosec base_rtt,
+                               simtime_picosec residual, bool ecn, bool genuine,
+                               uint64_t acked_bytes);
     void setOutcomeBaseRtt(simtime_picosec base_rtt);
     bool outcomeTracking() const;
     bool outcomeReplacementsValidated() const;
     std::optional<PrismOutcome> takeOutcome();
+    std::optional<PrismFullHandoffEvidence> takeFullHandoffEvidence();
     PrismCoordinationResult closeEpoch(const PrismCoordinationEpoch& epoch);
 
 private:
@@ -138,6 +159,22 @@ private:
         simtime_picosec residual_ps = 0;
     };
 
+    enum class FullHandoffState { IDLE, SECOND_ROUND, EVIDENCE_PENDING, LATCHED };
+
+    struct FullAckSample {
+        simtime_picosec timestamp;
+        uint64_t acked_bytes;
+        bool harmful;
+    };
+
+    struct PendingFullEvidence {
+        uint64_t first_round_id;
+        uint64_t second_round_id;
+        simtime_picosec terminal_ps;
+        simtime_picosec base_rtt_ps;
+        PrismHandoffWindow pre;
+    };
+
     bool enabled() const;
     bool outcomeEnabled() const;
     void beginOutcomeReplacement(uint16_t slot, uint64_t generation);
@@ -148,6 +185,13 @@ private:
     void completeOutcomeBucket(const OutcomeBucket& bucket);
     void snapshotOutcomePre(simtime_picosec timestamp);
     PrismOutcomeWindow makeOutcomeWindow(const OutcomeBucket& bucket) const;
+    bool fullHandoffEnabled() const;
+    simtime_picosec fullHandoffBaseRtt() const;
+    PrismHandoffWindow fullHandoffWindow(simtime_picosec start, simtime_picosec end) const;
+    void beginFullHandoffEvidence(uint64_t second_round_id, simtime_picosec terminal_ps);
+    void completeFullHandoffEvidence();
+    void resetFullHandoffState();
+    void trimFullAckSamples(simtime_picosec timestamp);
     void resetRound(bool reset_outcome = true);
     void addSlotAction(PrismCoordinationResult& result, const UecMpCacheSlot& slot,
                        PrismCoordinationAction action, simtime_picosec residual_ps,
@@ -176,6 +220,14 @@ private:
     std::optional<PrismOutcomeWindow> _outcome_post1;
     std::optional<PrismOutcomeWindow> _outcome_post2;
     std::optional<PrismOutcome> _outcome_event;
+    FullHandoffState _full_handoff_state = FullHandoffState::IDLE;
+    uint64_t _full_handoff_first_round_id = 0;
+    std::deque<simtime_picosec> _full_base_rtts;
+    std::deque<FullAckSample> _full_ack_samples;
+    std::optional<PendingFullEvidence> _full_pending_evidence;
+    PrismHandoffWindow _full_post1{0, 0};
+    PrismHandoffWindow _full_post2{0, 0};
+    std::optional<PrismFullHandoffEvidence> _full_handoff_event;
 };
 
 #endif  // PRISM_COORDINATION_H

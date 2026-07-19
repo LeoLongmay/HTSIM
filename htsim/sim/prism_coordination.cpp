@@ -129,6 +129,43 @@ void PrismResidualCoordinator::observeClassifiedAck(simtime_picosec timestamp,
     }
 }
 
+void PrismResidualCoordinator::observeFullHandoffAck(simtime_picosec timestamp,
+                                                      simtime_picosec base_rtt,
+                                                      simtime_picosec residual, bool ecn,
+                                                      bool genuine, uint64_t acked_bytes) {
+    if (!fullHandoffEnabled() || !genuine) {
+        return;
+    }
+    if (base_rtt > 0) {
+        _full_base_rtts.push_back(base_rtt);
+        if (_full_base_rtts.size() > 3) {
+            _full_base_rtts.pop_front();
+        }
+    }
+    const bool harmful = ecn || residual >= _t_spray;
+    if (acked_bytes > 0) {
+        _full_ack_samples.push_back({timestamp, acked_bytes, harmful});
+        trimFullAckSamples(timestamp);
+    }
+
+    if (_full_handoff_state != FullHandoffState::EVIDENCE_PENDING ||
+        !_full_pending_evidence.has_value() ||
+        timestamp <= _full_pending_evidence->terminal_ps) {
+        return;
+    }
+
+    const PendingFullEvidence& pending = *_full_pending_evidence;
+    const simtime_picosec elapsed = timestamp - pending.terminal_ps;
+    PrismHandoffWindow* post = elapsed < pending.base_rtt_ps ? &_full_post1 : &_full_post2;
+    post->acked_bytes += acked_bytes;
+    if (harmful) {
+        post->harmful_bytes += acked_bytes;
+    }
+    if (elapsed >= pending.base_rtt_ps && elapsed - pending.base_rtt_ps >= pending.base_rtt_ps) {
+        completeFullHandoffEvidence();
+    }
+}
+
 void PrismResidualCoordinator::setOutcomeBaseRtt(simtime_picosec base_rtt) {
     if (!outcomeEnabled() || base_rtt == 0) {
         return;
@@ -153,6 +190,15 @@ std::optional<PrismOutcome> PrismResidualCoordinator::takeOutcome() {
     std::optional<PrismOutcome> outcome = _outcome_event;
     _outcome_event.reset();
     return outcome;
+}
+
+std::optional<PrismFullHandoffEvidence> PrismResidualCoordinator::takeFullHandoffEvidence() {
+    std::optional<PrismFullHandoffEvidence> evidence = _full_handoff_event;
+    _full_handoff_event.reset();
+    if (_full_handoff_state == FullHandoffState::LATCHED) {
+        resetFullHandoffState();
+    }
+    return evidence;
 }
 
 PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordinationEpoch& epoch) {
@@ -314,7 +360,16 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
     result.progress = epoch.spread < _spread_ref;
     if (result.progress) {
         result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_PROGRESS);
-    } else if (_round_had_invalidation && _mode == PrismCoordinationMode::FULL_PRISM) {
+        if (_full_handoff_state == FullHandoffState::SECOND_ROUND) {
+            resetFullHandoffState();
+        }
+    } else if (fullHandoffEnabled()) {
+        if (_full_handoff_state == FullHandoffState::IDLE) {
+            _full_handoff_state = FullHandoffState::SECOND_ROUND;
+            _full_handoff_first_round_id = result.round_id;
+        } else if (_full_handoff_state == FullHandoffState::SECOND_ROUND) {
+            beginFullHandoffEvidence(result.round_id, epoch.end_ps);
+        }
         result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_RETRY);
     } else {
         result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_CLEAN);
@@ -447,6 +502,92 @@ PrismOutcomeWindow PrismResidualCoordinator::makeOutcomeWindow(const OutcomeBuck
             bucket.classified_bytes, bucket.harmful_bytes,
             static_cast<double>(bucket.harmful_bytes) /
                 static_cast<double>(bucket.classified_bytes)};
+}
+
+bool PrismResidualCoordinator::fullHandoffEnabled() const {
+    return _mode == PrismCoordinationMode::FULL_PRISM;
+}
+
+simtime_picosec PrismResidualCoordinator::fullHandoffBaseRtt() const {
+    if (_full_base_rtts.empty()) {
+        return 0;
+    }
+    return *std::min_element(_full_base_rtts.begin(), _full_base_rtts.end());
+}
+
+PrismHandoffWindow PrismResidualCoordinator::fullHandoffWindow(simtime_picosec start,
+                                                                simtime_picosec end) const {
+    PrismHandoffWindow window{0, 0};
+    for (const FullAckSample& sample : _full_ack_samples) {
+        if (sample.timestamp < start || sample.timestamp > end) {
+            continue;
+        }
+        window.acked_bytes += sample.acked_bytes;
+        if (sample.harmful) {
+            window.harmful_bytes += sample.acked_bytes;
+        }
+    }
+    return window;
+}
+
+void PrismResidualCoordinator::beginFullHandoffEvidence(uint64_t second_round_id,
+                                                         simtime_picosec terminal_ps) {
+    const simtime_picosec base_rtt = fullHandoffBaseRtt();
+    if (base_rtt == 0 || terminal_ps == 0) {
+        resetFullHandoffState();
+        return;
+    }
+    const simtime_picosec pre_start = terminal_ps > base_rtt ? terminal_ps - base_rtt : 0;
+    _full_pending_evidence = {_full_handoff_first_round_id, second_round_id, terminal_ps,
+                              base_rtt, fullHandoffWindow(pre_start, terminal_ps)};
+    _full_post1 = {0, 0};
+    _full_post2 = {0, 0};
+    _full_handoff_state = FullHandoffState::EVIDENCE_PENDING;
+}
+
+void PrismResidualCoordinator::completeFullHandoffEvidence() {
+    if (!_full_pending_evidence.has_value()) {
+        return;
+    }
+    const PendingFullEvidence& pending = *_full_pending_evidence;
+    const bool complete_windows = pending.pre.acked_bytes > 0 && _full_post1.acked_bytes > 0 &&
+                                  _full_post2.acked_bytes > 0;
+    const bool rate_not_higher = _full_post1.acked_bytes <= pending.pre.acked_bytes &&
+                                 _full_post2.acked_bytes <= pending.pre.acked_bytes;
+    const bool harmful_tail_not_lower =
+        static_cast<long double>(_full_post2.harmful_bytes) /
+            static_cast<long double>(_full_post2.acked_bytes) >=
+        static_cast<long double>(pending.pre.harmful_bytes) /
+            static_cast<long double>(pending.pre.acked_bytes);
+    _full_handoff_event = {pending.first_round_id, pending.second_round_id,
+                           pending.base_rtt_ps, pending.pre, _full_post1, _full_post2,
+                           complete_windows && rate_not_higher && harmful_tail_not_lower};
+    _full_pending_evidence.reset();
+    _full_ack_samples.clear();
+    _full_handoff_state = FullHandoffState::LATCHED;
+}
+
+void PrismResidualCoordinator::resetFullHandoffState() {
+    _full_handoff_state = FullHandoffState::IDLE;
+    _full_handoff_first_round_id = 0;
+    _full_base_rtts.clear();
+    _full_ack_samples.clear();
+    _full_pending_evidence.reset();
+    _full_post1 = {0, 0};
+    _full_post2 = {0, 0};
+    _full_handoff_event.reset();
+}
+
+void PrismResidualCoordinator::trimFullAckSamples(simtime_picosec timestamp) {
+    const simtime_picosec base_rtt = fullHandoffBaseRtt();
+    if (base_rtt == 0) {
+        return;
+    }
+    const simtime_picosec retention_ps = base_rtt * 3;
+    while (!_full_ack_samples.empty() && timestamp >= _full_ack_samples.front().timestamp &&
+           timestamp - _full_ack_samples.front().timestamp > retention_ps) {
+        _full_ack_samples.pop_front();
+    }
 }
 
 void PrismResidualCoordinator::resetRound(bool reset_outcome) {

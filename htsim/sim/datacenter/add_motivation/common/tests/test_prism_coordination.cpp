@@ -25,12 +25,86 @@ std::vector<UecMpCacheSlot> eight_slots() {
 PrismCoordinationEpoch hold_epoch(uint64_t epoch_id, simtime_picosec floor,
                                   simtime_picosec spread,
                                   std::vector<UecMpCacheSlot> slots,
-                                  bool frozen = false) {
-    return {epoch_id, floor, spread, prism::HOLD, frozen, std::move(slots)};
+                                  bool frozen = false, simtime_picosec end_ps = 0) {
+    return {epoch_id, floor, spread, prism::HOLD, frozen, std::move(slots), end_ps};
 }
 
 bool has_action(const PrismCoordinationResult& result, PrismCoordinationAction action) {
     return std::find(result.actions.begin(), result.actions.end(), action) != result.actions.end();
+}
+
+PrismCoordinationResult complete_no_progress_round(PrismResidualCoordinator& coordinator,
+                                                   uint64_t round, simtime_picosec end_ps) {
+    const auto slots = eight_slots();
+    for (uint16_t slot = 0; slot < slots.size(); ++slot) {
+        coordinator.observeAck(round, slot, 1, 3, false, true);
+    }
+    return coordinator.closeEpoch(hold_epoch(round, 2, 16, slots, false, end_ps));
+}
+
+void arm_two_no_progress_rounds(PrismResidualCoordinator& coordinator,
+                                simtime_picosec base_rtt) {
+    assert(has_action(complete_no_progress_round(coordinator, 1, 1000),
+                      PrismCoordinationAction::ROUND_COMPLETE_RETRY));
+    coordinator.observeFullHandoffAck(1950, base_rtt, 15, false, true, 1000);
+    assert(has_action(complete_no_progress_round(coordinator, 2, 2000),
+                      PrismCoordinationAction::ROUND_COMPLETE_RETRY));
+}
+
+void full_prism_first_no_progress_retries_without_handoff() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    complete_no_progress_round(coordinator, 1, 1000);
+    const auto result = complete_no_progress_round(coordinator, 2, 2000);
+    assert(!result.handoff_requested);
+    assert(has_action(result, PrismCoordinationAction::ROUND_COMPLETE_RETRY));
+}
+
+void full_prism_second_no_progress_needs_two_ack_windows() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    arm_two_no_progress_rounds(coordinator, 100);
+    coordinator.observeFullHandoffAck(2010, 100, 15, false, true, 1000);
+    assert(!coordinator.takeFullHandoffEvidence().has_value());
+    coordinator.observeFullHandoffAck(2210, 100, 15, false, true, 800);
+    const auto evidence = coordinator.takeFullHandoffEvidence();
+    assert(evidence.has_value());
+    assert(evidence->handoff_requested);
+}
+
+void full_prism_progressing_second_round_clears_handoff_state() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    complete_no_progress_round(coordinator, 1, 1000);
+
+    const auto slots = eight_slots();
+    for (uint16_t slot = 0; slot < slots.size() - 1; ++slot) {
+        coordinator.observeAck(2, slot, 1, 3, false, true);
+    }
+    assert(!coordinator.closeEpoch(hold_epoch(2, 2, 16, slots, false, 1900)).round_complete);
+    coordinator.observeAck(3, 7, 1, 3, false, true);
+    const auto result = coordinator.closeEpoch(hold_epoch(3, 2, 15, slots, false, 2000));
+    assert(result.progress);
+    assert(!coordinator.takeFullHandoffEvidence().has_value());
+}
+
+void full_prism_higher_post_rate_prevents_handoff() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    arm_two_no_progress_rounds(coordinator, 100);
+    coordinator.observeFullHandoffAck(2010, 100, 15, false, true, 1001);
+    coordinator.observeFullHandoffAck(2210, 100, 15, false, true, 800);
+
+    const auto evidence = coordinator.takeFullHandoffEvidence();
+    assert(evidence.has_value());
+    assert(!evidence->handoff_requested);
+}
+
+void full_prism_lower_post2_harmful_tail_prevents_handoff() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    arm_two_no_progress_rounds(coordinator, 100);
+    coordinator.observeFullHandoffAck(2010, 100, 15, false, true, 1000);
+    coordinator.observeFullHandoffAck(2210, 100, 0, false, true, 800);
+
+    const auto evidence = coordinator.takeFullHandoffEvidence();
+    assert(evidence.has_value());
+    assert(!evidence->handoff_requested);
 }
 
 void full_prism_retries_after_replacement_without_progress() {
@@ -110,7 +184,7 @@ void lower_ending_spread_completes_with_progress_without_handoff() {
     assert(has_action(result, PrismCoordinationAction::ROUND_COMPLETE_PROGRESS));
 }
 
-void full_prism_clean_equal_spread_completion_does_not_handoff() {
+void full_prism_clean_equal_spread_completion_retries_first_no_progress_round() {
     PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
     const auto slots = eight_slots();
 
@@ -122,7 +196,7 @@ void full_prism_clean_equal_spread_completion_does_not_handoff() {
     assert(result.round_complete);
     assert(!result.progress);
     assert(!result.handoff_requested);
-    assert(has_action(result, PrismCoordinationAction::ROUND_COMPLETE_CLEAN));
+    assert(has_action(result, PrismCoordinationAction::ROUND_COMPLETE_RETRY));
 }
 
 void prism_recycle_never_handoffs() {
@@ -170,7 +244,7 @@ void non_hold_clears_and_frozen_hold_pauses_ordinary_refresh_state() {
     assert(restarted.round_complete);
     assert(!restarted.progress);
     assert(!restarted.handoff_requested);
-    assert(has_action(restarted, PrismCoordinationAction::ROUND_COMPLETE_CLEAN));
+    assert(has_action(restarted, PrismCoordinationAction::ROUND_COMPLETE_RETRY));
 
     PrismResidualCoordinator frozen_coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
     frozen_coordinator.observeAck(1, 0, 1, 2, false, true);
@@ -242,7 +316,7 @@ void completed_physical_slots_survive_reps_freshness_consumption() {
     const auto second = coordinator.closeEpoch(hold_epoch(2, 2, 16, slots));
     assert(second.round_complete);
     assert(!second.handoff_requested);
-    assert(has_action(second, PrismCoordinationAction::ROUND_COMPLETE_CLEAN));
+    assert(has_action(second, PrismCoordinationAction::ROUND_COMPLETE_RETRY));
 }
 
 void ack_validated_consumed_token_completes_a_refresh_round_with_progress() {
@@ -512,11 +586,16 @@ void outcome_mode_invalidates_the_current_readded_high_residual_entropy() {
 }  // namespace
 
 int main() {
+    full_prism_first_no_progress_retries_without_handoff();
+    full_prism_second_no_progress_needs_two_ack_windows();
+    full_prism_progressing_second_round_clears_handoff_state();
+    full_prism_higher_post_rate_prevents_handoff();
+    full_prism_lower_post2_harmful_tail_prevents_handoff();
     full_prism_retries_after_replacement_without_progress();
     stale_or_pending_slots_do_not_complete_a_round();
     ecn_and_non_genuine_observations_are_not_admitted();
     lower_ending_spread_completes_with_progress_without_handoff();
-    full_prism_clean_equal_spread_completion_does_not_handoff();
+    full_prism_clean_equal_spread_completion_retries_first_no_progress_round();
     prism_recycle_never_handoffs();
     non_hold_clears_and_frozen_hold_pauses_ordinary_refresh_state();
     late_observation_from_an_older_epoch_is_pending();
