@@ -258,55 +258,71 @@ def _clean_scan_complete(bundle, terminal: dict) -> bool:
 
 def _validate_full_prism_handoff_evidence(bundle) -> int:
     """Bind every applied Full-Prism terminal to one complete handoff record."""
-    terminal_counts = defaultdict(int)
+    terminals_by_identity = defaultdict(list)
     for terminal in bundle.coordination:
         if terminal["action"].startswith("round_complete_") and terminal["handoff"]:
-            terminal_counts[(terminal["run_id"], terminal["flow_id"])] += 1
+            identity = (terminal["run_id"], terminal["flow_id"], terminal["round_id"])
+            terminals_by_identity[identity].append(terminal)
 
     evidence_by_identity = defaultdict(list)
     for evidence in bundle.handoff:
-        evidence_by_identity[(evidence["run_id"], evidence["flow_id"])].append(evidence)
+        identity = (evidence["run_id"], evidence["flow_id"], evidence["second_round_id"])
+        evidence_by_identity[identity].append(evidence)
 
-    for identity, terminal_count in terminal_counts.items():
+    for identity, terminals in terminals_by_identity.items():
+        run_id, flow_id, round_id = identity
+        if len(terminals) != 1:
+            raise ValueError(
+                f"{bundle.run_id}: duplicate applied handoff terminal for flow {flow_id} round {round_id}"
+            )
+        terminal = terminals[0]
         evidence = evidence_by_identity.get(identity, [])
         applied_evidence = [record for record in evidence if record["handoff_applied"]]
         if not applied_evidence:
             if evidence and not any(record["handoff_requested"] for record in evidence):
                 raise ValueError(
-                    f"{bundle.run_id}: handoff evidence was not requested for flow {identity[1]}"
+                    f"{bundle.run_id}: handoff evidence was not requested for flow {flow_id}"
                 )
             if evidence:
                 raise ValueError(
-                    f"{bundle.run_id}: handoff evidence was not applied for flow {identity[1]}"
+                    f"{bundle.run_id}: handoff evidence was not applied for flow {flow_id}"
+                )
+            same_flow_evidence = any(
+                record_identity[:2] == (run_id, flow_id)
+                for record_identity in evidence_by_identity
+            )
+            if same_flow_evidence:
+                raise ValueError(
+                    f"{bundle.run_id}: mismatched handoff evidence for flow {flow_id} round {round_id}"
                 )
             raise ValueError(
-                f"{bundle.run_id}: missing or mismatched handoff evidence for flow {identity[1]}"
+                f"{bundle.run_id}: missing or mismatched handoff evidence for flow {flow_id}"
             )
-        if len(applied_evidence) != terminal_count:
+        if len(applied_evidence) != 1:
             raise ValueError(
-                f"{bundle.run_id}: duplicate handoff evidence for flow {identity[1]}"
+                f"{bundle.run_id}: duplicate handoff evidence for flow {flow_id} round {round_id}"
             )
-        for record in applied_evidence:
-            if not record["handoff_requested"]:
-                raise ValueError(
-                    f"{bundle.run_id}: handoff evidence was not requested for flow {identity[1]}"
-                )
-            if not record["handoff_applied"]:
-                raise ValueError(
-                    f"{bundle.run_id}: handoff evidence was not applied for flow {identity[1]}"
-                )
-            if any(
-                record[field] <= 0
-                for field in ("pre_acked_bytes", "post1_acked_bytes", "post2_acked_bytes")
-            ):
-                raise ValueError(
-                    f"{bundle.run_id}: incomplete handoff evidence for flow {identity[1]}"
-                )
+        record = applied_evidence[0]
+        if not record["handoff_requested"]:
+            raise ValueError(
+                f"{bundle.run_id}: handoff evidence was not requested for flow {flow_id}"
+            )
+        if record["event_seq"] >= terminal["event_seq"]:
+            raise ValueError(
+                f"{bundle.run_id}: out-of-order handoff evidence for flow {flow_id} round {round_id}"
+            )
+        if any(
+            record[field] <= 0
+            for field in ("pre_acked_bytes", "post1_acked_bytes", "post2_acked_bytes")
+        ):
+            raise ValueError(
+                f"{bundle.run_id}: incomplete handoff evidence for flow {flow_id}"
+            )
 
     for identity, evidence in evidence_by_identity.items():
-        if identity not in terminal_counts and any(record["handoff_applied"] for record in evidence):
+        if identity not in terminals_by_identity and any(record["handoff_applied"] for record in evidence):
             raise ValueError(
-                f"{bundle.run_id}: unbound applied handoff evidence for flow {identity[1]}"
+                f"{bundle.run_id}: unbound applied handoff evidence for flow {identity[1]} round {identity[2]}"
             )
     return len(bundle.handoff)
 
@@ -404,10 +420,12 @@ def _analyze_bundle(manifest_path: Path) -> tuple[dict, list[dict], list[dict]]:
     duration_ps = end_ps - start_ps
     goodput_gbps = foreground_bytes * 8_000 / duration_ps
     rounds = _validate_coordination(bundle, scenario=scenario, mode=mode, start_ps=start_ps)
+    if mode != "full_prism" and bundle.handoff:
+        raise ValueError(f"{bundle.run_id}: non-full mode emitted handoff evidence")
     handoff_evidence_records = (
         _validate_full_prism_handoff_evidence(bundle)
         if mode == "full_prism"
-        else len(bundle.handoff)
+        else 0
     )
     for row in rounds:
         row["seed"] = seed
@@ -575,9 +593,22 @@ def _read_aggregate_csv(data_root: Path, name: str) -> list[dict] | None:
     try:
         with path.open(newline="", encoding="ascii") as stream:
             reader = csv.DictReader(stream)
-            if reader.fieldnames is None or not set(TABLE_FIELDS[name]).issubset(reader.fieldnames):
+            if reader.fieldnames is None:
                 return None
-            return list(reader)
+            expected = set(TABLE_FIELDS[name])
+            fields = set(reader.fieldnames)
+            legacy_handoff_evidence = (
+                name == "per_seed_metrics"
+                and "handoff_evidence_records" not in fields
+                and expected - {"handoff_evidence_records"} <= fields
+            )
+            if not expected <= fields and not legacy_handoff_evidence:
+                return None
+            rows = list(reader)
+            if legacy_handoff_evidence:
+                for row in rows:
+                    row["handoff_evidence_records"] = "0"
+            return rows
     except (OSError, UnicodeDecodeError, csv.Error):
         return None
 

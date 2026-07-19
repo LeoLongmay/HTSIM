@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from htsim.sim.datacenter.add_motivation.expM3_residual_spread_coordination.analyze import (
+    MATRIX_PREDICATE,
     ROUND_MATRIX_PREDICATE,
     TABLE_FIELDS,
     _is_true,
@@ -280,10 +281,9 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
             handoff=int(handoff and not retry and not coordination_recycle), cwnd_bytes=12000,
             control_state="decrease" if handoff else "hold",
         ))
-    _write_csv(
-        prefix.with_suffix(".coordination.csv"),
-        "coordination",
-        sorted(coordination_rows, key=lambda row: int(row["event_seq"])),
+    terminal = next(
+        (row for row in coordination_rows if row["action"].startswith("round_complete_")),
+        None,
     )
     handoff_event_seq = max(
         [int(row["event_seq"]) for row in ack_rows + token_rows + coordination_rows] + [
@@ -298,11 +298,11 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
     )
     if handoff_evidence is None and handoff:
         handoff_evidence = ({
-            "event_seq": handoff_event_seq,
-            "time_ps": handoff_time_ps,
+            "event_seq": int(terminal["event_seq"]),
+            "time_ps": int(terminal["time_ps"]),
             "flow_id": 1,
             "first_round_id": 1,
-            "second_round_id": 2,
+            "second_round_id": int(terminal["round_id"]),
             "base_rtt_ps": 14_000_000,
             "pre_acked_bytes": 100,
             "pre_harmful_bytes": 25,
@@ -332,10 +332,28 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
             "handoff_requested": 1,
             "handoff_applied": 1,
         }
+        if terminal is not None:
+            defaults.update({
+                "event_seq": int(terminal["event_seq"]),
+                "time_ps": int(terminal["time_ps"]),
+                "second_round_id": int(terminal["round_id"]),
+            })
+            evidence_rows = [defaults | evidence for evidence in handoff_evidence]
+            terminal["event_seq"] = str(max(
+                int(terminal["event_seq"]) + 1,
+                *(int(evidence["event_seq"]) + 1 for evidence in evidence_rows),
+            ))
+        else:
+            evidence_rows = [defaults | evidence for evidence in handoff_evidence]
         _write_csv(prefix.with_suffix(".handoff.csv"), "handoff", [
-            _row("handoff", **run_id_values, **(defaults | evidence))
-            for evidence in handoff_evidence
+            _row("handoff", **run_id_values, **evidence)
+            for evidence in evidence_rows
         ])
+    _write_csv(
+        prefix.with_suffix(".coordination.csv"),
+        "coordination",
+        sorted(coordination_rows, key=lambda row: int(row["event_seq"])),
+    )
     (root / f"{run_id}.manifest.json").write_text(
         json.dumps(_manifest(run_id, scenario, mode, seed, foreground_flows)), encoding="ascii"
     )
@@ -348,6 +366,15 @@ def _append_coordination_row(root, scenario, mode, seed, **values):
         rows = list(csv.DictReader(stream))
     rows.append(_row("coordination", run_id=run_id, **values))
     _write_csv(path, "coordination", sorted(rows, key=lambda row: int(row["event_seq"])))
+
+
+def _update_handoff_row(root, scenario, mode, seed=13, **values):
+    run_id = f"fixture_{scenario}_{mode}_s{seed}"
+    path = root / f"{run_id}.handoff.csv"
+    with path.open(newline="", encoding="ascii") as stream:
+        rows = list(csv.DictReader(stream))
+    rows[0].update({name: str(value) for name, value in values.items()})
+    _write_csv(path, "handoff", rows)
 
 
 class AnalyzeTests(unittest.TestCase):
@@ -488,6 +515,48 @@ class AnalyzeTests(unittest.TestCase):
             self._write_verifier_aggregate(Path(directory), metrics, rounds)
 
             self.assertEqual(self._verdict(Path(directory)), "supported\n")
+
+    def test_verify_only_accepts_legacy_metrics_without_handoff_evidence_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metrics, rounds = self._supported_verifier_rows()
+            aggregate = root / "aggregate"
+            aggregate.mkdir()
+            legacy_fields = tuple(
+                field for field in TABLE_FIELDS["per_seed_metrics"]
+                if field != "handoff_evidence_records"
+            )
+            with (aggregate / "per_seed_metrics.csv").open("w", newline="", encoding="ascii") as stream:
+                writer = csv.DictWriter(stream, fieldnames=legacy_fields, lineterminator="\n")
+                writer.writeheader()
+                writer.writerows(metrics)
+            with (aggregate / "rounds.csv").open("w", newline="", encoding="ascii") as stream:
+                writer = csv.DictWriter(stream, fieldnames=TABLE_FIELDS["rounds"], lineterminator="\n")
+                writer.writeheader()
+                writer.writerows(rounds)
+
+            self.assertEqual(self._verdict(root), "supported\n")
+
+    def test_verify_only_rejects_legacy_metrics_missing_another_required_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metrics, rounds = self._supported_verifier_rows()
+            aggregate = root / "aggregate"
+            aggregate.mkdir()
+            fields = tuple(
+                field for field in TABLE_FIELDS["per_seed_metrics"]
+                if field not in {"handoff_evidence_records", "goodput_gbps"}
+            )
+            with (aggregate / "per_seed_metrics.csv").open("w", newline="", encoding="ascii") as stream:
+                writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
+                writer.writeheader()
+                writer.writerows([{field: row.get(field, "") for field in fields} for row in metrics])
+            with (aggregate / "rounds.csv").open("w", newline="", encoding="ascii") as stream:
+                writer = csv.DictWriter(stream, fieldnames=TABLE_FIELDS["rounds"], lineterminator="\n")
+                writer.writeheader()
+                writer.writerows(rounds)
+
+            self.assertEqual(self._verdict(root), f"not_supported: {MATRIX_PREDICATE}\n")
 
     def test_verify_only_supports_persistent_clean_scan_handoff_majority(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1148,6 +1217,7 @@ class AnalyzeTests(unittest.TestCase):
                 {"event_seq": 11},
             ),
             "mismatched": {"flow_id": 2},
+            "wrong_round": {"second_round_id": 2},
             "incomplete": {"post2_acked_bytes": 0},
             "not_requested": {"handoff_requested": 0, "handoff_applied": 0},
             "not_applied": {"handoff_requested": 1, "handoff_applied": 0},
@@ -1163,6 +1233,42 @@ class AnalyzeTests(unittest.TestCase):
                 })
 
                 with self.assertRaisesRegex(ValueError, "handoff evidence"):
+                    analyze_data(root)
+
+    def test_rejects_full_prism_handoff_evidence_after_terminal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", full_prism={
+                "handoff": True,
+                "progress": False,
+                "completed_spread_ps": 8_000_000,
+            })
+            run_id = "fixture_persistent_full_prism_s13"
+            with (root / f"{run_id}.coordination.csv").open(newline="", encoding="ascii") as stream:
+                terminal = next(
+                    row for row in csv.DictReader(stream)
+                    if row["action"] == "round_complete_handoff"
+                )
+            _update_handoff_row(
+                root,
+                "persistent",
+                "full_prism",
+                event_seq=int(terminal["event_seq"]) + 1,
+                time_ps=terminal["time_ps"],
+            )
+
+            with self.assertRaisesRegex(ValueError, "handoff evidence"):
+                analyze_data(root)
+
+    def test_rejects_handoff_evidence_for_non_full_modes(self):
+        for mode in ("original_prism", "prism_recycle"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._all_modes(root, "persistent", **{
+                    mode: {"handoff_evidence": {"handoff_requested": 0, "handoff_applied": 0}},
+                })
+
+                with self.assertRaisesRegex(ValueError, "non-full mode.*handoff evidence"):
                     analyze_data(root)
 
     def test_accepts_unapplied_evidence_before_an_applied_full_prism_handoff(self):
