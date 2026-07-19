@@ -11,3 +11,7 @@ esac
 cmake --build "$HERE/../../../build" --target htsim_uec parse_output -j2
 bash "$HERE/clean_outputs.sh"
 python3 "$HERE/run.py" --phase "$PHASE"
+if [ "$PHASE" = "formal" ]; then
+    python3 "$HERE/analyzer.py"
+    python3 "$HERE/make_figs.py"
+fi
