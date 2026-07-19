@@ -30,7 +30,7 @@ SEEDS = (13, 14, 15)
 TABLE_FIELDS = {
     "epoch_series": ("run_id", "scenario", "mode", "seed", "epoch_index", "floor_ps", "spread_ps", "cwnd_bytes", "hold_fraction"),
     "rounds": ("run_id", "scenario", "mode", "seed", "round_index", "epoch_id", "plot_epoch_index", "floor_ps", "spread_ps", "spread_ref_ps", "spread_change_ps", "refresh_complete", "replacement_chain_complete", "clean_scan_complete", "progress", "handoff", "cwnd_bytes", "control_state"),
-    "per_seed_metrics": ("run_id", "scenario", "mode", "seed", "window_start_ps", "window_end_ps", "foreground_acked_bytes", "healthy_acked_bytes", "throttled_acked_bytes", "healthy_to_throttled_ratio", "throttled_traffic_ratio", "goodput_gbps", "p99_genuine_qdelay_ps", "completed_rounds", "progress_rounds", "handoff_rounds"),
+    "per_seed_metrics": ("run_id", "scenario", "mode", "seed", "window_start_ps", "window_end_ps", "foreground_acked_bytes", "healthy_acked_bytes", "throttled_acked_bytes", "healthy_to_throttled_ratio", "throttled_traffic_ratio", "goodput_gbps", "p99_genuine_qdelay_ps", "completed_rounds", "progress_rounds", "handoff_rounds", "handoff_evidence_records"),
     "summary": ("scenario", "mode", "seed_count", "mean_healthy_to_throttled_ratio", "mean_throttled_traffic_ratio", "mean_goodput_gbps", "mean_p99_genuine_qdelay_ps", "mean_progress_rounds", "mean_handoff_rounds"),
 }
 RECURRENCE_FIELDS = (
@@ -256,6 +256,61 @@ def _clean_scan_complete(bundle, terminal: dict) -> bool:
     )
 
 
+def _validate_full_prism_handoff_evidence(bundle) -> int:
+    """Bind every applied Full-Prism terminal to one complete handoff record."""
+    terminal_counts = defaultdict(int)
+    for terminal in bundle.coordination:
+        if terminal["action"].startswith("round_complete_") and terminal["handoff"]:
+            terminal_counts[(terminal["run_id"], terminal["flow_id"])] += 1
+
+    evidence_by_identity = defaultdict(list)
+    for evidence in bundle.handoff:
+        evidence_by_identity[(evidence["run_id"], evidence["flow_id"])].append(evidence)
+
+    for identity, terminal_count in terminal_counts.items():
+        evidence = evidence_by_identity.get(identity, [])
+        applied_evidence = [record for record in evidence if record["handoff_applied"]]
+        if not applied_evidence:
+            if evidence and not any(record["handoff_requested"] for record in evidence):
+                raise ValueError(
+                    f"{bundle.run_id}: handoff evidence was not requested for flow {identity[1]}"
+                )
+            if evidence:
+                raise ValueError(
+                    f"{bundle.run_id}: handoff evidence was not applied for flow {identity[1]}"
+                )
+            raise ValueError(
+                f"{bundle.run_id}: missing or mismatched handoff evidence for flow {identity[1]}"
+            )
+        if len(applied_evidence) != terminal_count:
+            raise ValueError(
+                f"{bundle.run_id}: duplicate handoff evidence for flow {identity[1]}"
+            )
+        for record in applied_evidence:
+            if not record["handoff_requested"]:
+                raise ValueError(
+                    f"{bundle.run_id}: handoff evidence was not requested for flow {identity[1]}"
+                )
+            if not record["handoff_applied"]:
+                raise ValueError(
+                    f"{bundle.run_id}: handoff evidence was not applied for flow {identity[1]}"
+                )
+            if any(
+                record[field] <= 0
+                for field in ("pre_acked_bytes", "post1_acked_bytes", "post2_acked_bytes")
+            ):
+                raise ValueError(
+                    f"{bundle.run_id}: incomplete handoff evidence for flow {identity[1]}"
+                )
+
+    for identity, evidence in evidence_by_identity.items():
+        if identity not in terminal_counts and any(record["handoff_applied"] for record in evidence):
+            raise ValueError(
+                f"{bundle.run_id}: unbound applied handoff evidence for flow {identity[1]}"
+            )
+    return len(bundle.handoff)
+
+
 def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -> list[dict]:
     rounds = []
     completed = [row for row in bundle.coordination if row["action"].startswith("round_complete_")]
@@ -351,6 +406,11 @@ def _analyze_bundle(manifest_path: Path) -> tuple[dict, list[dict], list[dict]]:
     duration_ps = end_ps - start_ps
     goodput_gbps = foreground_bytes * 8_000 / duration_ps
     rounds = _validate_coordination(bundle, scenario=scenario, mode=mode, start_ps=start_ps)
+    handoff_evidence_records = (
+        _validate_full_prism_handoff_evidence(bundle)
+        if mode == "full_prism"
+        else len(bundle.handoff)
+    )
     for row in rounds:
         row["seed"] = seed
 
@@ -389,6 +449,7 @@ def _analyze_bundle(manifest_path: Path) -> tuple[dict, list[dict], list[dict]]:
         "completed_rounds": len(rounds),
         "progress_rounds": sum(row["progress"] for row in rounds),
         "handoff_rounds": sum(row["handoff"] for row in rounds),
+        "handoff_evidence_records": handoff_evidence_records,
     }
     return metrics, rounds, epoch_rows
 

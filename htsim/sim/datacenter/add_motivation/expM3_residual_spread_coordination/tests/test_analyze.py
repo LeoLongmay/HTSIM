@@ -84,7 +84,8 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
                   observer_epoch_start_ps=1_000_000_000,
                   observer_epoch_end_ps=2_000_000_000,
                   coordination_event_seq=5, observer_event_seq=3,
-                  replacement_chain=None, clean_scan=None, emit_terminal=True):
+                  replacement_chain=None, clean_scan=None, emit_terminal=True,
+                  handoff_evidence=None):
     run_id = f"fixture_{scenario}_{mode}_s{seed}"
     prefix = root / run_id
     run_id_values = {"run_id": run_id}
@@ -284,6 +285,57 @@ def _write_bundle(root, scenario, mode, seed=13, *, handoff=False,
         "coordination",
         sorted(coordination_rows, key=lambda row: int(row["event_seq"])),
     )
+    handoff_event_seq = max(
+        [int(row["event_seq"]) for row in ack_rows + token_rows + coordination_rows] + [
+            observer_event_seq,
+            observer_event_seq + 1,
+        ]
+    ) + 1
+    handoff_time_ps = max(
+        [int(row["time_ps"]) for row in ack_rows + token_rows + coordination_rows] + [
+            observer_epoch_end_ps,
+        ]
+    )
+    if handoff_evidence is None and handoff:
+        handoff_evidence = ({
+            "event_seq": handoff_event_seq,
+            "time_ps": handoff_time_ps,
+            "flow_id": 1,
+            "first_round_id": 1,
+            "second_round_id": 2,
+            "base_rtt_ps": 14_000_000,
+            "pre_acked_bytes": 100,
+            "pre_harmful_bytes": 25,
+            "post1_acked_bytes": 100,
+            "post1_harmful_bytes": 25,
+            "post2_acked_bytes": 100,
+            "post2_harmful_bytes": 25,
+            "handoff_requested": 1,
+            "handoff_applied": 1,
+        },)
+    if handoff_evidence:
+        if isinstance(handoff_evidence, dict):
+            handoff_evidence = (handoff_evidence,)
+        defaults = {
+            "event_seq": handoff_event_seq,
+            "time_ps": handoff_time_ps,
+            "flow_id": 1,
+            "first_round_id": 1,
+            "second_round_id": 2,
+            "base_rtt_ps": 14_000_000,
+            "pre_acked_bytes": 100,
+            "pre_harmful_bytes": 25,
+            "post1_acked_bytes": 100,
+            "post1_harmful_bytes": 25,
+            "post2_acked_bytes": 100,
+            "post2_harmful_bytes": 25,
+            "handoff_requested": 1,
+            "handoff_applied": 1,
+        }
+        _write_csv(prefix.with_suffix(".handoff.csv"), "handoff", [
+            _row("handoff", **run_id_values, **(defaults | evidence))
+            for evidence in handoff_evidence
+        ])
     (root / f"{run_id}.manifest.json").write_text(
         json.dumps(_manifest(run_id, scenario, mode, seed, foreground_flows)), encoding="ascii"
     )
@@ -781,7 +833,7 @@ class AnalyzeTests(unittest.TestCase):
                 "recoverable",
                 "full_prism",
                 13,
-                event_seq=10,
+                event_seq=11,
                 time_ps=2_300_000_000,
                 flow_id=1,
                 epoch_id=3,
@@ -805,7 +857,7 @@ class AnalyzeTests(unittest.TestCase):
                 "recoverable",
                 "full_prism",
                 13,
-                event_seq=11,
+                event_seq=12,
                 time_ps=2_400_000_000,
                 flow_id=1,
                 epoch_id=4,
@@ -1018,6 +1070,7 @@ class AnalyzeTests(unittest.TestCase):
             self.assertEqual(metrics["completed_rounds"], 1)
             self.assertEqual(metrics["progress_rounds"], 0)
             self.assertEqual(metrics["handoff_rounds"], 0)
+            self.assertEqual(metrics["handoff_evidence_records"], 0)
 
     def test_rejects_recoverable_full_prism_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1088,7 +1141,66 @@ class AnalyzeTests(unittest.TestCase):
             self.assertTrue(round_row["progress"])
             self.assertGreater(round_row["spread_change_ps"], 0)
 
-    def test_accepts_persistent_no_progress_then_full_prism_handoff(self):
+    def test_rejects_full_prism_handoff_without_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", full_prism={
+                "handoff": True,
+                "progress": False,
+                "completed_spread_ps": 8_000_000,
+                "handoff_evidence": False,
+            })
+
+            with self.assertRaisesRegex(ValueError, "handoff evidence"):
+                analyze_data(root)
+
+    def test_rejects_invalid_full_prism_handoff_evidence(self):
+        cases = {
+            "duplicate": (
+                {"event_seq": 10},
+                {"event_seq": 11},
+            ),
+            "mismatched": {"flow_id": 2},
+            "incomplete": {"post2_acked_bytes": 0},
+            "not_requested": {"handoff_requested": 0, "handoff_applied": 0},
+            "not_applied": {"handoff_requested": 1, "handoff_applied": 0},
+        }
+        for name, handoff_evidence in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._all_modes(root, "persistent", full_prism={
+                    "handoff": True,
+                    "progress": False,
+                    "completed_spread_ps": 8_000_000,
+                    "handoff_evidence": handoff_evidence,
+                })
+
+                with self.assertRaisesRegex(ValueError, "handoff evidence"):
+                    analyze_data(root)
+
+    def test_accepts_unapplied_evidence_before_an_applied_full_prism_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._all_modes(root, "persistent", full_prism={
+                "handoff": True,
+                "progress": False,
+                "completed_spread_ps": 8_000_000,
+                "handoff_evidence": (
+                    {
+                        "event_seq": 10,
+                        "handoff_requested": 0,
+                        "handoff_applied": 0,
+                    },
+                    {"event_seq": 11},
+                ),
+            })
+
+            results = analyze_data(root)
+
+            metrics = next(row for row in results["per_seed_metrics"] if row["mode"] == "full_prism")
+            self.assertEqual(metrics["handoff_evidence_records"], 2)
+
+    def test_accepts_persistent_no_progress_then_full_prism_handoff_with_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._all_modes(root, "persistent", full_prism={
@@ -1098,8 +1210,10 @@ class AnalyzeTests(unittest.TestCase):
             })
             results = analyze_data(root)
             handoff = next(row for row in results["rounds"] if row["mode"] == "full_prism")
+            metrics = next(row for row in results["per_seed_metrics"] if row["mode"] == "full_prism")
             self.assertFalse(handoff["progress"])
             self.assertTrue(handoff["handoff"])
+            self.assertEqual(metrics["handoff_evidence_records"], 1)
 
     def test_maps_terminal_round_to_latest_same_flow_observer_epoch(self):
         with tempfile.TemporaryDirectory() as directory:
