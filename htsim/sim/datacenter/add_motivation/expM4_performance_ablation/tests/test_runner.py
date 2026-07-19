@@ -178,6 +178,43 @@ class RunnerTests(unittest.TestCase):
                         output_root=root / "smoke",
                     )
 
+    def test_runner_rejects_start_finish_with_mismatched_src_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary, decoder = self._binaries(root)
+            flow_lines = self._flow_events(6)
+            flow_lines[6] = flow_lines[6].replace("SrcID 1", "SrcID 2")
+            calls = self._subprocess_with_flow_lines(binary, decoder, flow_lines)
+
+            with patch.object(run, "HTSIM_UEC", binary), patch.object(run, "PARSE_OUTPUT", decoder), patch.object(
+                run.subprocess, "run", side_effect=calls
+            ), self.assertRaisesRegex(RuntimeError, "flow log"):
+                run.run_one(
+                    run.Case("reps_nscc", "recoverable", 13),
+                    phase="smoke",
+                    output_root=root / "smoke",
+                )
+
+    def test_runner_rejects_numerically_complete_wrong_workload_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary, decoder = self._binaries(root)
+            calls = self._subprocess_with_flow_lines(
+                binary,
+                decoder,
+                self._flow_events(6),
+                idmap_overrides={1: "Uec_999_0"},
+            )
+
+            with patch.object(run, "HTSIM_UEC", binary), patch.object(run, "PARSE_OUTPUT", decoder), patch.object(
+                run.subprocess, "run", side_effect=calls
+            ), self.assertRaisesRegex(RuntimeError, "flow log"):
+                run.run_one(
+                    run.Case("reps_nscc", "recoverable", 13),
+                    phase="smoke",
+                    output_root=root / "smoke",
+                )
+
     def test_reuse_rejects_invalid_existing_flow_content_without_subprocess(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -230,8 +267,9 @@ class RunnerTests(unittest.TestCase):
         return RunnerTests._subprocess_with_flow_lines(binary, decoder, None)
 
     @staticmethod
-    def _subprocess_with_flow_lines(binary, decoder, flow_lines):
+    def _subprocess_with_flow_lines(binary, decoder, flow_lines, *, idmap_overrides=None):
         decoded_lines_by_dat = {}
+        idmap_overrides = idmap_overrides or {}
 
         def invoke(argv, **kwargs):
             if argv[0] == str(binary):
@@ -243,6 +281,16 @@ class RunnerTests(unittest.TestCase):
                     if line.startswith("Connections ")
                 ))
                 decoded_lines_by_dat[str(output)] = flow_lines or RunnerTests._flow_events(connections)
+                flow_specs = [
+                    line.split()
+                    for line in Path(argv[argv.index("-tm") + 1]).read_text(encoding="ascii").splitlines()
+                    if "->" in line
+                ]
+                with (Path(kwargs["cwd"]) / "idmap.txt").open("w", encoding="ascii") as idmap:
+                    for index, tokens in enumerate(flow_specs, start=1):
+                        src, dst = tokens[0].split("->")
+                        name = idmap_overrides.get(index, f"Uec_{src}_{dst}")
+                        idmap.write(f"{index} {name}\n")
             elif argv[0] == str(decoder):
                 kwargs["stdout"].writelines(decoded_lines_by_dat[str(Path(argv[1]))])
             else:

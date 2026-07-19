@@ -14,14 +14,19 @@ import tempfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Sequence
+import re
 
 
 HERE = Path(__file__).resolve().parent
 if __package__ in (None, ""):
     sys.path.insert(0, str(HERE.parents[4]))
-    from htsim.sim.datacenter.add_motivation.expM4_performance_ablation.gen_workload import workload_text
+    from htsim.sim.datacenter.add_motivation.expM4_performance_ablation.gen_workload import (
+        ForegroundFlow,
+        generate_workload,
+        workload_text,
+    )
 else:
-    from .gen_workload import workload_text
+    from .gen_workload import ForegroundFlow, generate_workload, workload_text
 
 
 DATACENTER_DIR = HERE.parents[1]
@@ -33,6 +38,7 @@ SCHEMA_VERSION = 1
 SEEDS = (13, 14, 15)
 END_MS = 40
 FLOW_SIZE_BYTES = 32_000_000
+UEC_IDMAP_NAME = re.compile(r"Uec_(?P<src>\d+)_(?P<dst>\d+)")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -158,7 +164,7 @@ def _flow_number(tokens: list[str], field: str) -> int:
         raise ValueError(f"invalid {field}") from exc
 
 
-def _parse_flow_event(line: str) -> tuple[int, str, Decimal]:
+def _parse_flow_event(line: str) -> tuple[tuple[int, int], str, Decimal]:
     tokens = line.split()
     if (
         len(tokens) < 9
@@ -169,11 +175,11 @@ def _parse_flow_event(line: str) -> tuple[int, str, Decimal]:
         raise ValueError("malformed FLOW_EVENT")
     try:
         event_time = Decimal(tokens[0])
-        int(tokens[4])
+        src_id = int(tokens[4])
         flow_id = int(tokens[8])
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("invalid FLOW_EVENT time or ID") from exc
-    if not event_time.is_finite() or flow_id < 0:
+    if not event_time.is_finite() or src_id < 0 or flow_id < 0:
         raise ValueError("invalid FLOW_EVENT time or ID")
     event = tokens[6]
     if event == "START":
@@ -184,23 +190,103 @@ def _parse_flow_event(line: str) -> tuple[int, str, Decimal]:
             raise ValueError("FINISH has the wrong byte count")
     else:
         raise ValueError("unknown FLOW_EVENT type")
-    return flow_id, event, event_time
+    return (src_id, flow_id), event, event_time
 
 
-def _validate_flow_events(flow_events: Sequence[str], foreground_flows: int) -> None:
-    starts: dict[int, Decimal] = {}
-    finishes: dict[int, Decimal] = {}
+def _load_uec_idmap(path: Path) -> dict[int, tuple[int, int]]:
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError("missing or unreadable idmap") from exc
+    idmap = {}
+    for line in lines:
+        fields = line.split(maxsplit=1)
+        if len(fields) != 2:
+            continue
+        match = UEC_IDMAP_NAME.fullmatch(fields[1])
+        if match is None:
+            continue
+        try:
+            internal_id = int(fields[0])
+        except ValueError as exc:
+            raise ValueError("invalid idmap object ID") from exc
+        if internal_id in idmap:
+            raise ValueError("duplicate UEC idmap object ID")
+        idmap[internal_id] = (int(match["src"]), int(match["dst"]))
+    return idmap
+
+
+def _event_bindings_for_idmap(event_keys: set[tuple[int, int]],
+                              idmap: dict[int, tuple[int, int]],
+                              expected_flows: Sequence[ForegroundFlow]) -> dict[tuple[int, int], tuple[int, int]]:
+    expected_by_src = {flow.src: flow for flow in expected_flows}
+    if len(expected_by_src) != len(expected_flows):
+        raise ValueError("workload sources must be unique")
+    bindings = {}
+    for event_key in event_keys:
+        src_identity = idmap.get(event_key[0])
+        flow_identity = idmap.get(event_key[1])
+        if src_identity is None or flow_identity is None:
+            raise ValueError("FLOW_EVENT key is absent from idmap")
+        if src_identity != flow_identity:
+            raise ValueError("SrcID and FlowID resolve to different workload endpoints")
+        flow = expected_by_src.get(src_identity[0])
+        if flow is None or flow.dst != src_identity[1]:
+            raise ValueError("FLOW_EVENT key does not match the workload")
+        bindings[event_key] = (flow.src, flow.flow_id)
+    return bindings
+
+
+def _manifest_event_bindings(value: object) -> dict[tuple[int, int], tuple[int, int]]:
+    if not isinstance(value, list):
+        raise ValueError("missing flow event bindings")
+    bindings = {}
+    for row in value:
+        if not isinstance(row, dict):
+            raise ValueError("invalid flow event binding")
+        try:
+            event_key = (int(row["src_id"]), int(row["flow_id"]))
+            workload_key = (int(row["workload_src"]), int(row["workload_flow_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("invalid flow event binding") from exc
+        if event_key in bindings:
+            raise ValueError("duplicate flow event binding")
+        bindings[event_key] = workload_key
+    return bindings
+
+
+def _serialized_event_bindings(bindings: dict[tuple[int, int], tuple[int, int]]) -> list[dict]:
+    return [
+        {
+            "src_id": event_key[0],
+            "flow_id": event_key[1],
+            "workload_src": workload_key[0],
+            "workload_flow_id": workload_key[1],
+        }
+        for event_key, workload_key in sorted(bindings.items())
+    ]
+
+
+def _validate_flow_events(flow_events: Sequence[str], expected_flows: Sequence[ForegroundFlow],
+                          bindings: dict[tuple[int, int], tuple[int, int]]) -> None:
+    starts: dict[tuple[int, int], Decimal] = {}
+    finishes: dict[tuple[int, int], Decimal] = {}
     for line in flow_events:
-        flow_id, event, event_time = _parse_flow_event(line)
+        event_key, event, event_time = _parse_flow_event(line)
         events = starts if event == "START" else finishes
-        if flow_id in events:
-            raise ValueError(f"duplicate {event} for flow {flow_id}")
-        events[flow_id] = event_time
-    if len(starts) != foreground_flows or len(finishes) != foreground_flows:
+        if event_key in events:
+            raise ValueError(f"duplicate {event} for flow {event_key}")
+        events[event_key] = event_time
+    if len(starts) != len(expected_flows) or len(finishes) != len(expected_flows):
         raise ValueError("wrong START or FINISH count")
     if starts.keys() != finishes.keys():
-        raise ValueError("START and FINISH flow IDs differ")
-    if any(finishes[flow_id] < start_time for flow_id, start_time in starts.items()):
+        raise ValueError("START and FINISH event keys differ")
+    if starts.keys() != bindings.keys():
+        raise ValueError("FLOW_EVENT keys differ from their bindings")
+    expected_keys = {(flow.src, flow.flow_id) for flow in expected_flows}
+    if len(set(bindings.values())) != len(bindings) or set(bindings.values()) != expected_keys:
+        raise ValueError("FLOW_EVENT bindings differ from the workload")
+    if any(finishes[event_key] < start_time for event_key, start_time in starts.items()):
         raise ValueError("FINISH precedes START")
 
 
@@ -234,7 +320,7 @@ def _expected_manifest(*, phase: str, case: Case, run_id: str, workload: Path,
 
 def _reuse_or_reject(*, manifest_path: Path, flow_path: Path, stdout_path: Path,
                      dat_path: Path, ascii_path: Path, expected: dict,
-                     foreground_flows: int) -> bool:
+                     expected_flows: Sequence[ForegroundFlow]) -> bool:
     paths = (manifest_path, flow_path, stdout_path, dat_path, ascii_path)
     if not any(path.exists() for path in paths):
         return False
@@ -254,7 +340,8 @@ def _reuse_or_reject(*, manifest_path: Path, flow_path: Path, stdout_path: Path,
         if actual.get(field) != expected[field]:
             raise ValueError(f"existing manifest identity conflicts at {field}")
     try:
-        _validate_flow_events(flow_path.read_text(encoding="ascii").splitlines(), foreground_flows)
+        bindings = _manifest_event_bindings(actual.get("flow_event_bindings"))
+        _validate_flow_events(flow_path.read_text(encoding="ascii").splitlines(), expected_flows, bindings)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise ValueError(f"existing flow output is invalid: {exc}") from exc
     return True
@@ -267,6 +354,7 @@ def run_one(case: Case, *, phase: str, output_root: Path) -> Path:
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     scenario = SCENARIOS[case.scenario]
+    expected_flows = generate_workload(foreground_flows=scenario.foreground_flows, seed=case.seed)
     workload = output_root / "workloads" / f"{case.scenario}_s{case.seed}.cm"
     workload_hash = _ensure_workload(workload, foreground_flows=scenario.foreground_flows, seed=case.seed)
     run_id = _run_id(phase, case)
@@ -290,7 +378,7 @@ def run_one(case: Case, *, phase: str, output_root: Path) -> Path:
         dat_path=dat_path,
         ascii_path=ascii_path,
         expected=expected,
-        foreground_flows=scenario.foreground_flows,
+        expected_flows=expected_flows,
     ):
         return manifest_path
 
@@ -317,6 +405,7 @@ def run_one(case: Case, *, phase: str, output_root: Path) -> Path:
                 check=True,
                 text=True,
             )
+        idmap = _load_uec_idmap(Path(working_directory) / "idmap.txt")
     flow_events = [
         line for line in ascii_path.read_text(encoding="ascii").splitlines(keepends=True)
         if " FLOW_EVENT " in line
@@ -324,7 +413,9 @@ def run_one(case: Case, *, phase: str, output_root: Path) -> Path:
     if not flow_events:
         raise RuntimeError("decoder produced no FLOW_EVENT records")
     try:
-        _validate_flow_events(flow_events, scenario.foreground_flows)
+        event_keys = {_parse_flow_event(line)[0] for line in flow_events}
+        bindings = _event_bindings_for_idmap(event_keys, idmap, expected_flows)
+        _validate_flow_events(flow_events, expected_flows, bindings)
     except ValueError as exc:
         raise RuntimeError(f"invalid flow log: {exc}") from exc
     with flow_path.open("x", encoding="ascii", newline="") as flow_output:
@@ -332,7 +423,13 @@ def run_one(case: Case, *, phase: str, output_root: Path) -> Path:
     dat_path.unlink()
     ascii_path.unlink()
     with manifest_path.open("x", encoding="ascii", newline="") as manifest_output:
-        json.dump(expected, manifest_output, indent=2, sort_keys=True, ensure_ascii=True)
+        json.dump(
+            expected | {"flow_event_bindings": _serialized_event_bindings(bindings)},
+            manifest_output,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=True,
+        )
         manifest_output.write("\n")
     print(run_id)
     return manifest_path
