@@ -7,6 +7,7 @@ import argparse
 import csv
 import dataclasses
 import json
+import math
 import statistics
 import sys
 from pathlib import Path
@@ -99,13 +100,18 @@ def _load_case(manifest_path: Path, data_root: Path) -> dict:
         or stats["total_started"] != scenario.foreground_flows
     ):
         raise ValueError(f"incomplete flow completion for {run_id}")
+    metrics = {
+        "avg_fct_us": stats["avg_s"] * 1_000_000,
+        "p99_fct_us": stats["p99_s"] * 1_000_000,
+        "goodput_gbps": aggregate_goodput_gbps(flow_path),
+    }
+    if not all(math.isfinite(value) and value > 0 for value in metrics.values()):
+        raise ValueError(f"nonfinite or nonpositive metric for {run_id}")
     return {
         "arm": case.arm,
         "scenario": case.scenario,
         "seed": case.seed,
-        "avg_fct_us": stats["avg_s"] * 1_000_000,
-        "p99_fct_us": stats["p99_s"] * 1_000_000,
-        "goodput_gbps": aggregate_goodput_gbps(flow_path),
+        **metrics,
         "completion_rate": stats["completion_rate"],
         "completed": stats["completed"],
         "total_started": stats["total_started"],

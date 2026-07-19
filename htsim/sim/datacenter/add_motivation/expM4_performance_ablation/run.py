@@ -38,6 +38,7 @@ SCHEMA_VERSION = 1
 SEEDS = (13, 14, 15)
 END_MS = 40
 FLOW_SIZE_BYTES = 32_000_000
+MAX_FLOW_EVENT_TIME_S = Decimal(END_MS) / Decimal(1_000)
 UEC_IDMAP_NAME = re.compile(r"Uec_(?P<src>\d+)_(?P<dst>\d+)")
 
 
@@ -273,6 +274,8 @@ def _validate_flow_events(flow_events: Sequence[str], expected_flows: Sequence[F
     finishes: dict[tuple[int, int], Decimal] = {}
     for line in flow_events:
         event_key, event, event_time = _parse_flow_event(line)
+        if event_time < 0 or event_time > MAX_FLOW_EVENT_TIME_S:
+            raise ValueError("FLOW_EVENT time is outside the simulation interval")
         events = starts if event == "START" else finishes
         if event_key in events:
             raise ValueError(f"duplicate {event} for flow {event_key}")

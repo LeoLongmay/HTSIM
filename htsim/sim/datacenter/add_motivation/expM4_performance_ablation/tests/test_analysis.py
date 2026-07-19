@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from htsim.sim.datacenter.add_motivation.expM4_performance_ablation import analyzer, make_figs, run
 
@@ -60,6 +61,28 @@ class AnalysisTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "scenario_config"):
                 analyzer.analyze_formal(formal, Path(directory) / "aggregate")
 
+    def test_analyze_rejects_nonfinite_and_nonpositive_metrics(self):
+        cases = (
+            ("nan_avg", float("nan"), 0.001, 1.0),
+            ("infinite_p99", 0.001, float("inf"), 1.0),
+            ("zero_goodput", 0.001, 0.001, 0.0),
+        )
+        for name, avg_s, p99_s, goodput in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                formal = Path(directory) / "formal"
+                _write_formal_fixture(formal)
+
+                with patch.object(analyzer, "fct_stats", side_effect=lambda path: {
+                    "avg_s": avg_s,
+                    "p99_s": p99_s,
+                    "completion_rate": 1.0,
+                    "completed": 6 if "recoverable" in str(path) else 12,
+                    "total_started": 6 if "recoverable" in str(path) else 12,
+                }), patch.object(analyzer, "aggregate_goodput_gbps", return_value=goodput), self.assertRaisesRegex(
+                    ValueError, "metric"
+                ):
+                    analyzer.analyze_formal(formal, Path(directory) / "aggregate")
+
     def test_figure_reads_summary_csv_and_writes_pdf(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -72,6 +95,26 @@ class AnalysisTests(unittest.TestCase):
 
             self.assertEqual(figure.name, "m4_performance_ablation.pdf")
             self.assertGreater(figure.stat().st_size, 0)
+
+    def test_figure_rejects_nonfinite_summary_values(self):
+        for value in ("nan", "inf"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                formal = root / "formal"
+                aggregate = root / "aggregate"
+                _write_formal_fixture(formal)
+                analyzer.analyze_formal(formal, aggregate)
+                summary_path = aggregate / "m4_summary.csv"
+                with summary_path.open(newline="", encoding="ascii") as stream:
+                    rows = list(csv.DictReader(stream))
+                rows[0]["mean_goodput_gbps"] = value
+                with summary_path.open("w", newline="", encoding="ascii") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=analyzer.SUMMARY_FIELDS, lineterminator="\n")
+                    writer.writeheader()
+                    writer.writerows(rows)
+
+                with self.assertRaisesRegex(ValueError, "numeric"):
+                    make_figs.render_figure(summary_path, root / "figs")
 
 
 def _write_formal_fixture(formal: Path) -> None:

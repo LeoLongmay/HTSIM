@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -47,7 +48,8 @@ def _read_summary(path: Path) -> dict[tuple[str, str], dict]:
             if int(row["n_seeds"]) != 3:
                 raise ValueError("summary CSV must aggregate three seeds")
             for field in required - {"arm", "scenario", "n_seeds"}:
-                float(row[field])
+                if not math.isfinite(float(row[field])):
+                    raise ValueError("summary CSV has nonfinite numeric values")
         except (TypeError, ValueError) as exc:
             raise ValueError("summary CSV has invalid numeric values") from exc
         indexed[key] = row

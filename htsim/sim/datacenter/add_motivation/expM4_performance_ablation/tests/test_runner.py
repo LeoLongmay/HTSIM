@@ -162,6 +162,7 @@ class RunnerTests(unittest.TestCase):
             ],
             "wrong_finish_bytes": self._flow_events(6, bytes_by_id={1: 31_999_999}),
             "finish_before_start": self._flow_events(6, finish_times={1: "-0.000000001"}),
+            "finish_after_simulation": self._flow_events(6, finish_times={1: "0.040000001"}),
         }
         for name, flow_lines in invalid_logs.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
@@ -229,6 +230,28 @@ class RunnerTests(unittest.TestCase):
                 run.run_one(case, phase="smoke", output_root=output)
                 (output / "smoke_residual_prism_recoverable_s13.flow.txt").write_text(
                     "0 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 32000000\n",
+                    encoding="ascii",
+                )
+                with self.assertRaisesRegex(ValueError, "existing flow output"):
+                    run.run_one(case, phase="smoke", output_root=output)
+
+            self.assertEqual(mocked.call_count, 2)
+
+    def test_reuse_rejects_existing_flow_finish_after_simulation_end(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary, decoder = self._binaries(root)
+            calls = self._successful_subprocess(binary, decoder)
+            case = run.Case("residual_prism", "recoverable", 13)
+            output = root / "smoke"
+
+            with patch.object(run, "HTSIM_UEC", binary), patch.object(run, "PARSE_OUTPUT", decoder), patch.object(
+                run.subprocess, "run", side_effect=calls
+            ) as mocked:
+                run.run_one(case, phase="smoke", output_root=output)
+                flow_path = output / "smoke_residual_prism_recoverable_s13.flow.txt"
+                flow_path.write_text(
+                    flow_path.read_text(encoding="ascii").replace("0.001000000", "0.040000001", 1),
                     encoding="ascii",
                 )
                 with self.assertRaisesRegex(ValueError, "existing flow output"):
