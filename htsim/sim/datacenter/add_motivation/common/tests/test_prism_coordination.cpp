@@ -51,6 +51,12 @@ void arm_two_no_progress_rounds(PrismResidualCoordinator& coordinator,
                       PrismCoordinationAction::ROUND_COMPLETE_RETRY));
 }
 
+void make_full_handoff_evidence_ready(PrismResidualCoordinator& coordinator) {
+    arm_two_no_progress_rounds(coordinator, 100);
+    coordinator.observeFullHandoffAck(2010, 100, 15, false, true, 1000);
+    coordinator.observeFullHandoffAck(2210, 100, 15, false, true, 800);
+}
+
 void full_prism_first_no_progress_retries_without_handoff() {
     PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
     complete_no_progress_round(coordinator, 1, 1000);
@@ -68,6 +74,28 @@ void full_prism_second_no_progress_needs_two_ack_windows() {
     const auto evidence = coordinator.takeFullHandoffEvidence();
     assert(evidence.has_value());
     assert(evidence->handoff_requested);
+}
+
+void full_prism_ready_evidence_handoffs_at_eligible_hold_epoch() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    make_full_handoff_evidence_ready(coordinator);
+
+    const auto result = coordinator.closeEpoch(hold_epoch(3, 2, 16, eight_slots(), false, 2300));
+    assert(result.handoff_requested);
+    assert(has_action(result, PrismCoordinationAction::ROUND_COMPLETE_HANDOFF));
+    mem_b cwnd = 10000;
+    assert(applyPrismNoProgressHandoff(cwnd, 1000));
+    assert(cwnd == 9000);
+}
+
+void full_prism_boundary_discards_ready_evidence_before_later_hold_epoch() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    make_full_handoff_evidence_ready(coordinator);
+
+    coordinator.closeEpoch({3, 2, 16, prism::INCREASE, false, eight_slots(), 2300});
+    const auto result = coordinator.closeEpoch(hold_epoch(4, 2, 16, eight_slots(), false, 2400));
+    assert(!result.handoff_requested);
+    assert(!has_action(result, PrismCoordinationAction::ROUND_COMPLETE_HANDOFF));
 }
 
 void full_prism_progressing_second_round_clears_handoff_state() {
@@ -634,6 +662,8 @@ void outcome_mode_invalidates_the_current_readded_high_residual_entropy() {
 int main() {
     full_prism_first_no_progress_retries_without_handoff();
     full_prism_second_no_progress_needs_two_ack_windows();
+    full_prism_ready_evidence_handoffs_at_eligible_hold_epoch();
+    full_prism_boundary_discards_ready_evidence_before_later_hold_epoch();
     full_prism_progressing_second_round_clears_handoff_state();
     full_prism_higher_post_rate_prevents_handoff();
     full_prism_lower_post2_harmful_tail_prevents_handoff();

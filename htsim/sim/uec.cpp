@@ -1667,6 +1667,11 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             : 0;
     const bool outcome_harmful = pkt.ecn_echo() ||
         (_prism_genuine_sample && outcome_residual >= outcome_threshold);
+    if (_prism_coordination_mode == PrismCoordinationMode::FULL_PRISM) {
+        _prism_coordinator.observeFullHandoffAck(
+            eventlist().now(), _base_rtt, outcome_residual, pkt.ecn_echo(),
+            _prism_genuine_sample, newly_recvd_bytes);
+    }
     if (outcome_recycle && _base_rtt > 0) {
         _prism_coordinator.setOutcomeBaseRtt(_base_rtt);
     }
@@ -2466,7 +2471,7 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             if (_prism_coordination_mode != PrismCoordinationMode::DISABLED) {
                 _prism_coordinator.closeEpoch(
                     {_prism_epoch_id, c_cc, c_spray, prism::INCREASE,
-                     _mp->isFrozen(), _mp->cacheSlots()});
+                     _mp->isFrozen(), _mp->cacheSlots(), eventlist().now()});
             }
             prismOracleLog(c_cc, c_spray, _prism_floor_s, _prism_spread_s,
                            observed_region, t_spray);
@@ -2532,7 +2537,7 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         if (_prism_coordination_mode != PrismCoordinationMode::DISABLED) {
             coordination_result = _prism_coordinator.closeEpoch(
                 {_prism_epoch_id, f_cc, f_spray, static_cast<prism::Region>(region),
-                 _mp->isFrozen(), _mp->cacheSlots()});
+                 _mp->isFrozen(), _mp->cacheSlots(), eventlist().now()});
         }
         for (const PrismCoordinationSlotAction& slot_action :
              coordination_result.slot_actions) {
