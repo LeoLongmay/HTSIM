@@ -195,7 +195,8 @@ std::optional<PrismOutcome> PrismResidualCoordinator::takeOutcome() {
 std::optional<PrismFullHandoffEvidence> PrismResidualCoordinator::takeFullHandoffEvidence() {
     std::optional<PrismFullHandoffEvidence> evidence = _full_handoff_event;
     _full_handoff_event.reset();
-    if (_full_handoff_state == FullHandoffState::LATCHED) {
+    if (_full_handoff_state == FullHandoffState::LATCHED && evidence.has_value() &&
+        !evidence->handoff_requested) {
         resetFullHandoffState();
     }
     return evidence;
@@ -206,11 +207,17 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
 
     if (!enabled() || epoch.region != prism::HOLD) {
         resetRound(!outcomeEnabled() || !_outcome_tracking);
+        if (fullHandoffEnabled()) {
+            resetFullHandoffState();
+        }
         _observations.clear();
         return result;
     }
 
     if (epoch.frozen) {
+        if (fullHandoffEnabled()) {
+            resetFullHandoffState();
+        }
         _observations.clear();
         return result;
     }
@@ -218,6 +225,9 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
     const bool eligible = epoch.floor < _t_cc && epoch.spread >= _t_spray;
     if (!eligible) {
         resetRound(!outcomeEnabled() || !_outcome_tracking);
+        if (fullHandoffEnabled()) {
+            resetFullHandoffState();
+        }
         _observations.clear();
         return result;
     }
