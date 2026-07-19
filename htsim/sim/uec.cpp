@@ -2627,7 +2627,8 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
                     action == PrismCoordinationAction::ROUND_COMPLETE_PROGRESS
                         ? "spread_reduced"
                         : "spread_not_reduced",
-                    true, coordination_result.progress, handoff_applied,
+                    true, coordination_result.progress,
+                    action == PrismCoordinationAction::ROUND_COMPLETE_HANDOFF && handoff_applied,
                     static_cast<uint64_t>(_cwnd),
                     motivationRegionName(static_cast<prism::Region>(region))});
             }

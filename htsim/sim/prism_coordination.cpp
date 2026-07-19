@@ -237,8 +237,12 @@ PrismCoordinationResult PrismResidualCoordinator::closeEpoch(const PrismCoordina
         if (evidence.has_value()) {
             result.handoff_evidence = evidence;
             if (evidence->handoff_requested) {
+                result.round_id = evidence->second_round_id;
                 result.handoff_requested = true;
                 result.actions.push_back(PrismCoordinationAction::ROUND_COMPLETE_HANDOFF);
+                resetRound(true);
+                _observations.clear();
+                return result;
             }
         }
     }

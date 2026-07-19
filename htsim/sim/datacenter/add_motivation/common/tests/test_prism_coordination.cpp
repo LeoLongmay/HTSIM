@@ -88,6 +88,24 @@ void full_prism_ready_evidence_handoffs_at_eligible_hold_epoch() {
     assert(cwnd == 9000);
 }
 
+void full_prism_ready_handoff_abandons_current_refresh_round() {
+    PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
+    make_full_handoff_evidence_ready(coordinator);
+    const auto slots = eight_slots();
+    for (uint16_t slot = 0; slot < slots.size(); ++slot) {
+        coordinator.observeAck(3, slot, 1, 3, false, true);
+    }
+
+    const auto result = coordinator.closeEpoch(hold_epoch(3, 2, 16, slots, false, 2300));
+
+    assert(result.round_id == 2);
+    assert(result.handoff_requested);
+    assert(has_action(result, PrismCoordinationAction::ROUND_COMPLETE_HANDOFF));
+    assert(!has_action(result, PrismCoordinationAction::ROUND_COMPLETE_RETRY));
+    assert(result.slot_actions.empty());
+    assert(!result.round_complete);
+}
+
 void full_prism_boundary_discards_ready_evidence_before_later_hold_epoch() {
     PrismResidualCoordinator coordinator(PrismCoordinationMode::FULL_PRISM, 10, 10);
     make_full_handoff_evidence_ready(coordinator);
@@ -663,6 +681,7 @@ int main() {
     full_prism_first_no_progress_retries_without_handoff();
     full_prism_second_no_progress_needs_two_ack_windows();
     full_prism_ready_evidence_handoffs_at_eligible_hold_epoch();
+    full_prism_ready_handoff_abandons_current_refresh_round();
     full_prism_boundary_discards_ready_evidence_before_later_hold_epoch();
     full_prism_progressing_second_round_clears_handoff_state();
     full_prism_higher_post_rate_prevents_handoff();
