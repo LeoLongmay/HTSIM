@@ -8,6 +8,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -26,9 +27,9 @@ SCHEMA = "m5_real_asymmetry_ablation_runner"
 SCHEMA_VERSION = 1
 ARMS = {
     "reps_nscc": ("nscc", "reps", None),
-    "original_prism": ("prism", "reps", "original_prism"),
-    "residual_prism": ("prism", "reps", "prism_recycle"),
-    "full_prism": ("prism", "reps", "full_prism"),
+    "original_prism": ("prism", "reps_actual", "original_prism"),
+    "residual_prism": ("prism", "reps_actual", "prism_recycle"),
+    "full_prism": ("prism", "reps_actual", "full_prism"),
 }
 FAILED_LINKS = (0, 4, 8)
 SEEDS = tuple(range(13, 23))
@@ -47,6 +48,7 @@ TOPOLOGY = DATACENTER / "topologies" / TOPOLOGY_NAME
 HTSIM_UEC = DATACENTER / "htsim_uec"
 PARSE_OUTPUT = DATACENTER.parent / "build" / "parse_output"
 RUN_LIB = PRISM_EVAL_COMMON / "run_lib.sh"
+UEC_IDMAP_NAME = re.compile(r"Uec_(?P<src>\d+)_(?P<dst>\d+)")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -161,7 +163,102 @@ def _required_outputs(output_root: Path, run_id: str) -> dict[str, Path]:
     }
 
 
-def _validate_flow(path: Path) -> None:
+def _load_uec_idmap(path: Path) -> dict[int, tuple[int, int]]:
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError("missing or unreadable idmap") from exc
+    idmap = {}
+    for line in lines:
+        fields = line.split(maxsplit=1)
+        if len(fields) != 2:
+            continue
+        match = UEC_IDMAP_NAME.fullmatch(fields[1])
+        if match is None:
+            continue
+        try:
+            object_id = int(fields[0])
+        except ValueError as exc:
+            raise ValueError("invalid idmap object ID") from exc
+        if object_id in idmap:
+            raise ValueError("duplicate UEC idmap object ID")
+        idmap[object_id] = (int(match["src"]), int(match["dst"]))
+    return idmap
+
+
+def _flow_event_keys(path: Path) -> set[tuple[int, int]]:
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError("unreadable flow output") from exc
+    keys = set()
+    for line in lines:
+        fields = line.split()
+        if "FLOW_EVENT" not in fields:
+            continue
+        try:
+            src_id = int(fields[fields.index("SrcID") + 1])
+            flow_id = int(fields[fields.index("FlowID") + 1])
+        except (ValueError, IndexError) as exc:
+            raise ValueError("malformed FLOW_EVENT") from exc
+        keys.add((src_id, flow_id))
+    return keys
+
+
+def _expected_workload_endpoints() -> set[tuple[int, int]]:
+    return {(16 + index, index % 16) for index in range(FLOW_COUNT)}
+
+
+def _flow_event_bindings(event_keys: set[tuple[int, int]],
+                         idmap: dict[int, tuple[int, int]]) -> dict[tuple[int, int], tuple[int, int]]:
+    expected_endpoints = _expected_workload_endpoints()
+    bindings = {}
+    for event_key in event_keys:
+        src_endpoint = idmap.get(event_key[0])
+        flow_endpoint = idmap.get(event_key[1])
+        if src_endpoint is None or flow_endpoint is None:
+            raise ValueError("FLOW_EVENT ID is absent from idmap")
+        if src_endpoint != flow_endpoint:
+            raise ValueError("FLOW_EVENT IDs resolve to different workload endpoints")
+        if src_endpoint not in expected_endpoints:
+            raise ValueError("FLOW_EVENT endpoint is absent from the workload")
+        bindings[event_key] = src_endpoint
+    if len(bindings) != FLOW_COUNT or set(bindings.values()) != expected_endpoints:
+        raise ValueError("FLOW_EVENT bindings are not a workload bijection")
+    return bindings
+
+
+def _serialized_event_bindings(bindings: dict[tuple[int, int], tuple[int, int]]) -> list[dict]:
+    return [
+        {
+            "src_id": event_key[0],
+            "flow_id": event_key[1],
+            "workload_src": endpoint[0],
+            "workload_dst": endpoint[1],
+        }
+        for event_key, endpoint in sorted(bindings.items())
+    ]
+
+
+def _manifest_event_bindings(value: object) -> dict[tuple[int, int], tuple[int, int]]:
+    if not isinstance(value, list):
+        raise ValueError("missing flow event bindings")
+    bindings = {}
+    for row in value:
+        if not isinstance(row, dict):
+            raise ValueError("invalid flow event binding")
+        try:
+            event_key = (int(row["src_id"]), int(row["flow_id"]))
+            endpoint = (int(row["workload_src"]), int(row["workload_dst"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("invalid flow event binding") from exc
+        if event_key in bindings:
+            raise ValueError("duplicate flow event binding")
+        bindings[event_key] = endpoint
+    return bindings
+
+
+def _validate_flow(path: Path, idmap_path: Path) -> dict[tuple[int, int], tuple[int, int]]:
     try:
         starts, finishes = parse_flow_events(path)
         stats = fct_stats(path)
@@ -178,6 +275,10 @@ def _validate_flow(path: Path) -> None:
         raise ValueError("incomplete flow output")
     if any(nbytes != FLOW_SIZE_BYTES for _, nbytes in finishes.values()):
         raise ValueError("flow output has an unexpected completion size")
+    event_keys = _flow_event_keys(path)
+    if event_keys != starts.keys():
+        raise ValueError("FLOW_EVENT keys differ from completed flows")
+    return _flow_event_bindings(event_keys, _load_uec_idmap(idmap_path))
 
 
 def _expected_manifest(*, phase: str, case: Case, workload: Path, workload_hash: str,
@@ -236,10 +337,14 @@ def _reuse_or_reject(outputs: dict[str, Path], expected: dict) -> bool:
         actual = json.loads(outputs["manifest"].read_text(encoding="ascii"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("existing manifest is invalid") from exc
-    if actual != expected:
+    manifest = dict(actual)
+    serialized_bindings = manifest.pop("flow_event_bindings", None)
+    if manifest != expected:
         raise ValueError("existing manifest identity conflicts")
     try:
-        _validate_flow(outputs["flow"])
+        bindings = _validate_flow(outputs["flow"], outputs["idmap"])
+        if _manifest_event_bindings(serialized_bindings) != bindings:
+            raise ValueError("flow event bindings conflict with output")
     except ValueError as exc:
         raise ValueError(f"existing flow output is invalid: {exc}") from exc
     return True
@@ -274,11 +379,17 @@ def run_one(case: Case, *, phase: str, output_root: Path) -> Path:
     if outputs["dat"].exists() or outputs["ascii"].exists():
         raise RuntimeError("run_lib left stale simulator temporary output")
     try:
-        _validate_flow(outputs["flow"])
+        bindings = _validate_flow(outputs["flow"], outputs["idmap"])
     except ValueError as exc:
         raise RuntimeError(f"incomplete flow output: {exc}") from exc
     with outputs["manifest"].open("x", encoding="ascii", newline="") as stream:
-        json.dump(expected, stream, indent=2, sort_keys=True, ensure_ascii=True)
+        json.dump(
+            expected | {"flow_event_bindings": _serialized_event_bindings(bindings)},
+            stream,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=True,
+        )
         stream.write("\n")
     print(run_id)
     return outputs["manifest"]

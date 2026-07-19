@@ -34,9 +34,9 @@ class M5RunnerTests(unittest.TestCase):
     def test_arm_mapping_and_environment_are_locked(self):
         expected = {
             "reps_nscc": ("nscc", "reps", "-disable_trim"),
-            "original_prism": ("prism", "reps", "-disable_trim -prism_coordination_mode original_prism"),
-            "residual_prism": ("prism", "reps", "-disable_trim -prism_coordination_mode prism_recycle"),
-            "full_prism": ("prism", "reps", "-disable_trim -prism_coordination_mode full_prism"),
+            "original_prism": ("prism", "reps_actual", "-disable_trim -prism_coordination_mode original_prism"),
+            "residual_prism": ("prism", "reps_actual", "-disable_trim -prism_coordination_mode prism_recycle"),
+            "full_prism": ("prism", "reps_actual", "-disable_trim -prism_coordination_mode full_prism"),
         }
         for arm, (cc, lb, extra_args) in expected.items():
             with self.subTest(arm=arm):
@@ -74,6 +74,7 @@ class M5RunnerTests(unittest.TestCase):
                 second = run.run_one(case, phase="smoke", output_root=root / "smoke")
                 self.assertEqual(first, second)
                 self.assertEqual(mocked.call_count, 1)
+                self.assertEqual(len(json.loads(first.read_text(encoding="ascii"))["flow_event_bindings"]), 64)
 
                 manifest = json.loads(first.read_text(encoding="ascii"))
                 manifest["failed_links"] = 8
@@ -100,6 +101,26 @@ class M5RunnerTests(unittest.TestCase):
             ), self.assertRaisesRegex(RuntimeError, "incomplete flow"):
                 run.run_one(case, phase="smoke", output_root=output)
 
+    def test_runner_rejects_flow_event_ids_with_different_idmap_endpoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = self._inputs(root)
+            idmap = self._idmap_text().replace("2001 Uec_16_0", "2001 Uec_16_1")
+            with self._patched_inputs(inputs), patch.object(
+                run.subprocess, "run", side_effect=self._run_lib_with(self._flow_text(), idmap)
+            ), self.assertRaisesRegex(RuntimeError, "flow output"):
+                run.run_one(run.Case("reps_nscc", 4, 13), phase="smoke", output_root=root / "smoke")
+
+    def test_runner_rejects_flow_event_id_absent_from_idmap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = self._inputs(root)
+            flow = self._flow_text().replace("FlowID 2001", "FlowID 9999")
+            with self._patched_inputs(inputs), patch.object(
+                run.subprocess, "run", side_effect=self._run_lib_with(flow, self._idmap_text())
+            ), self.assertRaisesRegex(RuntimeError, "flow output"):
+                run.run_one(run.Case("reps_nscc", 4, 13), phase="smoke", output_root=root / "smoke")
+
     @staticmethod
     def _inputs(root: Path) -> dict[str, Path]:
         topology = root / "fat_tree_128_1os.topo"
@@ -115,12 +136,20 @@ class M5RunnerTests(unittest.TestCase):
         lines = []
         for flow_id in range(1, 65):
             lines.append(
-                f"0.000001000 Type FLOW_EVENT SrcID {flow_id} Ev START FlowID {flow_id} Flowsize 2000000\n"
+                f"0.000001000 Type FLOW_EVENT SrcID {1000 + flow_id} Ev START FlowID {2000 + flow_id} Flowsize 2000000\n"
             )
         for flow_id in range(1, completed + 1):
             lines.append(
-                f"0.001001000 Type FLOW_EVENT SrcID {flow_id} Ev FINISH FlowID {flow_id} Bytes 2000000 Pkts 1\n"
+                f"0.001001000 Type FLOW_EVENT SrcID {1000 + flow_id} Ev FINISH FlowID {2000 + flow_id} Bytes 2000000 Pkts 1\n"
             )
+        return "".join(lines)
+
+    @staticmethod
+    def _idmap_text() -> str:
+        lines = []
+        for flow_id in range(1, 65):
+            endpoint = f"Uec_{15 + flow_id}_{(flow_id - 1) % 16}"
+            lines.extend((f"{1000 + flow_id} {endpoint}\n", f"{2000 + flow_id} {endpoint}\n"))
         return "".join(lines)
 
     @classmethod
@@ -130,7 +159,7 @@ class M5RunnerTests(unittest.TestCase):
         output.mkdir(parents=True, exist_ok=True)
         (output / f"{tag}.flow.txt").write_text(cls._flow_text(), encoding="ascii")
         (output / f"{tag}.stdout").write_text("ok\n", encoding="ascii")
-        (output / f"{tag}.idmap").write_text("1 Uec_16_0\n", encoding="ascii")
+        (output / f"{tag}.idmap").write_text(cls._idmap_text(), encoding="ascii")
         return subprocess.CompletedProcess(command, 0)
 
     @classmethod
@@ -140,8 +169,20 @@ class M5RunnerTests(unittest.TestCase):
         output.mkdir(parents=True, exist_ok=True)
         (output / f"{tag}.flow.txt").write_text(cls._flow_text(completed=63), encoding="ascii")
         (output / f"{tag}.stdout").write_text("ok\n", encoding="ascii")
-        (output / f"{tag}.idmap").write_text("1 Uec_16_0\n", encoding="ascii")
+        (output / f"{tag}.idmap").write_text(cls._idmap_text(), encoding="ascii")
         return subprocess.CompletedProcess(command, 0)
+
+    @classmethod
+    def _run_lib_with(cls, flow: str, idmap: str):
+        def runner(command, **kwargs):
+            output = Path(command[-1])
+            tag = command[-2]
+            output.mkdir(parents=True, exist_ok=True)
+            (output / f"{tag}.flow.txt").write_text(flow, encoding="ascii")
+            (output / f"{tag}.stdout").write_text("ok\n", encoding="ascii")
+            (output / f"{tag}.idmap").write_text(idmap, encoding="ascii")
+            return subprocess.CompletedProcess(command, 0)
+        return runner
 
     @staticmethod
     def _patched_inputs(inputs: dict[str, Path]):
