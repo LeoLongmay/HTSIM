@@ -35,7 +35,7 @@ LapsPathKey installSharedPhysicalPath(UecSrc& source, Queue& first, Queue& secon
 LapsAttempt installStrictRecord(UecSrc& source, LapsRecoveryDomain& domain,
                                 const LapsPathKey& path, uint32_t entropy,
                                 UecBasePacket::seq_t seq, mem_b bytes) {
-    source.createSendRecord(entropy, seq, bytes, {}, true);
+    source.createSendRecord(entropy, seq, bytes, {}, true, path);
     source._in_flight += bytes;
     const LapsAttempt attempt = domain.sent(path, source, seq, bytes);
     source._tx_bitmap.at(seq).laps_attempt = attempt;
@@ -160,6 +160,7 @@ void strict_nack_retires_old_attempt_before_retry(EventList& eventlist) {
     assert(source._rtx_queue.count(40) == 1);
 
     source._rtx_queue.clear();
+    source._laps_rtx_routes.clear();
     source._rtx_backlog = 0;
     const LapsAttempt retry_attempt =
         installStrictRecord(source, domain, retry_path, 1, 40, 1'300);
@@ -184,10 +185,11 @@ void non_laps_source_never_joins_paired_recovery_on_the_same_nic(EventList& even
     assert(!non_laps.lapsResolvePath(0, 0, ignored));
 
     const simtime_picosec sent_at = EventList::now();
-    laps.createSendRecord(3, 40, 1'300, {}, true);
+    const LapsPathKey laps_path("11:laps-path");
+    laps.createSendRecord(3, 40, 1'300, {}, true, laps_path);
     laps._in_flight += 1'300;
     LapsRecoveryDomain& domain = nic.lapsRecovery();
-    const LapsAttempt attempt = domain.sent(LapsPathKey("11:laps-path"), laps, 40, 1'300);
+    const LapsAttempt attempt = domain.sent(laps_path, laps, 40, 1'300);
     laps._tx_bitmap.at(40).laps_attempt = attempt;
 
     non_laps.createSendRecord(4, 50, 1'400, {}, true);
@@ -329,6 +331,22 @@ void strict_laps_retransmission_keeps_the_original_pid_and_path(EventList& event
     LapsPathKey resolved;
     assert(source.lapsResolvePath(replay.entropy, send_route, resolved));
     assert(resolved.queue_fingerprint == replay.strict_laps_path->queue_fingerprint);
+    assert(source.handleAckno(70) == 0);
+    assert(source._rtx_queue.empty());
+    assert(source._laps_rtx_routes.empty());
+}
+
+void strict_laps_control_retransmission_keeps_legacy_selection(EventList& eventlist) {
+    setStrictGlobals();
+    UecNIC nic(8, eventlist, speedFromGbps(100), 1);
+    UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(2, false, 1.0), nic, 1);
+
+    source.queueForRtx(80, UecBasePacket::get_ack_size());
+    const UecSrc::RtxPathSelection selection = source.selectRtxPath(80);
+    assert(!selection.strict_laps_path.has_value());
+    assert(source._laps_rtx_routes.empty());
+    source._rtx_queue.clear();
+    source._rtx_backlog = 0;
 }
 
 void unpaired_laps_preserves_legacy_uec_behavior(EventList& eventlist) {
@@ -364,6 +382,8 @@ int main() {
     strict_laps_ignores_sleek_before_ack_retires_its_attempt(eventlist);
     assert(EventList::getPendingSources().empty());
     strict_laps_retransmission_keeps_the_original_pid_and_path(eventlist);
+    assert(EventList::getPendingSources().empty());
+    strict_laps_control_retransmission_keeps_legacy_selection(eventlist);
     assert(EventList::getPendingSources().empty());
     unpaired_laps_preserves_legacy_uec_behavior(eventlist);
     assert(EventList::getPendingSources().empty());

@@ -859,11 +859,16 @@ void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b 
         return;
     }
 
+    assert(isStrictLaps());
+    assert(record->second.strict_laps_data);
+    assert(record->second.laps_path.has_value());
+    const LapsRtxRoute route = {record->second.path_id, record->second.selection,
+                                *record->second.laps_path};
     const simtime_picosec send_time = record->second.send_time;
     _tx_bitmap.erase(record);
     delFromSendTimes(send_time, seqno);
     _in_flight -= bytes;
-    queueForRtx(seqno, bytes);
+    queueForRtx(seqno, bytes, route);
 }
 
 void UecSrc::configureMotivationTokenObserver() {
@@ -1143,6 +1148,7 @@ mem_b UecSrc::handleAckno(UecDataPacket::seq_t ackno) {
             // packet was in RTX queue
             mem_b pkt_size = rtx_i->second;
             _rtx_queue.erase(rtx_i);
+            _laps_rtx_routes.erase(ackno);
             _rtx_backlog -= pkt_size;
             _in_flight += pkt_size; // don't double count - we decremented when we marked for rtx
             if (_debug_src) {
@@ -1227,6 +1233,7 @@ mem_b UecSrc::handleCumulativeAck(UecDataPacket::seq_t cum_ack) {
         if (seqno < cum_ack) {
             mem_b pkt_size = _rtx_queue.begin()->second;
             _rtx_queue.erase(_rtx_queue.begin());
+            _laps_rtx_routes.erase(seqno);
             _rtx_backlog -= pkt_size;
             _in_flight += pkt_size; // don't double count - we decremented when we marked for rtx
         } else {
@@ -3097,8 +3104,11 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
     if (_debug_src)
         cout << _flow.str() << " " << _nodename << " erasing send record, seqno: " << seqno << " flow " << _flow.str()
              << endl;
+    std::optional<LapsRtxRoute> laps_route;
     if (isStrictLaps() && i->second.strict_laps_data) {
         assert(i->second.laps_attempt.has_value());
+        assert(i->second.laps_path.has_value());
+        laps_route = {i->second.path_id, i->second.selection, *i->second.laps_path};
         _nic.lapsRecovery().nack(*i->second.laps_attempt);
     }
     _tx_bitmap.erase(i);
@@ -3111,7 +3121,7 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
     delFromSendTimes(send_time, seqno);
 
     stopSpeculating();
-    queueForRtx(seqno, pkt_size);
+    queueForRtx(seqno, pkt_size, laps_route);
 
     if (send_time == _rto_send_time) {
         recalculateRTO();
@@ -3649,7 +3659,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     if (_backlog == 0 || (_receiver_based_cc && _credit <= 0) || ( _sender_based_cc &&  (_in_flight + full_pkt_size) >= _cwnd )) 
         p->set_ar(true);
     
-    createSendRecord(ev, _highest_sent, full_pkt_size, selection, isStrictLaps());
+    createSendRecord(ev, _highest_sent, full_pkt_size, selection, isStrictLaps(), laps_path);
     if (isStrictLaps()) {
         const LapsAttempt attempt =
             _nic.lapsRecovery().sent(std::move(laps_path), *this, _highest_sent, full_pkt_size);
@@ -3686,6 +3696,16 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     return full_pkt_size;
 }
 
+UecSrc::RtxPathSelection UecSrc::selectRtxPath(UecDataPacket::seq_t seqno) {
+    const auto replay = _laps_rtx_routes.find(seqno);
+    if (replay != _laps_rtx_routes.end()) {
+        assert(isStrictLaps());
+        return {replay->second.path_id, replay->second.selection, replay->second.path};
+    }
+    const uint32_t entropy = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd / _mss);
+    return {entropy, _mp->lastSelection(), std::nullopt};
+}
+
 mem_b UecSrc::sendRtxPacket(const Route& route) {
     assert(!_rtx_queue.empty());
     auto seq_no = _rtx_queue.begin()->first;
@@ -3702,19 +3722,24 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
                                      _pull_target, _dstaddr);
     p->set_src(_srcaddr);
 
-    uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
-    const UecMpSelection selection = _mp->lastSelection();
+    const RtxPathSelection selection = selectRtxPath(seq_no);
+    const uint32_t ev = selection.entropy;
     LapsPathKey laps_path;
     if (isStrictLaps() && !lapsResolvePath(ev, route, laps_path)) {
         cerr << "Strict LAPS failed to resolve a physical forwarding path for flow "
              << flowId() << " entropy " << ev << endl;
         abort();
     }
+    if (selection.strict_laps_path.has_value()) {
+        assert(isStrictLaps());
+        assert(laps_path.queue_fingerprint == selection.strict_laps_path->queue_fingerprint);
+        assert(_laps_rtx_routes.erase(seq_no) == 1);
+    }
     p->set_pathid(ev);
     p->set_hop_count(0);
     p->flow().logTraffic(*p, *this, TrafficLogger::PKT_CREATESEND);
 
-    createSendRecord(ev, seq_no, full_pkt_size, selection, isStrictLaps());
+    createSendRecord(ev, seq_no, full_pkt_size, selection.selection, isStrictLaps(), laps_path);
     if (isStrictLaps()) {
         const LapsAttempt attempt =
             _nic.lapsRecovery().sent(std::move(laps_path), *this, seq_no, full_pkt_size);
@@ -3903,7 +3928,7 @@ void UecSrc::sendRTS() {
 
 void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno,
                               mem_b full_pkt_size, UecMpSelection selection,
-                              bool strict_laps_data) {
+                              bool strict_laps_data, std::optional<LapsPathKey> laps_path) {
     if (_debug_src)
         cout << _flow.str() << " " << _nodename << " createSendRecord seqno: " << seqno << " size " << full_pkt_size
              << endl;
@@ -3911,7 +3936,7 @@ void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno,
     assert(_tx_bitmap.find(seqno) == _tx_bitmap.end());
 
     _tx_bitmap.emplace(seqno, sendRecord(path_id, full_pkt_size, eventlist().now(), selection,
-                                         strict_laps_data));
+                                         strict_laps_data, std::nullopt, std::move(laps_path)));
     _send_times.emplace(eventlist().now(), seqno);
 
     if (_rtx_times.find(seqno) == _rtx_times.end()) {
@@ -3921,8 +3946,13 @@ void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno,
     }
 }
 
-void UecSrc::queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size) {
+void UecSrc::queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size,
+                         std::optional<LapsRtxRoute> laps_route) {
     assert(_rtx_queue.find(seqno) == _rtx_queue.end());
+    if (laps_route.has_value()) {
+        assert(isStrictLaps());
+        assert(_laps_rtx_routes.emplace(seqno, std::move(*laps_route)).second);
+    }
     _rtx_queue.emplace(seqno, pkt_size);
     _rtx_backlog += pkt_size;
     if (!_speculating || !_receiver_based_cc)

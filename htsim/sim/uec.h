@@ -292,15 +292,28 @@ public:
         // need a constructor to be able to put this in a map
         sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime,
                    UecMpSelection pselection, bool strict_laps_data,
-                   std::optional<LapsAttempt> laps_attempt = std::nullopt)
+                   std::optional<LapsAttempt> laps_attempt = std::nullopt,
+                   std::optional<LapsPathKey> laps_path = std::nullopt)
             : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection),
-              strict_laps_data(strict_laps_data), laps_attempt(laps_attempt){};
+              strict_laps_data(strict_laps_data), laps_attempt(laps_attempt),
+              laps_path(std::move(laps_path)){};
         uint32_t path_id;
         mem_b pkt_size;
         simtime_picosec send_time;
         UecMpSelection selection;
         bool strict_laps_data;
         std::optional<LapsAttempt> laps_attempt;
+        std::optional<LapsPathKey> laps_path;
+    };
+    struct LapsRtxRoute {
+        uint32_t path_id;
+        UecMpSelection selection;
+        LapsPathKey path;
+    };
+    struct RtxPathSelection {
+        uint32_t entropy;
+        UecMpSelection selection;
+        std::optional<LapsPathKey> strict_laps_path;
     };
     UecLogger* _logger;
     TrafficLogger* _pktlogger;
@@ -316,6 +329,7 @@ public:
     map<UecDataPacket::seq_t, uint16_t> _rtx_times;
 
     map<UecDataPacket::seq_t, mem_b> _rtx_queue;
+    map<UecDataPacket::seq_t, LapsRtxRoute> _laps_rtx_routes;
     bool isSendPermitted();
     void sendIfPermitted();
     mem_b sendPacket(const Route& route);
@@ -332,7 +346,9 @@ public:
     void updateLapsRate(simtime_picosec now);
     void setLapsSafetyWindow(simtime_picosec target_delay);
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
-                          UecMpSelection selection, bool strict_laps_data = false);
+                          UecMpSelection selection, bool strict_laps_data = false,
+                          std::optional<LapsPathKey> laps_path = std::nullopt);
+    RtxPathSelection selectRtxPath(UecDataPacket::seq_t seqno);
     void configureMotivationTokenObserver();
     struct MotivationResolvedPath {
         uint64_t physical_path_id = MotivationEpochObserver::NO_PHYSICAL_PATH;
@@ -352,7 +368,8 @@ public:
                               uint64_t new_data_bytes_sent_total,
                               uint64_t cwnd_bytes);
     void motivationLogPendingEpoch();
-    void queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size);
+    void queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size,
+                     std::optional<LapsRtxRoute> laps_route = std::nullopt);
     bool validateSendTs(UecBasePacket::seq_t acked_psn, bool rtx_echo);
     void recalculateRTO();
     void startRTO(simtime_picosec send_time);
