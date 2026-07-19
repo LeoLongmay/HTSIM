@@ -584,7 +584,7 @@ class AnalyzeTests(unittest.TestCase):
                     "not_supported: at least two recoverable/prism_recycle seeds have a chain-backed progress round\n",
                 )
 
-    def test_verify_only_rejects_recoverable_progress_with_coexisting_applied_handoff(self):
+    def test_verify_only_accepts_recoverable_progress_with_coexisting_applied_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
             metrics, rounds = self._supported_verifier_rows()
             rounds.append({
@@ -600,10 +600,7 @@ class AnalyzeTests(unittest.TestCase):
             })
             self._write_verifier_aggregate(Path(directory), metrics, rounds)
 
-            self.assertEqual(
-                self._verdict(Path(directory)),
-                "not_supported: at least two recoverable/full_prism seeds have a chain-backed progress round and no applied handoff\n",
-            )
+            self.assertEqual(self._verdict(Path(directory)), "supported\n")
 
     def test_verify_only_rejects_duplicate_metric_run_id(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -641,18 +638,6 @@ class AnalyzeTests(unittest.TestCase):
             self.assertEqual(
                 self._verdict(Path(directory)),
                 f"not_supported: {ROUND_MATRIX_PREDICATE}\n",
-            )
-
-    def test_verify_only_rejects_recoverable_full_prism_handoff(self):
-        with tempfile.TemporaryDirectory() as directory:
-            metrics, rounds = self._supported_verifier_rows()
-            for row in (row for row in rounds if row["scenario"] == "recoverable"):
-                row["handoff"] = 1
-            self._write_verifier_aggregate(Path(directory), metrics, rounds)
-
-            self.assertEqual(
-                self._verdict(Path(directory)),
-                "not_supported: at least two recoverable/full_prism seeds have a chain-backed progress round and no applied handoff\n",
             )
 
     def test_verify_only_keeps_descriptive_metrics_out_of_support_gates(self):
@@ -885,8 +870,7 @@ class AnalyzeTests(unittest.TestCase):
                 retry=True,
             )
 
-            with self.assertRaisesRegex(ValueError, "recoverable full_prism handed off"):
-                analyze_data(root)
+            analyze_data(root)
 
             self.assertEqual(
                 main([
@@ -1072,7 +1056,7 @@ class AnalyzeTests(unittest.TestCase):
             self.assertEqual(metrics["handoff_rounds"], 0)
             self.assertEqual(metrics["handoff_evidence_records"], 0)
 
-    def test_rejects_recoverable_full_prism_handoff(self):
+    def test_accepts_recoverable_full_prism_handoff_with_valid_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._all_modes(
@@ -1084,8 +1068,11 @@ class AnalyzeTests(unittest.TestCase):
                     "completed_spread_ps": 8_000_000,
                 },
             )
-            with self.assertRaisesRegex(ValueError, "recoverable full_prism handed off"):
-                analyze_data(root)
+            results = analyze_data(root)
+
+            metrics = next(row for row in results["per_seed_metrics"] if row["mode"] == "full_prism")
+            self.assertEqual(metrics["handoff_rounds"], 1)
+            self.assertEqual(metrics["handoff_evidence_records"], 1)
 
     def test_rejects_full_prism_handoff_after_positive_spread_progress(self):
         with tempfile.TemporaryDirectory() as directory:

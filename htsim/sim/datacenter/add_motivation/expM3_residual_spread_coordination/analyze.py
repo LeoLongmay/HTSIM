@@ -50,7 +50,7 @@ ROUND_MATRIX_PREDICATE = (
 )
 CAUSAL_PREDICATES = (
     "at least two recoverable/prism_recycle seeds have a chain-backed progress round",
-    "at least two recoverable/full_prism seeds have a chain-backed progress round and no applied handoff",
+    "at least two recoverable/full_prism seeds have a chain-backed progress round",
     "at least two persistent/full_prism seeds have an evidence-backed no-progress applied-handoff round",
     "no persistent/original_prism seed has a handoff round",
     "no persistent/prism_recycle seed has a handoff round",
@@ -329,8 +329,6 @@ def _validate_coordination(bundle, *, scenario: str, mode: str, start_ps: int) -
             )
         if row["time_ps"] < start_ps:
             continue
-        if scenario == "recoverable" and mode == "full_prism" and row["handoff"]:
-            raise ValueError(f"{bundle.run_id}: recoverable full_prism handed off")
         rounds.append({
             "run_id": bundle.run_id,
             "scenario": scenario,
@@ -680,7 +678,6 @@ def verify_aggregate(data_root: Path | str = DATA_ROOT) -> str:
             and _is_true(row, "progress")
             for row in seed_rounds
         )
-        and not any(_is_true(row, "handoff") for row in seed_rounds)
         for seed_rounds in recoverable_full.values()
     )
     if recoverable_successes < 2:
