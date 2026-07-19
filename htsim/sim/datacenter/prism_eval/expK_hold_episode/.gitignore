@@ -1,0 +1,5 @@
+data/
+figs/*.pdf
+figs/*.png
+__pycache__/
+*.py[cod]

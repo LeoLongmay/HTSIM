@@ -1586,6 +1586,22 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         }
     }
 
+    {
+        static std::ofstream* prism_hold_trace = [](){
+            const char* p = getenv("PRISM_HOLD_TRACE");
+            return (p && *p) ? new std::ofstream(p) : nullptr;
+        }();
+        if (prism_hold_trace) {
+            (*prism_hold_trace) << (uint64_t)timeAsNs(eventlist().now()) << ',' << flowId() << ','
+                                << (_prism_genuine_sample ? 1 : 0) << ','
+                                << (uint64_t)timeAsNs(_prism_genuine_sample ? delay : 0) << ','
+                                << (uint64_t)timeAsNs(_base_rtt) << ','
+                                << (pkt.ecn_echo() ? 1 : 0) << ','
+                                << newly_recvd_bytes << ',' << _cwnd << '\n';
+            prism_hold_trace->flush();
+        }
+    }
+
     const std::optional<simtime_picosec> laps_one_way_delay =
         pkt.lapsDelayValid() && pkt.lapsOneWayDelay() != 0
             ? std::optional<simtime_picosec>(pkt.lapsOneWayDelay())
