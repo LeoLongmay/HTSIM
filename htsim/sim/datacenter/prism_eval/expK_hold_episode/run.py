@@ -15,6 +15,9 @@ from pathlib import Path
 SEEDS = (13, 14, 15)
 T_CC_US = 14
 T_SPRAY_US = 14
+PATHS = 8
+MTU = 4150
+NODES = 128
 
 HERE = Path(__file__).resolve().parent
 COMMON = HERE.parent / "common"
@@ -102,6 +105,9 @@ def write_manifest(case: Case, output_dir: Path) -> Path:
     manifest = {
         "schema_version": 1,
         **asdict(case),
+        "paths": PATHS,
+        "mtu": MTU,
+        "nodes": NODES,
         "tag": tag,
         "outputs": {
             "epoch": f"{tag}.epoch.csv",
@@ -114,22 +120,33 @@ def write_manifest(case: Case, output_dir: Path) -> Path:
     return path
 
 
-def run_case(case: Case, output_dir: Path, workloads: dict[str, Path]) -> None:
+def fixed_run_environment(case: Case, output_dir: Path) -> dict[str, str]:
+    """Return the complete runner environment for one locked case."""
     tag = case_tag(case)
     extra_args = ["-target_q_delay", str(case.t_cc_us)]
     if case.disable_trim:
         extra_args.insert(0, "-disable_trim")
 
     env = os.environ.copy()
+    for name in ("TQD", "MTU", "NODES", "KEEPDAT", "PRISM_PATHRTT", "PRISM_LOSS"):
+        env.pop(name, None)
     env.update(
         {
-            "PATHS": "8",
+            "PATHS": str(PATHS),
             "END_MS": str(case.end_ms),
+            "MTU": str(MTU),
+            "NODES": str(NODES),
             "EXTRA_ARGS": " ".join(extra_args),
             "PRISM_EPOCH": str(output_dir / f"{tag}.epoch.csv"),
             "PRISM_HOLD_TRACE": str(output_dir / f"{tag}.hold.csv"),
         }
     )
+    return env
+
+
+def run_case(case: Case, output_dir: Path, workloads: dict[str, Path]) -> None:
+    tag = case_tag(case)
+    env = fixed_run_environment(case, output_dir)
     subprocess.run(
         [
             "bash",

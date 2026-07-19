@@ -11,10 +11,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from run import case_tag, locked_cases
+
 
 HOLD_REGION = 1
 SUMMARY_FIELDS = (
     "scenario",
+    "episodes",
+    "complete",
+    "incomplete",
+    "recovered",
+    "ineffective",
+    "mixed",
+)
+SEED_SUMMARY_FIELDS = (
+    "scenario",
+    "seed",
     "episodes",
     "complete",
     "incomplete",
@@ -246,7 +258,23 @@ def extract_episodes(manifest: dict, epochs: list[Epoch], acks: list[Ack]) -> li
     return rows
 
 
-def write_aggregate(rows: list[dict], output_dir: Path) -> None:
+def _summary_row(scenario: str, seed: int | None, rows: list[dict]) -> dict:
+    outcomes = [row["outcome"] for row in rows]
+    result = {
+        "scenario": scenario,
+        "episodes": len(rows),
+        "complete": sum(row["status"] == "complete" for row in rows),
+        "incomplete": sum(row["status"] == "incomplete" for row in rows),
+        "recovered": outcomes.count("recovered"),
+        "ineffective": outcomes.count("ineffective"),
+        "mixed": outcomes.count("mixed"),
+    }
+    if seed is not None:
+        result["seed"] = seed
+    return result
+
+
+def write_aggregate(rows: list[dict], output_dir: Path, expected_cases: tuple[tuple[str, int], ...]) -> None:
     """Write stable per-episode rows and scenario-level outcome counts."""
     output_dir.mkdir(parents=True, exist_ok=True)
     extra_fields = sorted({key for row in rows for key in row} - set(EPISODE_FIELDS))
@@ -255,22 +283,26 @@ def write_aggregate(rows: list[dict], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
 
-    scenarios = sorted({row["scenario"] for row in rows})
+    coordinates = tuple(sorted(expected_cases))
+    if len(coordinates) != len(set(coordinates)):
+        raise ValueError("expected cases must not contain duplicate scenario/seed coordinates")
+    scenarios = sorted({scenario for scenario, _ in coordinates})
     with (output_dir / "scenario_summary.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=SUMMARY_FIELDS)
         writer.writeheader()
         for scenario in scenarios:
             scenario_rows = [row for row in rows if row["scenario"] == scenario]
-            outcomes = [row["outcome"] for row in scenario_rows]
-            writer.writerow({
-                "scenario": scenario,
-                "episodes": len(scenario_rows),
-                "complete": sum(row["status"] == "complete" for row in scenario_rows),
-                "incomplete": sum(row["status"] == "incomplete" for row in scenario_rows),
-                "recovered": outcomes.count("recovered"),
-                "ineffective": outcomes.count("ineffective"),
-                "mixed": outcomes.count("mixed"),
-            })
+            writer.writerow(_summary_row(scenario, None, scenario_rows))
+
+    with (output_dir / "seed_summary.csv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=SEED_SUMMARY_FIELDS)
+        writer.writeheader()
+        for scenario, seed in coordinates:
+            seed_rows = [
+                row for row in rows
+                if row["scenario"] == scenario and row["seed"] == seed
+            ]
+            writer.writerow(_summary_row(scenario, seed, seed_rows))
 
 
 def _trace_path(manifest_path: Path, manifest: dict, kind: str) -> Path:
@@ -282,6 +314,14 @@ def _trace_path(manifest_path: Path, manifest: dict, kind: str) -> Path:
     return manifest_path.parent / f"{tag}.{kind}.csv"
 
 
+def expected_manifest_paths(input_dir: Path) -> list[Path]:
+    paths = [input_dir / f"{case_tag(case)}.manifest.json" for case in locked_cases()]
+    missing = [path.name for path in paths if not path.is_file()]
+    if missing:
+        raise ValueError(f"missing locked manifests: {', '.join(missing)}")
+    return paths
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
@@ -289,14 +329,15 @@ def main() -> None:
     args = parser.parse_args()
 
     rows: list[dict] = []
-    for manifest_path in sorted(args.input.glob("*.manifest.json")):
+    expected_cases = tuple((case.scenario, case.seed) for case in locked_cases())
+    for manifest_path in expected_manifest_paths(args.input):
         manifest = json.loads(manifest_path.read_text())
         rows.extend(extract_episodes(
             manifest,
             load_epochs(_trace_path(manifest_path, manifest, "epoch")),
             load_hold_acks(_trace_path(manifest_path, manifest, "hold")),
         ))
-    write_aggregate(rows, args.output)
+    write_aggregate(rows, args.output, expected_cases)
 
 
 if __name__ == "__main__":

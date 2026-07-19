@@ -94,6 +94,28 @@ def test_marks_missing_second_post_window_incomplete(tmp_path):
     assert row["outcome"] == "incomplete"
 
 
+def test_complete_episode_without_valid_delay_samples_is_mixed(tmp_path):
+    epochs, acks = _load(
+        tmp_path,
+        [
+            (100, 7, 100, 5, 20, 0, 1000, 1, 0),
+            (200, 7, 100, 5, 20, 1, 1000, 1, 0),
+        ],
+        [
+            (150, 7, 0, 0, 100, 0, 1, 1000),
+            (250, 7, 0, 0, 100, 0, 1, 1000),
+            (350, 7, 0, 0, 100, 0, 1, 1000),
+            (400, 7, 0, 0, 100, 0, 1, 1000),
+        ],
+    )
+
+    row = analyze.extract_episodes(_manifest(), epochs, acks)[0]
+
+    assert row["status"] == "complete"
+    assert row["missing_delay_support"] == 1
+    assert row["outcome"] == "mixed"
+
+
 def test_assigns_recovered_ineffective_and_mixed_without_threshold_fit(tmp_path):
     epochs = []
     acks = []
@@ -145,23 +167,66 @@ def test_parsers_are_strict_and_sort_by_flow_and_time(tmp_path):
 
 def test_write_aggregate_emits_episode_and_scenario_csvs(tmp_path):
     rows = [
-        {"scenario": "f0", "status": "complete", "outcome": "recovered", "entry_time_ns": 200},
-        {"scenario": "f0", "status": "incomplete", "outcome": "incomplete", "entry_time_ns": 400},
+        {"scenario": "f0", "seed": 13, "status": "complete", "outcome": "recovered", "entry_time_ns": 200},
+        {"scenario": "f0", "seed": 13, "status": "incomplete", "outcome": "incomplete", "entry_time_ns": 400},
     ]
 
-    analyze.write_aggregate(rows, tmp_path)
+    analyze.write_aggregate(rows, tmp_path, (("f0", 13), ("incast", 13)))
 
     with (tmp_path / "episode_rows.csv").open(newline="") as stream:
         episode_rows = list(csv.DictReader(stream))
     with (tmp_path / "scenario_summary.csv").open(newline="") as stream:
         summary_rows = list(csv.DictReader(stream))
     assert [row["outcome"] for row in episode_rows] == ["recovered", "incomplete"]
-    assert summary_rows == [{
-        "scenario": "f0",
-        "episodes": "2",
-        "complete": "1",
-        "incomplete": "1",
-        "recovered": "1",
-        "ineffective": "0",
-        "mixed": "0",
-    }]
+    assert summary_rows == [
+        {
+            "scenario": "f0",
+            "episodes": "2",
+            "complete": "1",
+            "incomplete": "1",
+            "recovered": "1",
+            "ineffective": "0",
+            "mixed": "0",
+        },
+        {
+            "scenario": "incast",
+            "episodes": "0",
+            "complete": "0",
+            "incomplete": "0",
+            "recovered": "0",
+            "ineffective": "0",
+            "mixed": "0",
+        },
+    ]
+
+    with (tmp_path / "seed_summary.csv").open(newline="") as stream:
+        seed_rows = list(csv.DictReader(stream))
+    assert seed_rows == [
+        {
+            "scenario": "f0", "seed": "13", "episodes": "2", "complete": "1",
+            "incomplete": "1", "recovered": "1", "ineffective": "0", "mixed": "0",
+        },
+        {
+            "scenario": "incast", "seed": "13", "episodes": "0", "complete": "0",
+            "incomplete": "0", "recovered": "0", "ineffective": "0", "mixed": "0",
+        },
+    ]
+
+
+def test_expected_manifest_paths_ignore_stale_and_require_every_locked_case(tmp_path, monkeypatch):
+    class FakeCase:
+        def __init__(self, scenario, seed):
+            self.scenario = scenario
+            self.seed = seed
+
+    monkeypatch.setattr(analyze, "locked_cases", lambda: (FakeCase("f0", 13),))
+    monkeypatch.setattr(analyze, "case_tag", lambda case: f"hold_{case.scenario}_s{case.seed}")
+    expected = tmp_path / "hold_f0_s13.manifest.json"
+    expected.write_text("{}")
+    (tmp_path / "stale.manifest.json").write_text("{}")
+
+    assert analyze.expected_manifest_paths(tmp_path) == [expected]
+
+    expected.unlink()
+    with pytest.raises(ValueError, match="missing locked manifests"):
+        analyze.expected_manifest_paths(tmp_path)
