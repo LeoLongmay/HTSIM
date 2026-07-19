@@ -5,10 +5,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from htsim.sim.datacenter.add_motivation.expM4_performance_ablation import run
+from htsim.sim.datacenter.add_motivation.expM4_performance_ablation import gen_workload, run
 
 
 class RunnerTests(unittest.TestCase):
+    def test_workload_matches_m3_pair_mapping_for_seed_13(self):
+        flows = gen_workload.generate_workload(foreground_flows=6, seed=13)
+
+        self.assertEqual(
+            [(flow.src, flow.dst) for flow in flows],
+            [(39, 9), (49, 8), (53, 6), (103, 4), (118, 15), (124, 0)],
+        )
+        self.assertTrue(all(flow.size_bytes == 32_000_000 for flow in flows))
+
     def test_fixed_matrices_have_locked_case_counts(self):
         formal = run.cases_for_phase("formal")
         smoke = run.cases_for_phase("smoke")
@@ -120,6 +129,76 @@ class RunnerTests(unittest.TestCase):
 
             self.assertEqual(mocked.call_count, 2)
 
+    def test_manifest_binds_topology_and_decoder_hashes_for_reuse(self):
+        for field in ("topology", "parse_output"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                binary, decoder = self._binaries(root)
+                topology = root / "fat_tree_128_1os.topo"
+                topology.write_text("topology", encoding="ascii")
+                calls = self._successful_subprocess(binary, decoder)
+                case = run.Case("residual_prism", "recoverable", 13)
+                changed = topology if field == "topology" else decoder
+
+                with patch.object(run, "HTSIM_UEC", binary), patch.object(run, "PARSE_OUTPUT", decoder), patch.object(
+                    run, "TOPOLOGY", topology
+                ), patch.object(run.subprocess, "run", side_effect=calls) as mocked:
+                    manifest_path = run.run_one(case, phase="smoke", output_root=root / "smoke")
+                    manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+                    self.assertIn(field, manifest)
+                    self.assertIn("sha256", manifest[field])
+                    changed.write_bytes(b"changed input")
+                    with self.assertRaisesRegex(ValueError, f"identity conflicts at {field}"):
+                        run.run_one(case, phase="smoke", output_root=root / "smoke")
+
+                self.assertEqual(mocked.call_count, 2)
+
+    def test_runner_rejects_invalid_decoded_flow_records(self):
+        invalid_logs = {
+            "missing_finish": self._flow_events(6, finishes=5),
+            "mismatched_key": self._flow_events(6, finish_ids=(1, 2, 3, 4, 5, 7)),
+            "duplicate_start": self._flow_events(6) + [
+                "0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 32000000\n"
+            ],
+            "wrong_finish_bytes": self._flow_events(6, bytes_by_id={1: 31_999_999}),
+            "finish_before_start": self._flow_events(6, finish_times={1: "-0.000000001"}),
+        }
+        for name, flow_lines in invalid_logs.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                binary, decoder = self._binaries(root)
+                calls = self._subprocess_with_flow_lines(binary, decoder, flow_lines)
+
+                with patch.object(run, "HTSIM_UEC", binary), patch.object(run, "PARSE_OUTPUT", decoder), patch.object(
+                    run.subprocess, "run", side_effect=calls
+                ), self.assertRaisesRegex(RuntimeError, "flow log"):
+                    run.run_one(
+                        run.Case("reps_nscc", "recoverable", 13),
+                        phase="smoke",
+                        output_root=root / "smoke",
+                    )
+
+    def test_reuse_rejects_invalid_existing_flow_content_without_subprocess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary, decoder = self._binaries(root)
+            calls = self._successful_subprocess(binary, decoder)
+            case = run.Case("residual_prism", "recoverable", 13)
+            output = root / "smoke"
+
+            with patch.object(run, "HTSIM_UEC", binary), patch.object(run, "PARSE_OUTPUT", decoder), patch.object(
+                run.subprocess, "run", side_effect=calls
+            ) as mocked:
+                run.run_one(case, phase="smoke", output_root=output)
+                (output / "smoke_residual_prism_recoverable_s13.flow.txt").write_text(
+                    "0 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 32000000\n",
+                    encoding="ascii",
+                )
+                with self.assertRaisesRegex(ValueError, "existing flow output"):
+                    run.run_one(case, phase="smoke", output_root=output)
+
+            self.assertEqual(mocked.call_count, 2)
+
     def test_conflicting_manifest_is_rejected_without_subprocess(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "smoke"
@@ -148,14 +227,43 @@ class RunnerTests(unittest.TestCase):
 
     @staticmethod
     def _successful_subprocess(binary, decoder):
+        return RunnerTests._subprocess_with_flow_lines(binary, decoder, None)
+
+    @staticmethod
+    def _subprocess_with_flow_lines(binary, decoder, flow_lines):
+        decoded_lines_by_dat = {}
+
         def invoke(argv, **kwargs):
             if argv[0] == str(binary):
                 output = Path(argv[argv.index("-o") + 1])
                 output.write_bytes(b"dat")
+                connections = int(next(
+                    line.split()[1]
+                    for line in Path(argv[argv.index("-tm") + 1]).read_text(encoding="ascii").splitlines()
+                    if line.startswith("Connections ")
+                ))
+                decoded_lines_by_dat[str(output)] = flow_lines or RunnerTests._flow_events(connections)
             elif argv[0] == str(decoder):
-                kwargs["stdout"].write("0.000000001 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 32000000\n")
+                kwargs["stdout"].writelines(decoded_lines_by_dat[str(Path(argv[1]))])
             else:
                 raise AssertionError(f"unexpected subprocess: {argv}")
             return subprocess.CompletedProcess(argv, 0)
 
         return invoke
+
+    @staticmethod
+    def _flow_events(count, *, finishes=None, finish_ids=None, bytes_by_id=None, finish_times=None):
+        finishes = count if finishes is None else finishes
+        finish_ids = tuple(range(1, finishes + 1)) if finish_ids is None else finish_ids
+        bytes_by_id = bytes_by_id or {}
+        finish_times = finish_times or {}
+        starts = [
+            f"0.000000000 Type FLOW_EVENT SrcID {flow_id} Ev START FlowID {flow_id} Flowsize 32000000\n"
+            for flow_id in range(1, count + 1)
+        ]
+        completed = [
+            f"{finish_times.get(flow_id, '0.001000000')} Type FLOW_EVENT SrcID {flow_id} Ev FINISH "
+            f"FlowID {flow_id} Bytes {bytes_by_id.get(flow_id, 32_000_000)} Pkts 1\n"
+            for flow_id in finish_ids
+        ]
+        return starts + completed

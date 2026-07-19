@@ -36,9 +36,10 @@ def generate_workload(*, foreground_flows: int, seed: int) -> tuple[ForegroundFl
     rng = random.Random(seed)
     sources = rng.sample(source_hosts, foreground_flows)
     rng.shuffle(target_hosts)
+    pairs = sorted((src, target_hosts[index % HOSTS_PER_POD]) for index, src in enumerate(sources))
     return tuple(
-        ForegroundFlow(src=src, dst=target_hosts[index % HOSTS_PER_POD], flow_id=index + 1)
-        for index, src in enumerate(sorted(sources))
+        ForegroundFlow(src=src, dst=dst, flow_id=index)
+        for index, (src, dst) in enumerate(pairs, start=1)
     )
 
 
