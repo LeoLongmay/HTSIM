@@ -336,17 +336,22 @@ void strict_laps_retransmission_keeps_the_original_pid_and_path(EventList& event
     assert(source._laps_rtx_routes.empty());
 }
 
-void strict_laps_control_retransmission_keeps_legacy_selection(EventList& eventlist) {
+void legacy_retransmission_never_consults_laps_replay_state(EventList& eventlist) {
     setStrictGlobals();
-    UecNIC nic(8, eventlist, speedFromGbps(100), 1);
-    UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(2, false, 1.0), nic, 1);
+    UecNIC nic(9, eventlist, speedFromGbps(100), 1);
+    UecSrc source(nullptr, eventlist, std::make_unique<UecMpEcmp>(1, false), nic, 1);
+    assert(!source.isStrictLaps());
 
-    source.queueForRtx(80, UecBasePacket::get_ack_size());
-    const UecSrc::RtxPathSelection selection = source.selectRtxPath(80);
+    const uint16_t saved_mss = UecSrc::_mss;
+    UecSrc::_mss = 1'500;
+    source._cwnd = 1'500;
+    source._laps_rtx_routes.emplace(81, UecSrc::LapsRtxRoute{99, {}, LapsPathKey("inert")});
+    const UecSrc::RtxPathSelection selection = source.selectRtxPath(81);
+    assert(selection.entropy == 0);
     assert(!selection.strict_laps_path.has_value());
-    assert(source._laps_rtx_routes.empty());
-    source._rtx_queue.clear();
-    source._rtx_backlog = 0;
+    assert(source._laps_rtx_routes.count(81) == 1);
+    source._laps_rtx_routes.clear();
+    UecSrc::_mss = saved_mss;
 }
 
 void unpaired_laps_preserves_legacy_uec_behavior(EventList& eventlist) {
@@ -383,7 +388,7 @@ int main() {
     assert(EventList::getPendingSources().empty());
     strict_laps_retransmission_keeps_the_original_pid_and_path(eventlist);
     assert(EventList::getPendingSources().empty());
-    strict_laps_control_retransmission_keeps_legacy_selection(eventlist);
+    legacy_retransmission_never_consults_laps_replay_state(eventlist);
     assert(EventList::getPendingSources().empty());
     unpaired_laps_preserves_legacy_uec_behavior(eventlist);
     assert(EventList::getPendingSources().empty());

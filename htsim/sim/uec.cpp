@@ -3697,13 +3697,13 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
 }
 
 UecSrc::RtxPathSelection UecSrc::selectRtxPath(UecDataPacket::seq_t seqno) {
-    const auto replay = _laps_rtx_routes.find(seqno);
-    if (replay != _laps_rtx_routes.end()) {
-        assert(isStrictLaps());
-        return {replay->second.path_id, replay->second.selection, replay->second.path};
+    if (!isStrictLaps()) {
+        const uint32_t entropy = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd / _mss);
+        return {entropy, _mp->lastSelection(), std::nullopt};
     }
-    const uint32_t entropy = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd / _mss);
-    return {entropy, _mp->lastSelection(), std::nullopt};
+    const auto replay = _laps_rtx_routes.find(seqno);
+    assert(replay != _laps_rtx_routes.end());
+    return {replay->second.path_id, replay->second.selection, replay->second.path};
 }
 
 mem_b UecSrc::sendRtxPacket(const Route& route) {
