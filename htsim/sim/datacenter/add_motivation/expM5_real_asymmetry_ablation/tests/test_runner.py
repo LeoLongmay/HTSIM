@@ -121,6 +121,22 @@ class M5RunnerTests(unittest.TestCase):
             ), self.assertRaisesRegex(RuntimeError, "flow output"):
                 run.run_one(run.Case("reps_nscc", 4, 13), phase="smoke", output_root=root / "smoke")
 
+    def test_runner_rejects_duplicate_start_and_finish_events(self):
+        duplicates = {
+            "start": "0.000001000 Type FLOW_EVENT SrcID 1001 Ev START FlowID 2001 Flowsize 2000000\n",
+            "finish": "0.001001000 Type FLOW_EVENT SrcID 1001 Ev FINISH FlowID 2001 Bytes 2000000 Pkts 1\n",
+        }
+        for name, duplicate in duplicates.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                inputs = self._inputs(root)
+                with self._patched_inputs(inputs), patch.object(
+                    run.subprocess,
+                    "run",
+                    side_effect=self._run_lib_with(self._flow_text() + duplicate, self._idmap_text()),
+                ), self.assertRaisesRegex(RuntimeError, "duplicate"):
+                    run.run_one(run.Case("reps_nscc", 4, 13), phase="smoke", output_root=root / "smoke")
+
     @staticmethod
     def _inputs(root: Path) -> dict[str, Path]:
         topology = root / "fat_tree_128_1os.topo"

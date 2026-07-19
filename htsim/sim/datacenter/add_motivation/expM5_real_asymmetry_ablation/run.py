@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Sequence
 
@@ -20,7 +21,7 @@ DATACENTER = HERE.parents[1]
 PRISM_EVAL_COMMON = DATACENTER / "prism_eval" / "common"
 if str(PRISM_EVAL_COMMON) not in sys.path:
     sys.path.insert(0, str(PRISM_EVAL_COMMON))
-from metrics import fct_stats, parse_flow_events  # noqa: E402
+from metrics import fct_stats  # noqa: E402
 
 
 SCHEMA = "m5_real_asymmetry_ablation_runner"
@@ -186,23 +187,67 @@ def _load_uec_idmap(path: Path) -> dict[int, tuple[int, int]]:
     return idmap
 
 
-def _flow_event_keys(path: Path) -> set[tuple[int, int]]:
+def _flow_event_number(tokens: list[str], name: str) -> int:
+    positions = [index for index, token in enumerate(tokens[:-1]) if token == name]
+    if len(positions) != 1:
+        raise ValueError(f"missing or duplicate {name}")
+    try:
+        return int(tokens[positions[0] + 1])
+    except ValueError as exc:
+        raise ValueError(f"invalid {name}") from exc
+
+
+def _parse_flow_event(line: str) -> tuple[tuple[int, int], str, Decimal]:
+    fields = line.split()
+    if (
+        len(fields) < 11
+        or fields[1:4] != ["Type", "FLOW_EVENT", "SrcID"]
+        or fields[5:6] != ["Ev"]
+        or fields[7:8] != ["FlowID"]
+    ):
+        raise ValueError("malformed FLOW_EVENT")
+    try:
+        event_time = Decimal(fields[0])
+        src_id = int(fields[4])
+        flow_id = int(fields[8])
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("invalid FLOW_EVENT time or ID") from exc
+    if not event_time.is_finite() or src_id < 0 or flow_id < 0:
+        raise ValueError("invalid FLOW_EVENT time or ID")
+    event = fields[6]
+    if event == "START":
+        if _flow_event_number(fields[9:], "Flowsize") != FLOW_SIZE_BYTES:
+            raise ValueError("START has an unexpected flow size")
+    elif event == "FINISH":
+        if _flow_event_number(fields[9:], "Bytes") != FLOW_SIZE_BYTES:
+            raise ValueError("FINISH has an unexpected byte count")
+    else:
+        raise ValueError("unknown FLOW_EVENT type")
+    return (src_id, flow_id), event, event_time
+
+
+def _scan_flow_events(path: Path) -> set[tuple[int, int]]:
     try:
         lines = path.read_text(encoding="ascii").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
         raise ValueError("unreadable flow output") from exc
-    keys = set()
+    starts: dict[tuple[int, int], Decimal] = {}
+    finishes: dict[tuple[int, int], Decimal] = {}
     for line in lines:
-        fields = line.split()
-        if "FLOW_EVENT" not in fields:
+        if "FLOW_EVENT" not in line:
             continue
-        try:
-            src_id = int(fields[fields.index("SrcID") + 1])
-            flow_id = int(fields[fields.index("FlowID") + 1])
-        except (ValueError, IndexError) as exc:
-            raise ValueError("malformed FLOW_EVENT") from exc
-        keys.add((src_id, flow_id))
-    return keys
+        event_key, event, event_time = _parse_flow_event(line)
+        events = starts if event == "START" else finishes
+        if event_key in events:
+            raise ValueError(f"duplicate {event} FLOW_EVENT")
+        events[event_key] = event_time
+    if len(starts) != FLOW_COUNT or len(finishes) != FLOW_COUNT:
+        raise ValueError("incomplete flow output")
+    if starts.keys() != finishes.keys():
+        raise ValueError("START and FINISH event keys differ")
+    if any(finishes[event_key] < start_time for event_key, start_time in starts.items()):
+        raise ValueError("FINISH precedes START")
+    return set(starts)
 
 
 def _expected_workload_endpoints() -> set[tuple[int, int]]:
@@ -259,25 +304,17 @@ def _manifest_event_bindings(value: object) -> dict[tuple[int, int], tuple[int, 
 
 
 def _validate_flow(path: Path, idmap_path: Path) -> dict[tuple[int, int], tuple[int, int]]:
+    event_keys = _scan_flow_events(path)
     try:
-        starts, finishes = parse_flow_events(path)
         stats = fct_stats(path)
     except (OSError, ValueError, IndexError) as exc:
         raise ValueError("unreadable flow output") from exc
     if (
-        len(starts) != FLOW_COUNT
-        or len(finishes) != FLOW_COUNT
-        or starts.keys() != finishes.keys()
-        or stats["total_started"] != FLOW_COUNT
+        stats["total_started"] != FLOW_COUNT
         or stats["completed"] != FLOW_COUNT
         or stats["completion_rate"] != 1.0
     ):
         raise ValueError("incomplete flow output")
-    if any(nbytes != FLOW_SIZE_BYTES for _, nbytes in finishes.values()):
-        raise ValueError("flow output has an unexpected completion size")
-    event_keys = _flow_event_keys(path)
-    if event_keys != starts.keys():
-        raise ValueError("FLOW_EVENT keys differ from completed flows")
     return _flow_event_bindings(event_keys, _load_uec_idmap(idmap_path))
 
 
