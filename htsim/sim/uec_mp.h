@@ -121,6 +121,7 @@ private:
 class UecMpLaps : public UecMultipath {
 public:
     UecMpLaps(uint16_t no_of_paths, bool debug, double beta);
+    static double softmaxDelayInPaperUnits(simtime_picosec delay);
     void processEv(uint32_t path_id, PathFeedback feedback) override;
     uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) override;
     void observeLapsDelay(uint32_t path_id, simtime_picosec delay,

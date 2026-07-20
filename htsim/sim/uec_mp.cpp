@@ -44,6 +44,12 @@ UecMpLaps::UecMpLaps(uint16_t no_of_paths, bool debug, double beta)
     }
 }
 
+double UecMpLaps::softmaxDelayInPaperUnits(simtime_picosec delay) {
+    // LAPS INT timestamps and measured path latency are represented in
+    // microseconds in the paper; HTSIM stores time internally in picoseconds.
+    return static_cast<double>(delay) / static_cast<double>(timeFromUs(uint32_t{1}));
+}
+
 void UecMpLaps::processEv(uint32_t path_id, PathFeedback feedback) {
     return;
 }
@@ -140,7 +146,7 @@ optional<uint16_t> UecMpLaps::nextLapsPid() {
         if (!state.valid || state.probe_pending) continue;
         has_selectable_path = true;
         common_exponent = std::max(common_exponent,
-                                   -_beta * static_cast<double>(state.real_val));
+                                   -_beta * softmaxDelayInPaperUnits(state.real_val));
     }
     if (!has_selectable_path) {
         return {};
@@ -151,7 +157,7 @@ optional<uint16_t> UecMpLaps::nextLapsPid() {
     for (uint32_t path_id = 0; path_id != _no_of_paths; ++path_id) {
         const LapsPathState& state = _paths[path_id];
         if (!state.valid || state.probe_pending) continue;
-        weights[path_id] = std::exp(-_beta * static_cast<double>(state.real_val) -
+        weights[path_id] = std::exp(-_beta * softmaxDelayInPaperUnits(state.real_val) -
                                     common_exponent);
         total_weight += weights[path_id];
     }

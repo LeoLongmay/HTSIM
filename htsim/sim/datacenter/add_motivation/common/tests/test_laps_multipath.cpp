@@ -1,6 +1,7 @@
 #include "uec_mp.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstdlib>
 #include <stdexcept>
 
@@ -181,6 +182,15 @@ void rejects_non_power_of_two_path_count() {
     assert(rejected);
 }
 
+void softmax_uses_paper_microseconds() {
+    const double one = UecMpLaps::softmaxDelayInPaperUnits(timeFromUs(uint32_t{1}));
+    const double next = UecMpLaps::softmaxDelayInPaperUnits(
+        timeFromUs(uint32_t{1}) + timeFromNs(uint32_t{1}));
+    assert(one == 1.0);
+    assert(next > 1.0 && next < 1.01);
+    assert(std::exp(-(next - one)) > 0.99);
+}
+
 }  // namespace
 
 int main() {
@@ -194,4 +204,5 @@ int main() {
     path_after_stale_timeout_is_probed();
     stale_samples_block_all_path_high_until_refreshed();
     rejects_non_power_of_two_path_count();
+    softmax_uses_paper_microseconds();
 }
