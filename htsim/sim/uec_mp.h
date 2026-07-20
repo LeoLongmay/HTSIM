@@ -128,7 +128,10 @@ public:
     void observeLapsProbe(uint32_t path_id, simtime_picosec delay,
                           simtime_picosec now) override;
     void configurePaths(std::vector<simtime_picosec> base_vals);
-    uint16_t nextLapsPid();
+    // Empty means every PID is awaiting an active-probe ACK and therefore has
+    // zero Softmax weight.  Callers must wait instead of sending data.
+    optional<uint16_t> nextLapsPid();
+    optional<uint32_t> nextLapsEntropy();
     optional<uint16_t> nextLapsProbePid(simtime_picosec now);
     optional<simtime_picosec> nextLapsDeadline(simtime_picosec now) const;
     bool pathIsSelectable(uint16_t pid) const;

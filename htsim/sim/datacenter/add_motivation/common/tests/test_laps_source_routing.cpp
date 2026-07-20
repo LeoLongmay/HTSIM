@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "config.h"
+#include "pipe.h"
 #define private public
 #include "uec.h"
 #undef private
@@ -12,9 +13,10 @@ namespace {
 
 EventList eventlist;
 
-class CapturingSink final : public PacketSink {
+class CapturingSink final : public Pipe {
 public:
-    explicit CapturingSink(std::string name) : name_(std::move(name)) {}
+    explicit CapturingSink(std::string name)
+        : Pipe(timeFromUs(uint32_t{1}), EventList::getTheEventList()), name_(std::move(name)) {}
 
     void receivePacket(Packet& pkt) override { packets.push_back(&pkt); }
     const std::string& nodename() override { return name_; }
@@ -120,6 +122,44 @@ void strict_laps_data_and_rtx_use_catalog_forward_route() {
     assert(rtx != nullptr);
     assert(rtx->route() == f.catalog(0).entry(pid).forward);
     assert(static_cast<const UecDataPacket*>(rtx)->lapsPinnedRoute());
+}
+
+void strict_laps_waits_for_probe_ack_when_every_pid_is_pending() {
+    StrictLapsFixture f;
+    auto* laps = dynamic_cast<UecMpLaps*>(f.source._mp.get());
+    assert(laps != nullptr);
+    for (auto& state : laps->_paths) {
+        state.probe_pending = true;
+    }
+
+    f.source._cwnd = 0;
+    f.source._backlog = 1'500;
+    assert(f.source.sendNewPacket(f.forwardFib(0)) == 0);
+    assert(f.source._backlog == 1'500);
+    assert(f.source._in_flight == 0);
+    assert(f.source._tx_bitmap.empty());
+}
+
+void strict_laps_pacer_not_sender_cwnd_admits_data() {
+    StrictLapsFixture f;
+    f.source._cwnd = 0;
+    f.source._backlog = 1'500;
+
+    // The strict LAPS sender is paced by its LAPS rate; inherited UEC cwnd
+    // admission must not prevent the NIC from starting this packet.
+    f.source.sendIfPermitted();
+    assert(f.source._stats.new_pkts_sent == 1);
+}
+
+void strict_laps_pacer_not_sender_cwnd_admits_retransmission() {
+    StrictLapsFixture f;
+    f.source._cwnd = 0;
+    f.source._rtx_queue.emplace(7, 1'500);
+    f.source._rtx_backlog = 1'500;
+
+    f.source.sendIfPermitted();
+    assert(f.source._stats.rtx_pkts_sent == 1);
+    assert(f.source._tx_bitmap.count(7) == 1);
 }
 
 void strict_laps_recovery_replays_original_plane_when_other_port_is_free() {
@@ -230,6 +270,9 @@ void pooled_non_laps_control_cannot_keep_a_pinned_route() {
 
 int main() {
     strict_laps_data_and_rtx_use_catalog_forward_route();
+    strict_laps_waits_for_probe_ack_when_every_pid_is_pending();
+    strict_laps_pacer_not_sender_cwnd_admits_data();
+    strict_laps_pacer_not_sender_cwnd_admits_retransmission();
     strict_laps_recovery_replays_original_plane_when_other_port_is_free();
     strict_laps_ack_and_probe_ack_use_catalog_reverse_route();
     pooled_packet_clears_laps_metadata();

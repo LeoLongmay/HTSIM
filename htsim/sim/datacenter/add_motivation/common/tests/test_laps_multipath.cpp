@@ -90,6 +90,21 @@ void stale_pid_has_zero_weight_until_probe_ack() {
     assert(laps.pathIsSelectable(0));
 }
 
+void all_pending_pids_produce_no_data_selection() {
+    UecMpLaps laps(4, false, 8.0);
+    laps.configurePaths({100, 100, 100, 100});
+    for (uint16_t pid = 0; pid < 4; ++pid) {
+        laps.observeLapsDelay(pid, 100, 0);
+        const auto probe = laps.nextLapsProbePid(201);
+        assert(probe.has_value());
+        assert(*probe == pid);
+    }
+
+    // Paper LAPS gives active-probe PIDs zero Softmax weight.  If they are all
+    // pending, data must wait for a probe ACK rather than reusing one of them.
+    assert(!laps.nextLapsPid().has_value());
+}
+
 void multiple_stale_paths_are_probed_in_rotation() {
     UecMpLaps laps(4, false, 8.0);
     laps.configurePaths({10, 10, 10, 10});
@@ -174,6 +189,7 @@ int main() {
     catalog_base_values_calibrate_the_signal_before_traffic_observations();
     strict_all_path_high_uses_the_calibrated_target_delay();
     stale_pid_has_zero_weight_until_probe_ack();
+    all_pending_pids_produce_no_data_selection();
     multiple_stale_paths_are_probed_in_rotation();
     path_after_stale_timeout_is_probed();
     stale_samples_block_all_path_high_until_refreshed();

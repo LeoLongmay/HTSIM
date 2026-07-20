@@ -119,10 +119,14 @@ void UecMpLaps::observeLapsProbe(uint32_t path_id, simtime_picosec delay,
 }
 
 uint32_t UecMpLaps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
-    return entropyForPath(nextLapsPid());
+    const auto entropy = nextLapsEntropy();
+    if (!entropy.has_value()) {
+        throw std::logic_error("LAPS data selection requested while every PID is probe-pending");
+    }
+    return *entropy;
 }
 
-uint16_t UecMpLaps::nextLapsPid() {
+optional<uint16_t> UecMpLaps::nextLapsPid() {
     double common_exponent = -std::numeric_limits<double>::infinity();
     bool has_selectable_path = false;
     for (const LapsPathState& state : _paths) {
@@ -132,7 +136,7 @@ uint16_t UecMpLaps::nextLapsPid() {
                                    -_beta * static_cast<double>(state.real_val));
     }
     if (!has_selectable_path) {
-        return static_cast<uint16_t>(_bootstrap_path++ & (_no_of_paths - 1));
+        return {};
     }
 
     vector<double> weights(_no_of_paths, 0.0);
@@ -157,7 +161,12 @@ uint16_t UecMpLaps::nextLapsPid() {
     for (uint16_t pid = _no_of_paths; pid != 0; --pid) {
         if (pathIsSelectable(pid - 1)) return pid - 1;
     }
-    return 0;
+    return {};
+}
+
+optional<uint32_t> UecMpLaps::nextLapsEntropy() {
+    const auto pid = nextLapsPid();
+    return pid.has_value() ? optional<uint32_t>(entropyForPath(*pid)) : optional<uint32_t>{};
 }
 
 optional<uint16_t> UecMpLaps::nextLapsProbePid(simtime_picosec now) {

@@ -3579,7 +3579,7 @@ void UecSrc::sendIfPermitted() {
 
     //cout << timeAsUs(eventlist().now()) << " " << nodename() << " FOO " << _cwnd << " " << _in_flight << endl;                                                  
     mem_b next_packet_size = getNextPacketSize();        
-    if (_sender_based_cc) {
+    if (_sender_based_cc && !isStrictLaps()) {
         if (!can_send_NSCC(next_packet_size)) {
             return;
         }
@@ -3716,6 +3716,17 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     }
     assert(full_pkt_size <= _mtu);
 
+    optional<uint32_t> strict_laps_entropy;
+    if (isStrictLaps()) {
+        auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+        if (!laps) throw logic_error("strict LAPS has no LAPS multipath state");
+        strict_laps_entropy = laps->nextLapsEntropy();
+        if (!strict_laps_entropy.has_value()) {
+            scheduleLapsProbe();
+            return 0;
+        }
+    }
+
     // check we're allowed to send according to state machine
     if (_receiver_based_cc)
         assert(credit() > 0);
@@ -3731,7 +3742,9 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     }
     _pull_target = computePullTarget();
 
-    uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    uint32_t ev = strict_laps_entropy.has_value()
+                      ? *strict_laps_entropy
+                      : _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     const UecMpSelection selection = _mp->lastSelection();
     const Route* packet_route = &route;
     uint16_t laps_pid = 0;
@@ -3828,6 +3841,17 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     assert(!_rtx_queue.empty());
     auto seq_no = _rtx_queue.begin()->first;
     mem_b full_pkt_size = _rtx_queue.begin()->second;
+
+    optional<uint32_t> strict_laps_entropy;
+    if (isStrictLaps() && _laps_rtx_routes.find(seq_no) == _laps_rtx_routes.end()) {
+        auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+        if (!laps) throw logic_error("strict LAPS has no LAPS multipath state");
+        strict_laps_entropy = laps->nextLapsEntropy();
+        if (!strict_laps_entropy.has_value()) {
+            scheduleLapsProbe();
+            return 0;
+        }
+    }
     spendCredit(full_pkt_size);
 
     _rtx_queue.erase(_rtx_queue.begin());
@@ -3836,7 +3860,10 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     _in_flight += full_pkt_size;
     _pull_target = computePullTarget();
     
-    const RtxPathSelection selection = selectRtxPath(seq_no);
+    const RtxPathSelection selection = strict_laps_entropy.has_value()
+                                           ? RtxPathSelection{*strict_laps_entropy, {}, std::nullopt,
+                                                              std::nullopt, std::nullopt}
+                                           : selectRtxPath(seq_no);
     const uint32_t ev = selection.entropy;
     const Route* packet_route = &route;
     uint16_t laps_pid = 0;
@@ -4292,7 +4319,7 @@ void UecSrc::rtxTimerExpired() {
     // there's no queue, so maybe we could just resend now?
     queueForRtx(seqno, pkt_size);
 
-    if (_sender_based_cc) {
+    if (_sender_based_cc && !isStrictLaps()) {
         if (_cwnd < pkt_size + _in_flight) {
             // window won't allow us to send yet.
             if (_debug_src)
