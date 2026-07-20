@@ -5222,3 +5222,19 @@ void UecPullPacer::requestPull(UecSink* sink) {
         _active = true;
     }
 }
+    if (cp.src && cp.src->isStrictLaps() && p->lapsPidValid()) {
+        if (const auto audit = cp.src->lapsRouteAudit()) {
+            assert(p->type() == UECDATA);
+            audit->recordForward(cp.src->flowId(), static_cast<UecDataPacket*>(p)->epsn(),
+                                 p->lapsPid(), *p->route());
+        }
+    }
+        if (_laps_route_audit) {
+            _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
+        }
+        if (_laps_route_audit) {
+            _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
+        }
+        if (_laps_route_audit) {
+            _laps_route_audit->recordReverse(_src->flowId(), acked_psn, pid, *reverse);
+        }

@@ -268,3 +268,4 @@ add_custom_target(
   always_run ALL
   COMMAND ${CMAKE_COMMAND} -E echo "ENABLE_TESTS=${ENABLE_TESTS}"
 )
+    laps_route_audit.cpp

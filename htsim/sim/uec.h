@@ -1001,3 +1001,22 @@ class UecPullPacer : public EventSource {
 };
 
 #endif  // UEC_H
+#include "laps_route_audit.h"
+    void lapsSetRouteAudit(std::shared_ptr<LapsRouteAudit> audit) {
+        _laps_route_audit = std::move(audit);
+        if (_laps_route_audit && isStrictLaps()) {
+            for (const auto& catalog : _laps_path_catalogs)
+                if (catalog) _laps_route_audit->registerCatalog(*catalog);
+        }
+    }
+    std::shared_ptr<LapsRouteAudit> lapsRouteAudit() const { return _laps_route_audit; }
+    std::shared_ptr<LapsRouteAudit> _laps_route_audit;
+    void lapsSetRouteAudit(const UecSrc& source, std::shared_ptr<LapsRouteAudit> audit) {
+        if (!source.isStrictLaps()) return;
+        _laps_route_audit = std::move(audit);
+        if (_laps_route_audit) {
+            for (const auto& catalog : _laps_path_catalogs)
+                if (catalog) _laps_route_audit->registerCatalog(*catalog);
+        }
+    }
+    std::shared_ptr<LapsRouteAudit> _laps_route_audit;
