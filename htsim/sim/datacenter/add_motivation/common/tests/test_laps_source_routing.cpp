@@ -91,6 +91,38 @@ public:
     size_t reversePacketCount(uint32_t plane, uint16_t pid) const {
         return (plane == 0 ? plane0 : plane1).reverse_sinks.at(pid)->packets.size();
     }
+    void enableRouteAudit() {
+        route_audit = std::make_shared<LapsRouteAudit>();
+        source.lapsSetRouteAudit(route_audit);
+        sink.lapsSetRouteAudit(source, route_audit);
+    }
+    LapsRouteAudit& audit() const {
+        assert(route_audit);
+        return *route_audit;
+    }
+    void selectOnly(uint16_t pid) {
+        auto* laps = dynamic_cast<UecMpLaps*>(source._mp.get());
+        assert(laps != nullptr);
+        for (uint16_t current = 0; current < laps->_paths.size(); ++current) {
+            laps->_paths[current].valid = current == pid;
+            laps->_paths[current].probe_pending = false;
+        }
+    }
+    UecDataPacket* sendDataOnPid(uint16_t pid, uint32_t plane) {
+        selectOnly(pid);
+        source._backlog = 1'500;
+        assert(source.sendNewPacket(forwardFib(plane)) == 1'500);
+        auto* packet = const_cast<UecDataPacket*>(
+            static_cast<const UecDataPacket*>(lastForwardPacket(plane, pid)));
+        assert(packet != nullptr && packet->epsn() == source._highest_sent - 1);
+        return packet;
+    }
+    void acknowledge(UecDataPacket& data) {
+        const uint16_t pid = data.lapsPid();
+        UecAckPacket* ack = sink.sack(pid, data.epsn(), data.epsn(), false, false, &data);
+        source.processAck(*ack);
+        ack->free();
+    }
 
     UecNIC source_nic;
     UecNIC sink_nic;
@@ -102,6 +134,7 @@ private:
     Route reverse_fib[2];
     CatalogPlane plane0;
     CatalogPlane plane1;
+    std::shared_ptr<LapsRouteAudit> route_audit;
 };
 
 void strict_laps_data_and_rtx_use_catalog_forward_route() {
@@ -257,6 +290,43 @@ void strict_laps_acks_every_data_packet() {
     second->free();
 }
 
+void one_pid_drop_uses_reverse_ack_and_recovers_only_that_pid() {
+    StrictLapsFixture f;
+    f.enableRouteAudit();
+
+    // This is deliberately a fixture-only loss injection: do not deliver the
+    // first PID-0 packet.  The next PID-0 ACK must infer and recover only it.
+    UecDataPacket* dropped = f.sendDataOnPid(0, 0);
+    assert(dropped->epsn() == 0);
+    UecDataPacket* delivered_on_zero = f.sendDataOnPid(0, 0);
+    assert(delivered_on_zero->epsn() == 1);
+
+    // Keep the deterministic recovery queued so the assertion observes the
+    // exact inferred sequence before the NIC schedules it.
+    f.source._speculating = true;
+    UecSrc::_receiver_based_cc = true;
+    f.acknowledge(*delivered_on_zero);
+    UecSrc::_receiver_based_cc = false;
+    assert(f.source._rtx_queue.size() == 1);
+    assert(f.source._rtx_queue.begin()->first == dropped->epsn());
+    assert(f.source._laps_rtx_routes.at(dropped->epsn()).pid == 0);
+
+    UecDataPacket* delivered_on_one = f.sendDataOnPid(1, 1);
+    assert(delivered_on_one->epsn() == 2);
+    f.acknowledge(*delivered_on_one);
+    assert(f.source._rtx_queue.size() == 1);
+
+    // Replay the single inferred loss and prove it retained PID 0.
+    f.source._speculating = false;
+    f.selectOnly(0);
+    assert(f.source.sendRtxPacket(f.forwardFib(1)) == 1'500);
+    const Packet* retransmission = f.lastForwardPacket(0, 0);
+    assert(retransmission != nullptr);
+    assert(static_cast<const UecDataPacket*>(retransmission)->epsn() == dropped->epsn());
+    assert(static_cast<const UecDataPacket*>(retransmission)->lapsPid() == 0);
+    assert(f.audit().verify());
+}
+
 void pooled_packet_clears_laps_metadata() {
     PacketFlow flow(nullptr);
     Route route;
@@ -302,77 +372,7 @@ int main() {
     strict_laps_recovery_replays_original_plane_when_other_port_is_free();
     strict_laps_ack_and_probe_ack_use_catalog_reverse_route();
     strict_laps_acks_every_data_packet();
+    one_pid_drop_uses_reverse_ack_and_recovers_only_that_pid();
     pooled_packet_clears_laps_metadata();
     pooled_non_laps_control_cannot_keep_a_pinned_route();
 }
-    void enableRouteAudit() {
-        route_audit = std::make_shared<LapsRouteAudit>();
-        source.lapsSetRouteAudit(route_audit);
-        sink.lapsSetRouteAudit(source, route_audit);
-    }
-    LapsRouteAudit& audit() const {
-        assert(route_audit);
-        return *route_audit;
-    }
-    void selectOnly(uint16_t pid) {
-        auto* laps = dynamic_cast<UecMpLaps*>(source._mp.get());
-        assert(laps != nullptr);
-        for (uint16_t current = 0; current < laps->_paths.size(); ++current) {
-            laps->_paths[current].valid = current == pid;
-            laps->_paths[current].probe_pending = false;
-        }
-    }
-    UecDataPacket* sendDataOnPid(uint16_t pid, uint32_t plane) {
-        selectOnly(pid);
-        source._backlog = 1'500;
-        assert(source.sendNewPacket(forwardFib(plane)) == 1'500);
-        auto* packet = const_cast<UecDataPacket*>(
-            static_cast<const UecDataPacket*>(lastForwardPacket(plane, pid)));
-        assert(packet != nullptr && packet->epsn() == source._highest_sent - 1);
-        return packet;
-    }
-    void acknowledge(UecDataPacket& data) {
-        const uint16_t pid = data.lapsPid();
-        UecAckPacket* ack = sink.sack(pid, data.epsn(), data.epsn(), false, false, &data);
-        source.processAck(*ack);
-        ack->free();
-    }
-    std::shared_ptr<LapsRouteAudit> route_audit;
-void one_pid_drop_uses_reverse_ack_and_recovers_only_that_pid() {
-    StrictLapsFixture f;
-    f.enableRouteAudit();
-
-    // This is deliberately a fixture-only loss injection: do not deliver the
-    // first PID-0 packet.  The next PID-0 ACK must infer and recover only it.
-    UecDataPacket* dropped = f.sendDataOnPid(0, 0);
-    assert(dropped->epsn() == 0);
-    UecDataPacket* delivered_on_zero = f.sendDataOnPid(0, 0);
-    assert(delivered_on_zero->epsn() == 1);
-
-    // Keep the deterministic recovery queued so the assertion observes the
-    // exact inferred sequence before the NIC schedules it.
-    f.source._speculating = true;
-    UecSrc::_receiver_based_cc = true;
-    f.acknowledge(*delivered_on_zero);
-    UecSrc::_receiver_based_cc = false;
-    assert(f.source._rtx_queue.size() == 1);
-    assert(f.source._rtx_queue.begin()->first == dropped->epsn());
-    assert(f.source._laps_rtx_routes.at(dropped->epsn()).pid == 0);
-
-    UecDataPacket* delivered_on_one = f.sendDataOnPid(1, 1);
-    assert(delivered_on_one->epsn() == 2);
-    f.acknowledge(*delivered_on_one);
-    assert(f.source._rtx_queue.size() == 1);
-
-    // Replay the single inferred loss and prove it retained PID 0.
-    f.source._speculating = false;
-    f.selectOnly(0);
-    assert(f.source.sendRtxPacket(f.forwardFib(1)) == 1'500);
-    const Packet* retransmission = f.lastForwardPacket(0, 0);
-    assert(retransmission != nullptr);
-    assert(static_cast<const UecDataPacket*>(retransmission)->epsn() == dropped->epsn());
-    assert(static_cast<const UecDataPacket*>(retransmission)->lapsPid() == 0);
-    assert(f.audit().verify());
-}
-
-    one_pid_drop_uses_reverse_ack_and_recovers_only_that_pid();

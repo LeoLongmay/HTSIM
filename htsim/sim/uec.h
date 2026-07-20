@@ -22,6 +22,7 @@
 #include "laps_rate.h"
 #include "laps_recovery.h"
 #include "laps_path_catalog.h"
+#include "laps_route_audit.h"
 #include "uec_mp.h"
 #include "motivation_epoch.h"
 #include "prism_coordination.h"
@@ -201,6 +202,14 @@ public:
             }
         }
     }
+    void lapsSetRouteAudit(std::shared_ptr<LapsRouteAudit> audit) {
+        _laps_route_audit = std::move(audit);
+        if (_laps_route_audit && isStrictLaps()) {
+            for (const auto& catalog : _laps_path_catalogs)
+                if (catalog) _laps_route_audit->registerCatalog(*catalog);
+        }
+    }
+    std::shared_ptr<LapsRouteAudit> lapsRouteAudit() const { return _laps_route_audit; }
     const Route& lapsForwardRoute(uint16_t pid) const;
     const Route& lapsForwardRoute(uint16_t pid, const Route& nic_port_route) const;
     bool lapsResolvePath(uint32_t entropy, uint32_t send_port,
@@ -392,6 +401,7 @@ public:
     std::vector<bool> _motivation_path_attempted;
     LapsPathResolver _laps_path_resolver;
     std::vector<std::shared_ptr<const LapsPathCatalog>> _laps_path_catalogs;
+    std::shared_ptr<LapsRouteAudit> _laps_route_audit;
     uint64_t motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
                               simtime_picosec qdelay, bool genuine,
                               const UecMpSelection& selection,
@@ -830,6 +840,14 @@ class UecSink : public DataReceiver {
             _laps_path_catalogs.resize(plane + 1);
         _laps_path_catalogs[plane] = std::move(catalog);
     }
+    void lapsSetRouteAudit(const UecSrc& source, std::shared_ptr<LapsRouteAudit> audit) {
+        if (!source.isStrictLaps()) return;
+        _laps_route_audit = std::move(audit);
+        if (_laps_route_audit) {
+            for (const auto& catalog : _laps_path_catalogs)
+                if (catalog) _laps_route_audit->registerCatalog(*catalog);
+        }
+    }
     const Route& lapsReverseRoute(uint16_t pid) const;
     const Route* getPortRoute(uint32_t port_num) const {return _ports[port_num]->route();}
     UecSinkPort* getPort(uint32_t port_num) {return _ports[port_num];}
@@ -948,6 +966,7 @@ class UecSink : public DataReceiver {
     uint16_t _entropy;
     std::vector<uint32_t> _paths;
     std::vector<std::shared_ptr<const LapsPathCatalog>> _laps_path_catalogs;
+    std::shared_ptr<LapsRouteAudit> _laps_route_audit;
 
     //variables for PCIe model
     PCIeModel* _pcie;
@@ -1001,22 +1020,3 @@ class UecPullPacer : public EventSource {
 };
 
 #endif  // UEC_H
-#include "laps_route_audit.h"
-    void lapsSetRouteAudit(std::shared_ptr<LapsRouteAudit> audit) {
-        _laps_route_audit = std::move(audit);
-        if (_laps_route_audit && isStrictLaps()) {
-            for (const auto& catalog : _laps_path_catalogs)
-                if (catalog) _laps_route_audit->registerCatalog(*catalog);
-        }
-    }
-    std::shared_ptr<LapsRouteAudit> lapsRouteAudit() const { return _laps_route_audit; }
-    std::shared_ptr<LapsRouteAudit> _laps_route_audit;
-    void lapsSetRouteAudit(const UecSrc& source, std::shared_ptr<LapsRouteAudit> audit) {
-        if (!source.isStrictLaps()) return;
-        _laps_route_audit = std::move(audit);
-        if (_laps_route_audit) {
-            for (const auto& catalog : _laps_path_catalogs)
-                if (catalog) _laps_route_audit->registerCatalog(*catalog);
-        }
-    }
-    std::shared_ptr<LapsRouteAudit> _laps_route_audit;

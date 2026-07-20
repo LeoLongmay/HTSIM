@@ -560,6 +560,13 @@ void UecNIC::sendControlPktNow() {
                                     : cp.sink->getPortRoute(port_to_use);
         p->set_route(*route);
     }
+    if (cp.src && cp.src->isStrictLaps() && p->lapsPidValid()) {
+        if (const auto audit = cp.src->lapsRouteAudit()) {
+            assert(p->type() == UECDATA);
+            audit->recordForward(cp.src->flowId(), static_cast<UecDataPacket*>(p)->epsn(),
+                                 p->lapsPid(), *p->route());
+        }
+    }
     p->sendOn();
 }
 
@@ -3815,6 +3822,9 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     if (isStrictLaps()) {
         p->setLapsSendTime(eventlist().now());
         advanceLapsPacer(full_pkt_size);
+        if (_laps_route_audit) {
+            _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
+        }
     }
     p->sendOn();
     if (_motivation_trace_writer.enabledFor(flowId())) {
@@ -3944,6 +3954,9 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     if (isStrictLaps()) {
         p->setLapsSendTime(eventlist().now());
         advanceLapsPacer(full_pkt_size);
+        if (_laps_route_audit) {
+            _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
+        }
     }
     p->sendOn();
     _stats.rtx_pkts_sent++;
@@ -5044,6 +5057,9 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
         pkt->setLapsPid(pid);
         pkt->setLapsPinnedRoute(true);
         pkt->setLapsRoute(*reverse);
+        if (_laps_route_audit) {
+            _laps_route_audit->recordReverse(_src->flowId(), acked_psn, pid, *reverse);
+        }
     }
     if (received_data != nullptr && received_data->lapsSendTimeValid()) {
         const simtime_picosec now = _nic.eventlist().now();
@@ -5222,19 +5238,3 @@ void UecPullPacer::requestPull(UecSink* sink) {
         _active = true;
     }
 }
-    if (cp.src && cp.src->isStrictLaps() && p->lapsPidValid()) {
-        if (const auto audit = cp.src->lapsRouteAudit()) {
-            assert(p->type() == UECDATA);
-            audit->recordForward(cp.src->flowId(), static_cast<UecDataPacket*>(p)->epsn(),
-                                 p->lapsPid(), *p->route());
-        }
-    }
-        if (_laps_route_audit) {
-            _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
-        }
-        if (_laps_route_audit) {
-            _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
-        }
-        if (_laps_route_audit) {
-            _laps_route_audit->recordReverse(_src->flowId(), acked_psn, pid, *reverse);
-        }

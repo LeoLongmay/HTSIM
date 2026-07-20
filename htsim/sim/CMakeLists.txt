@@ -78,6 +78,7 @@ set(SOURCE_FILES
     hpcc.cpp
     hpccpacket.cpp
     laps_path_catalog.cpp
+    laps_route_audit.cpp
     laps_recovery.cpp
     logfile.cpp
     loggers.cpp
@@ -268,4 +269,3 @@ add_custom_target(
   always_run ALL
   COMMAND ${CMAKE_COMMAND} -E echo "ENABLE_TESTS=${ENABLE_TESTS}"
 )
-    laps_route_audit.cpp
