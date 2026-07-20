@@ -13,8 +13,9 @@ namespace {
 
 class FakeOwner final : public LapsRecoveryOwner {
 public:
-    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override {
-        callbacks.push_back({attempt, seq, bytes});
+    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes,
+                     LapsRecoveryCause cause) override {
+        callbacks.push_back({attempt, seq, bytes, cause});
         if (attempt == active_attempt) {
             recovered.push_back({seq, bytes});
         }
@@ -26,6 +27,7 @@ public:
         LapsAttempt attempt;
         UecBasePacket::seq_t seq;
         mem_b bytes;
+        LapsRecoveryCause cause;
     };
 
     LapsAttempt active_attempt{};
@@ -38,7 +40,8 @@ public:
     ReRegisteringOwner(LapsRecoveryDomain& domain, LapsPathKey path)
         : domain_(domain), path_(path) {}
 
-    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override {
+    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes,
+                     LapsRecoveryCause) override {
         recovered.push_back({seq, bytes});
         if (seq == 130) {
             retried_attempt = domain_.sent(path_, *this, 140, 2300);
@@ -311,7 +314,7 @@ void nack_detaches_the_old_attempt_before_retry(EventList& eventlist, LapsRecove
     owner.makeCurrent(retry);
 
     // A delayed callback tagged with the replaced attempt cannot affect the retry.
-    owner.lapsRecover(old_attempt, 40, 1300);
+    owner.lapsRecover(old_attempt, 40, 1300, LapsRecoveryCause::TIMEOUT);
     assert(owner.recovered.empty());
     assert(EventList::doNextEvent());
     // This owner/path was sampled above, and its empty state retains that
@@ -377,6 +380,24 @@ void acknowledge_on_a_pid_recovers_only_older_records_on_that_pid(
     assert(domain.retire(b_only));
 }
 
+void recovery_stats_separate_causes(EventList&, LapsRecoveryDomain& domain) {
+    FakeOwner owner;
+    const auto first = domain.sent({10}, owner, 10, 1000);
+    const auto later = domain.sent({10}, owner, 20, 1000);
+    assert(domain.acknowledge(later, timeFromUs(uint32_t{7})));
+    assert(!domain.acknowledge(first, timeFromUs(uint32_t{7})));
+    const auto nacked = domain.sent({11}, owner, 30, 1000);
+    assert(domain.nack(nacked));
+    domain.sent({12}, owner, 40, 1000);
+    assert(EventList::doNextEvent());
+    assert(domain.statsFor(owner).ack_gap_records == 1);
+    assert(domain.statsFor(owner).stale_ack == 1);
+    assert(domain.statsFor(owner).nack == 1);
+    assert(domain.statsFor(owner).timeout_records == 1);
+    assert(owner.callbacks.front().cause == LapsRecoveryCause::ACK_GAP);
+    assert(owner.callbacks.back().cause == LapsRecoveryCause::TIMEOUT);
+}
+
 }  // namespace
 
 int main() {
@@ -390,4 +411,5 @@ int main() {
     expired_recovery_batch_is_removed_before_owner_can_reregister(eventlist, domain);
     saturated_deadline_is_still_scheduled_and_recovers(eventlist, domain);
     acknowledge_on_a_pid_recovers_only_older_records_on_that_pid(eventlist, domain);
+    recovery_stats_separate_causes(eventlist, domain);
 }

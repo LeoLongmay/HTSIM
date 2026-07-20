@@ -38,12 +38,32 @@ private:
     friend class LapsRecoveryDomain;
 };
 
+enum class LapsRecoveryCause : uint8_t { ACK_GAP, TIMEOUT };
+
 class LapsRecoveryOwner {
 public:
     virtual ~LapsRecoveryOwner() = default;
 
     virtual void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq,
                              mem_b bytes) = 0;
+    virtual void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq,
+                             mem_b bytes, LapsRecoveryCause cause) {
+        (void)cause;
+        lapsRecover(attempt, seq, bytes);
+    }
+};
+
+struct LapsRecoveryStats {
+    uint64_t acked = 0;
+    uint64_t stale_ack = 0;
+    uint64_t ack_gap_events = 0;
+    uint64_t ack_gap_records = 0;
+    uint64_t timeout_events = 0;
+    uint64_t timeout_records = 0;
+    uint64_t nack = 0;
+    uint64_t stale_nack = 0;
+    uint64_t retired = 0;
+    uint64_t stale_retire = 0;
 };
 
 class LapsRecoveryDomain final : public EventSource {
@@ -60,6 +80,7 @@ public:
                      std::optional<simtime_picosec> one_way_delay = std::nullopt);
     bool nack(LapsAttempt attempt);
     bool retire(LapsAttempt attempt);
+    const LapsRecoveryStats& statsFor(const LapsRecoveryOwner& owner) const;
 
     void removeOwner(LapsRecoveryOwner& owner);
     void doNextEvent() override;
@@ -102,6 +123,9 @@ private:
     void updateTimer();
 
     std::map<OwnerPathKey, PathState> paths_;
+    std::map<LapsRecoveryOwner*, LapsRecoveryStats,
+             std::less<LapsRecoveryOwner*>> owner_stats_;
+    std::map<uint64_t, LapsRecoveryOwner*> attempt_owners_;
     EventList::Handle timer_handle_;
     simtime_picosec timer_deadline_;
     uint64_t next_attempt_id_ = 1;
