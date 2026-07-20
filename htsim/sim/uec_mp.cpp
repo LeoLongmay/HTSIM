@@ -108,6 +108,13 @@ bool UecMpLaps::pathIsSelectable(uint16_t pid) const {
     return pid < _no_of_paths && _paths[pid].valid && !_paths[pid].probe_pending;
 }
 
+bool UecMpLaps::hasSelectablePath() const {
+    for (uint16_t pid = 0; pid < _no_of_paths; ++pid) {
+        if (pathIsSelectable(pid)) return true;
+    }
+    return false;
+}
+
 void UecMpLaps::observeLapsDelay(uint32_t path_id, simtime_picosec delay,
                                  simtime_picosec now) {
     observe(path_id, delay, now);

@@ -216,7 +216,7 @@ void attempt_lifecycle_is_path_scoped_and_attempt_safe(EventList& eventlist,
                                                         LapsRecoveryDomain& domain) {
     FakeOwner owner_a;
     FakeOwner owner_b;
-    const LapsPathKey shared_path{"queue-a\\x1fqueue-b"};
+    const LapsPathKey shared_path{1};
 
     const LapsAttempt a_first = domain.sent(shared_path, owner_a, 10, 1000);
     const LapsAttempt b_only = domain.sent(shared_path, owner_b, 20, 1100);
@@ -245,8 +245,8 @@ void attempt_lifecycle_is_path_scoped_and_attempt_safe(EventList& eventlist,
 void acknowledge_does_not_cross_paths_and_retimes_the_tail(
     EventList& eventlist, LapsRecoveryDomain& domain) {
     FakeOwner owner;
-    const LapsPathKey path_a{"queue-c\\x1fqueue-d"};
-    const LapsPathKey path_b{"queue-e\\x1fqueue-f"};
+    const LapsPathKey path_a{2};
+    const LapsPathKey path_b{3};
 
     const LapsAttempt path_a_record = domain.sent(path_a, owner, 90, 900);
     const LapsAttempt path_b_record = domain.sent(path_b, owner, 95, 950);
@@ -284,7 +284,7 @@ void acknowledge_does_not_cross_paths_and_retimes_the_tail(
 
 void no_sample_uses_the_bootstrap_rto(EventList& eventlist, LapsRecoveryDomain& domain) {
     FakeOwner owner;
-    const LapsPathKey path{"queue-g\\x1fqueue-h"};
+    const LapsPathKey path{4};
     const simtime_picosec sent_at = EventList::now();
 
     const LapsAttempt lone = domain.sent(path, owner, 125, 2100);
@@ -298,7 +298,9 @@ void no_sample_uses_the_bootstrap_rto(EventList& eventlist, LapsRecoveryDomain& 
 
 void nack_detaches_the_old_attempt_before_retry(EventList& eventlist, LapsRecoveryDomain& domain) {
     FakeOwner owner;
-    const LapsPathKey path{"queue-e\\x1fqueue-f"};
+    // Reuse the PID sampled by acknowledge_does_not_cross_paths above so
+    // this also verifies that a retired PID retains its realVal for a retry.
+    const LapsPathKey path{3};
     const simtime_picosec retry_sent_at = EventList::now();
 
     const LapsAttempt old_attempt = domain.sent(path, owner, 40, 1300);
@@ -322,7 +324,7 @@ void nack_detaches_the_old_attempt_before_retry(EventList& eventlist, LapsRecove
 
 void expired_recovery_batch_is_removed_before_owner_can_reregister(
     EventList& eventlist, LapsRecoveryDomain& domain) {
-    const LapsPathKey path{"queue-g\\x1fqueue-h"};
+    const LapsPathKey path{6};
     ReRegisteringOwner owner(domain, path);
     const simtime_picosec first_sent_at = EventList::now();
 
@@ -350,7 +352,7 @@ void saturated_deadline_is_still_scheduled_and_recovers(
     assert(EventList::doNextEvent());
     assert(EventList::now() == maximum - LapsRecoveryDomain::kBootstrapRto);
 
-    const LapsAttempt attempt = domain.sent(LapsPathKey{"queue-i\\x1fqueue-j"}, owner,
+    const LapsAttempt attempt = domain.sent(LapsPathKey{7}, owner,
                                             150, 2400);
     owner.makeCurrent(attempt);
 
@@ -359,6 +361,20 @@ void saturated_deadline_is_still_scheduled_and_recovers(
     assert((owner.recovered ==
             std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{150, 2400}}));
     assert(owner.callbacks.back().attempt == attempt);
+}
+
+void acknowledge_on_a_pid_recovers_only_older_records_on_that_pid(
+    EventList& eventlist, LapsRecoveryDomain& domain) {
+    FakeOwner owner;
+    const LapsAttempt a_first = domain.sent(LapsPathKey{8}, owner, 10, 1000);
+    const LapsAttempt b_only = domain.sent(LapsPathKey{9}, owner, 20, 1000);
+    const LapsAttempt a_later = domain.sent(LapsPathKey{8}, owner, 30, 1000);
+    owner.makeCurrent(a_first);
+
+    assert(domain.acknowledge(a_later, timeFromUs(uint32_t{7})));
+    assert((owner.recovered ==
+            std::vector<std::pair<UecBasePacket::seq_t, mem_b>>{{10, 1000}}));
+    assert(domain.retire(b_only));
 }
 
 }  // namespace
@@ -373,4 +389,5 @@ int main() {
     nack_detaches_the_old_attempt_before_retry(eventlist, domain);
     expired_recovery_batch_is_removed_before_owner_can_reregister(eventlist, domain);
     saturated_deadline_is_still_scheduled_and_recovers(eventlist, domain);
+    acknowledge_on_a_pid_recovers_only_older_records_on_that_pid(eventlist, domain);
 }

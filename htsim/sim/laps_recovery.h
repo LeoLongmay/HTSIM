@@ -7,7 +7,6 @@
 #include <list>
 #include <map>
 #include <optional>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -15,13 +14,11 @@
 #include "uecpacket.h"
 
 struct LapsPathKey {
-    std::string queue_fingerprint;
-
-    LapsPathKey() = default;
-    LapsPathKey(std::string fingerprint) : queue_fingerprint(std::move(fingerprint)) {}
+    // The stable source-route PID, not a transient physical ECMP fingerprint.
+    uint16_t pid = UINT16_MAX;
 
     bool operator<(const LapsPathKey& other) const {
-        return queue_fingerprint < other.queue_fingerprint;
+        return pid < other.pid;
     }
 };
 

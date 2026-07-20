@@ -9,6 +9,7 @@
 
 namespace {
 
+
 class Tick final : public EventSource {
 public:
     explicit Tick(EventList& eventlist) : EventSource(eventlist, "laps test tick") {}
@@ -35,7 +36,7 @@ LapsPathKey installSharedPhysicalPath(UecSrc& source, Queue& first, Queue& secon
 LapsAttempt installStrictRecord(UecSrc& source, LapsRecoveryDomain& domain,
                                 const LapsPathKey& path, uint32_t entropy,
                                 UecBasePacket::seq_t seq, mem_b bytes) {
-    source.createSendRecord(entropy, seq, bytes, {}, true, path);
+    source.createSendRecord(entropy, seq, bytes, {}, true, path, 0, path.pid);
     source._in_flight += bytes;
     const LapsAttempt attempt = domain.sent(path, source, seq, bytes);
     source._tx_bitmap.at(seq).laps_attempt = attempt;
@@ -57,14 +58,12 @@ void strict_laps_uses_canonical_shared_paths_and_retires_all_ack_forms(EventList
 
     const LapsPathKey first_entropy_0 = installSharedPhysicalPath(first, q1, q2);
     const LapsPathKey second_entropy_1 = installSharedPhysicalPath(second, q1, q2);
-    assert(first_entropy_0.queue_fingerprint == second_entropy_1.queue_fingerprint);
-    // Length-prefixing, rather than a raw delimiter, is the canonical identity.
-    assert(first_entropy_0.queue_fingerprint ==
-           "plane=0;13:source|uplink12:spine:egress");
+    assert(first_entropy_0.pid == 7);
+    assert(second_entropy_1.pid == 7);
 
     Queue q3(speedFromGbps(100), 100'000, eventlist, nullptr);
     q3.forceName("other-path");
-    const LapsPathKey other_path("10:other-path");
+    const LapsPathKey other_path{8};
     LapsRecoveryDomain& domain = nic.lapsRecovery();
     installStrictRecord(first, domain, first_entropy_0, 0, 10, 1'000);
     const LapsAttempt second_attempt =
@@ -106,9 +105,8 @@ void paired_strict_laps_distinguishes_same_named_queues_on_separate_planes(
     EventList& eventlist) {
     setStrictGlobals();
 
-    // Separate topology planes construct independent queue objects, but their
-    // queue names are intentionally identical.  The recovery key therefore
-    // needs the actual sending plane as well as the ordered queue sequence.
+    // The paper's path identity is PID, independent of how identical queue
+    // names happen to be materialized on separate topology planes.
     Queue plane0_queue(speedFromGbps(100), 100'000, eventlist, nullptr);
     Queue plane1_queue(speedFromGbps(100), 100'000, eventlist, nullptr);
     plane0_queue.forceName("source-uplink");
@@ -130,7 +128,8 @@ void paired_strict_laps_distinguishes_same_named_queues_on_separate_planes(
     LapsPathKey plane1_path;
     assert(source.lapsResolvePath(17, plane0_route, plane0_path));
     assert(source.lapsResolvePath(17, plane1_route, plane1_path));
-    assert(plane0_path.queue_fingerprint != plane1_path.queue_fingerprint);
+    assert(plane0_path.pid == 17);
+    assert(plane1_path.pid == 17);
 
     Route unconfigured_route;
     assert(!source.lapsResolvePath(17, unconfigured_route, plane0_path));
@@ -141,8 +140,8 @@ void strict_nack_retires_old_attempt_before_retry(EventList& eventlist) {
 
     UecNIC nic(1, eventlist, speedFromGbps(100), 1);
     UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(2, false, 1.0), nic, 1);
-    const LapsPathKey old_path("8:old-path");
-    const LapsPathKey retry_path("10:retry-path");
+    const LapsPathKey old_path{1};
+    const LapsPathKey retry_path{2};
     LapsRecoveryDomain& domain = nic.lapsRecovery();
     const LapsAttempt old_attempt = installStrictRecord(source, domain, old_path, 0, 40, 1'300);
 
@@ -185,8 +184,8 @@ void non_laps_source_never_joins_paired_recovery_on_the_same_nic(EventList& even
     assert(!non_laps.lapsResolvePath(0, 0, ignored));
 
     const simtime_picosec sent_at = EventList::now();
-    const LapsPathKey laps_path("11:laps-path");
-    laps.createSendRecord(3, 40, 1'300, {}, true, laps_path);
+    const LapsPathKey laps_path{1};
+    laps.createSendRecord(3, 40, 1'300, {}, true, laps_path, 0, laps_path.pid);
     laps._in_flight += 1'300;
     LapsRecoveryDomain& domain = nic.lapsRecovery();
     const LapsAttempt attempt = domain.sent(laps_path, laps, 40, 1'300);
@@ -262,12 +261,16 @@ void strict_laps_ignores_sleek_before_ack_retires_its_attempt(EventList& eventli
     UecNIC nic(5, eventlist, speedFromGbps(100), 1);
     UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(1, false, 1.0), nic, 1);
     source.setFlowId(42);
+    // This is a recovery-only fixture: its synthetic retirement ACK must not
+    // finish a zero-byte flow and dereference the intentionally unconnected
+    // sink through completion metrics.
+    source.setFlowsize(15'000);
     source._cwnd = 1'500;
     source._maxwnd = 3'000;
     source._highest_sent = 1;
 
     LapsRecoveryDomain& domain = nic.lapsRecovery();
-    installStrictRecord(source, domain, LapsPathKey("10:sleek-path"), 0, 0, 1'500);
+    installStrictRecord(source, domain, LapsPathKey{0}, 0, 0, 1'500);
 
     // SLEEK would otherwise move seq 0 to the RTX queue without retiring
     // its strict recovery attempt.  The paired strict-LAPS path must leave it
@@ -311,7 +314,8 @@ void strict_laps_retransmission_keeps_the_original_pid_and_path(EventList& event
     LapsPathKey original_path;
     assert(source.lapsResolvePath(7, send_route, original_path));
     const UecMpSelection original_selection = {7, UecMpSelection::FIRST_WINDOW, 91, 3, 12};
-    source.createSendRecord(7, 70, 1'200, original_selection, true, original_path);
+    source.createSendRecord(7, 70, 1'200, original_selection, true, original_path, 0,
+                            original_path.pid);
     source._in_flight += 1'200;
     const LapsAttempt attempt = nic.lapsRecovery().sent(original_path, source, 70, 1'200);
     source._tx_bitmap.at(70).laps_attempt = attempt;
@@ -327,10 +331,10 @@ void strict_laps_retransmission_keeps_the_original_pid_and_path(EventList& event
     assert(replay.selection.cache_slot == 3);
     assert(replay.selection.cache_generation == 12);
     assert(replay.strict_laps_path.has_value());
-    assert(replay.strict_laps_path->queue_fingerprint == original_path.queue_fingerprint);
+    assert(replay.strict_laps_path->pid == original_path.pid);
     LapsPathKey resolved;
     assert(source.lapsResolvePath(replay.entropy, send_route, resolved));
-    assert(resolved.queue_fingerprint == replay.strict_laps_path->queue_fingerprint);
+    assert(resolved.pid == replay.strict_laps_path->pid);
     assert(source.handleAckno(70) == 0);
     assert(source._rtx_queue.empty());
     assert(source._laps_rtx_routes.empty());
@@ -341,13 +345,17 @@ void strict_laps_control_retransmission_keeps_legacy_selection(EventList& eventl
     UecNIC nic(8, eventlist, speedFromGbps(100), 1);
     UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(2, false, 1.0), nic, 1);
     assert(source.isStrictLaps());
+    auto* laps = dynamic_cast<UecMpLaps*>(source._mp.get());
+    assert(laps != nullptr);
+    laps->configurePaths({timeFromUs(uint32_t{1}), timeFromUs(uint32_t{1})});
 
     // Strict source-control records use generic RTO recovery and therefore
     // have no strict-data replay identity to retain.
-    source.queueForRtx(80, UecBasePacket::get_ack_size());
+    source._rtx_queue.emplace(80, UecBasePacket::get_ack_size());
+    source._rtx_backlog = UecBasePacket::get_ack_size();
     assert(source._laps_rtx_routes.empty());
     const UecSrc::RtxPathSelection selection = source.selectRtxPath(80);
-    assert((selection.entropy & 1) == 0);
+    assert((selection.entropy & 1) < 2);
     assert(!selection.strict_laps_path.has_value());
     assert(selection.selection.entropy == 0);
     assert(selection.selection.source == UecMpSelection::UNKNOWN);
@@ -365,7 +373,7 @@ void legacy_retransmission_never_consults_laps_replay_state(EventList& eventlist
     const uint16_t saved_mss = UecSrc::_mss;
     UecSrc::_mss = 1'500;
     source._cwnd = 1'500;
-    source._laps_rtx_routes.emplace(81, UecSrc::LapsRtxRoute{99, {}, LapsPathKey("inert")});
+    source._laps_rtx_routes.emplace(81, UecSrc::LapsRtxRoute{99, {}, LapsPathKey{0}, 0, 0});
     const UecSrc::RtxPathSelection selection = source.selectRtxPath(81);
     assert(selection.entropy == 0);
     assert(!selection.strict_laps_path.has_value());

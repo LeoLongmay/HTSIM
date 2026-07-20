@@ -846,21 +846,11 @@ bool UecSrc::lapsResolvePath(uint32_t entropy, uint32_t send_port,
 
     if (send_port < _laps_path_catalogs.size() && _laps_path_catalogs[send_port]) {
         const auto& catalog = *_laps_path_catalogs[send_port];
-        const auto& entry = catalog.entry(static_cast<uint16_t>(entropy & (catalog.size() - 1)));
-        ostringstream fingerprint;
-        // main_uec connects NIC port p to topology plane p.  The route in the
-        // catalog is therefore the authoritative physical path for this send.
-        fingerprint << "plane=" << send_port << ';';
-        for (size_t hop = 0; hop < entry.forward->size(); ++hop) {
-            PacketSink* sink = entry.forward->at(hop);
-            if (sink == nullptr) {
-                return false;
-            }
-            const string& name = sink->nodename();
-            fingerprint << name.size() << ':' << name;
-        }
-        path = LapsPathKey(fingerprint.str());
-        return entry.forward->size() != 0;
+        const uint16_t pid = static_cast<uint16_t>(entropy & (catalog.size() - 1));
+        if (catalog.entry(pid).forward->size() == 0)
+            return false;
+        path = LapsPathKey{pid};
+        return true;
     }
 
     if (!_laps_path_resolver) {
@@ -2500,6 +2490,9 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
                 _prism_epoch_min = min(_prism_epoch_min, q);
                 _prism_epoch_max = max(_prism_epoch_max, q);
             }
+            if ((_prism_path_median_signal || _prism_path_median_spread) &&
+                _prism_genuine_sample_path != UINT32_MAX)
+                _prism_path_epoch.observe(_prism_genuine_sample_path, q);
             _prism_epoch_samples++;
             if (_prism_oracle_validation && _prism_genuine_sample_path != UINT32_MAX) {
                 _prism_epoch_sampled_paths.insert(_prism_genuine_sample_path);
@@ -2514,6 +2507,13 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         if (epoch_time_ready && _prism_epoch_samples >= _prism_n_min) {
             simtime_picosec c_cc = _prism_epoch_min;
             simtime_picosec c_spray = _prism_epoch_max - _prism_epoch_min;
+            if (_prism_path_median_signal) {
+                const auto path_signal = _prism_path_epoch.signal();
+                c_cc = path_signal.floor;
+                c_spray = path_signal.spread;
+            } else if (_prism_path_median_spread) {
+                c_spray = _prism_path_epoch.signal(2).spread;
+            }
             prismUpdateSignals(c_cc, c_spray);
             simtime_picosec eng_th = prismEngageThresh();
             if (eng_th > 0 && _prism_spread_long >= eng_th) {
@@ -2533,6 +2533,7 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             prismEpochLog(c_cc, c_spray, -1, false);
             _prism_epoch_sampled_paths.clear();
             _prism_epoch_samples = 0;
+            _prism_path_epoch.reset();
             _prism_epoch_sample_deferred = false;
             _prism_epoch_id++;
         }
@@ -2553,6 +2554,9 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             _prism_epoch_min = min(_prism_epoch_min, q);
             _prism_epoch_max = max(_prism_epoch_max, q);
         }
+        if ((_prism_path_median_signal || _prism_path_median_spread) &&
+            _prism_genuine_sample_path != UINT32_MAX)
+            _prism_path_epoch.observe(_prism_genuine_sample_path, q);
         _prism_epoch_samples++;
         if (_prism_oracle_validation && _prism_genuine_sample_path != UINT32_MAX) {
             _prism_epoch_sampled_paths.insert(_prism_genuine_sample_path);
@@ -3172,11 +3176,11 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
     simtime_picosec send_time = i->second.send_time;
     simtime_picosec raw_rtt = eventlist().now() - send_time;
 
-    if (update_base_rtt_on_nack) {
+    if (!isStrictLaps() && update_base_rtt_on_nack) {
         update_base_rtt(raw_rtt);
     }
     
-    if(raw_rtt >= _base_rtt) {
+    if(!isStrictLaps() && raw_rtt >= _base_rtt) {
         update_delay(raw_rtt, false, true);
     }
 
@@ -3185,7 +3189,7 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
             << " seqno " << seqno
             << " trimming " << endl;
     }
-    if (_sender_based_cc){
+    if (_sender_based_cc && !isStrictLaps()){
         (this->*updateCwndOnNack)(ev, pkt_size,pkt.last_hop());
     }
 
@@ -3211,18 +3215,22 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
     // _send_times.erase(send_time);
     delFromSendTimes(send_time, seqno);
 
-    stopSpeculating();
+    if (!isStrictLaps()) {
+        stopSpeculating();
+    }
     queueForRtx(seqno, pkt_size, laps_route);
 
     if (send_time == _rto_send_time) {
         recalculateRTO();
     }
 
-    _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
-    if (pkt.last_hop())
-        _mp->processEv(ev, pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
-    else
-        _mp->processEv(ev, UecMultipath::PATH_NACK);
+    if (!isStrictLaps()) {
+        _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
+        if (pkt.last_hop())
+            _mp->processEv(ev, pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
+        else
+            _mp->processEv(ev, UecMultipath::PATH_NACK);
+    }
 
     sendIfPermitted();
 }
@@ -3594,6 +3602,13 @@ void UecSrc::sendIfPermitted() {
         scheduleLapsPacer();
         return;
     }
+    if (isStrictLaps()) {
+        const auto* laps = dynamic_cast<const UecMpLaps*>(_mp.get());
+        if (laps == nullptr || !laps->hasSelectablePath()) {
+            scheduleLapsProbe();
+            return;
+        }
+    }
     if (_flow.flow_id() == _debug_flowid)
     {
         cout << timeAsUs(eventlist().now()) << " flowid " << _flow.flow_id() <<" sendIfPermitted requestSending _send_blocked_on_nic "<< _send_blocked_on_nic
@@ -3906,7 +3921,7 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     }
     if (selection.strict_laps_path.has_value()) {
         assert(isStrictLaps());
-        assert(laps_path.queue_fingerprint == selection.strict_laps_path->queue_fingerprint);
+        assert(laps_path.pid == selection.strict_laps_path->pid);
         assert(_laps_rtx_routes.erase(seq_no) == 1);
     }
     p->set_pathid(ev);
@@ -4711,7 +4726,7 @@ void UecSink::processData(UecDataPacket& pkt) {
              << _out_of_order_count << " ecn " << ecn << " shouldSack " << shouldSack()
              << " forceack " << force_ack << endl;
     }
-    if (ecn || shouldSack() || force_ack) {
+    if ((_src != nullptr && _src->isStrictLaps()) || ecn || shouldSack() || force_ack) {
         UecAckPacket* ack_packet =
             sack(pkt.path_id(), (ecn || pkt.ar()) ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted(), &pkt);
 

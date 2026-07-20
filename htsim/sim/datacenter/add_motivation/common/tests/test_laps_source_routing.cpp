@@ -88,6 +88,9 @@ public:
         const auto& packets = (plane == 0 ? plane0 : plane1).reverse_sinks.at(pid)->packets;
         return packets.empty() ? nullptr : packets.back();
     }
+    size_t reversePacketCount(uint32_t plane, uint16_t pid) const {
+        return (plane == 0 ? plane0 : plane1).reverse_sinks.at(pid)->packets.size();
+    }
 
     UecNIC source_nic;
     UecNIC sink_nic;
@@ -231,6 +234,29 @@ void strict_laps_ack_and_probe_ack_use_catalog_reverse_route() {
                                                             : f.catalog(1).entry(probe_pid).forward));
 }
 
+void strict_laps_acks_every_data_packet() {
+    StrictLapsFixture f;
+    f.source.setFlowsize(3'000);
+    PacketFlow& flow = *f.source.flow();
+
+    auto* first = UecDataPacket::newpkt(flow, *f.catalog(0).entry(0).forward, 0, 1'500,
+                                         UecDataPacket::DATA_PULL, 0);
+    first->setLapsPid(0);
+    first->setLapsPinnedRoute(true);
+    f.sink.processData(*first);
+    assert(f.reversePacketCount(0, 0) == 1);
+
+    auto* second = UecDataPacket::newpkt(flow, *f.catalog(1).entry(2).forward, 1, 1'500,
+                                          UecDataPacket::DATA_PULL, 0);
+    second->setLapsPid(2);
+    second->setLapsPinnedRoute(true);
+    f.sink.processData(*second);
+    assert(f.reversePacketCount(1, 2) == 1);
+
+    first->free();
+    second->free();
+}
+
 void pooled_packet_clears_laps_metadata() {
     PacketFlow flow(nullptr);
     Route route;
@@ -275,6 +301,7 @@ int main() {
     strict_laps_pacer_not_sender_cwnd_admits_retransmission();
     strict_laps_recovery_replays_original_plane_when_other_port_is_free();
     strict_laps_ack_and_probe_ack_use_catalog_reverse_route();
+    strict_laps_acks_every_data_packet();
     pooled_packet_clears_laps_metadata();
     pooled_non_laps_control_cannot_keep_a_pinned_route();
 }
