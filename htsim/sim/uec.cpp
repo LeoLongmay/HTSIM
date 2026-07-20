@@ -862,21 +862,14 @@ bool UecSrc::lapsResolvePath(uint32_t entropy, uint32_t send_port,
         return false;
     }
 
-    ostringstream fingerprint;
-    // The NIC source port is the topology plane in main_uec.  Queue names
-    // alone are not sufficient because every plane builds an independent
-    // topology with the same queue names.
-    fingerprint << "plane=" << send_port << ';';
     for (const BaseQueue* queue : queues) {
         if (queue == nullptr) {
             return false;
         }
-        const string& name = queue->queueName();
-        // Length-prefixing preserves the queue sequence even when names
-        // contain the delimiter or each other as a prefix.
-        fingerprint << name.size() << ':' << name;
     }
-    path = LapsPathKey(fingerprint.str());
+    // Resolver fallback only supports legacy test scaffolding. Production
+    // strict LAPS always uses the catalog branch above.
+    path = LapsPathKey{static_cast<uint16_t>(entropy)};
     return true;
 }
 
