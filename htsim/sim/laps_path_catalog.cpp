@@ -31,11 +31,12 @@ simtime_picosec saturatingAdd(simtime_picosec left, simtime_picosec right) {
 
 }  // namespace
 
-LapsPathCatalog::LapsPathCatalog(std::vector<LapsPathEntry> entries)
-    : entries_(std::move(entries)) {}
+LapsPathCatalog::LapsPathCatalog(std::vector<LapsPathEntry> entries,
+                                 LapsRoutePairs route_pairs)
+    : entries_(std::move(entries)), route_pairs_(std::move(route_pairs)) {}
 
 std::shared_ptr<const LapsPathCatalog> LapsPathCatalog::build(
-    const std::vector<const Route*>& candidates, uint32_t plane,
+    LapsRoutePairs candidates, uint32_t plane,
     linkspeed_bps rate, mem_b data_packet_bytes, uint16_t requested_paths) {
     if (requested_paths == 0 || candidates.size() < requested_paths) {
         throw std::invalid_argument("strict LAPS has insufficient bidirectional path candidates");
@@ -45,9 +46,11 @@ std::shared_ptr<const LapsPathCatalog> LapsPathCatalog::build(
     std::vector<LapsPathEntry> entries;
     entries.reserve(requested_paths);
     for (uint16_t pid = 0; pid < requested_paths; ++pid) {
-        const Route* const forward = candidates.at(pid);
-        if (forward == nullptr || forward->reverse() == nullptr ||
-            forward->reverse()->reverse() != forward) {
+        const LapsRoutePair& pair = candidates.at(pid);
+        const Route* const forward = pair.forward.get();
+        const Route* const reverse = pair.reverse.get();
+        if (forward == nullptr || reverse == nullptr || forward->reverse() != reverse ||
+            reverse->reverse() != forward) {
             throw std::invalid_argument("strict LAPS candidate has no mutually linked reverse route");
         }
 
@@ -77,12 +80,14 @@ std::shared_ptr<const LapsPathCatalog> LapsPathCatalog::build(
         if (margin > std::numeric_limits<simtime_picosec>::max()) {
             throw std::overflow_error("strict LAPS queue margin overflows");
         }
-        entries.push_back({pid, plane, forward, forward->reverse(), uncongested_data_delay,
+        entries.push_back({pid, plane, forward, reverse, uncongested_data_delay,
                            saturatingAdd(uncongested_data_delay,
                                          static_cast<simtime_picosec>(margin)),
                            switch_count});
     }
-    return std::shared_ptr<const LapsPathCatalog>(new LapsPathCatalog(std::move(entries)));
+    candidates.resize(requested_paths);
+    return std::shared_ptr<const LapsPathCatalog>(
+        new LapsPathCatalog(std::move(entries), std::move(candidates)));
 }
 
 const LapsPathEntry& LapsPathCatalog::entry(uint16_t pid) const {

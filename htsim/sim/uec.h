@@ -800,7 +800,10 @@ class UecSink : public DataReceiver {
     }
     UecBasePacket::seq_t oooMaxDistance() const { return _ooo_distance_max; }
     void connectPort(uint32_t port_num, UecSrc& src, const Route& routeback);
-    void lapsSetPathCatalog(uint32_t plane, std::shared_ptr<const LapsPathCatalog> catalog) {
+    void lapsSetPathCatalog(const UecSrc& source, uint32_t plane,
+                            std::shared_ptr<const LapsPathCatalog> catalog) {
+        if (!source.isStrictLaps())
+            return;
         if (plane >= _laps_path_catalogs.size())
             _laps_path_catalogs.resize(plane + 1);
         _laps_path_catalogs[plane] = std::move(catalog);

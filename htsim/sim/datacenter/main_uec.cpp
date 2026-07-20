@@ -1422,8 +1422,24 @@ int main(int argc, char **argv) {
                         abort();
                     }
                     try {
+                        LapsRoutePairs owned_candidates;
+                        owned_candidates.reserve(candidates->size());
+                        unordered_set<Route*> owned_routes;
+                        for (const Route* forward : *candidates) {
+                            Route* const owned_forward = const_cast<Route*>(forward);
+                            Route* const owned_reverse = owned_forward == nullptr
+                                ? nullptr : const_cast<Route*>(owned_forward->reverse());
+                            if (owned_forward == nullptr || owned_reverse == nullptr ||
+                                !owned_routes.insert(owned_forward).second ||
+                                !owned_routes.insert(owned_reverse).second) {
+                                throw invalid_argument(
+                                    "strict LAPS candidates must be unique bidirectional route pairs");
+                            }
+                            owned_candidates.push_back(
+                                {unique_ptr<Route>(owned_forward), unique_ptr<Route>(owned_reverse)});
+                        }
                         auto catalog = LapsPathCatalog::build(
-                            *candidates, plane, linkspeed, Packet::data_packet_size(),
+                            std::move(owned_candidates), plane, linkspeed, Packet::data_packet_size(),
                             static_cast<uint16_t>(path_entropy_size));
                         uec_src->lapsSetPathCatalog(plane, catalog);
                         laps_catalogs.push_back(std::move(catalog));
@@ -1476,7 +1492,7 @@ int main(int argc, char **argv) {
             if (uec_src->isStrictLaps()) {
                 for (uint32_t plane = 0; plane < planes; ++plane) {
                     assert(plane < laps_catalogs.size());
-                    uec_snk->lapsSetPathCatalog(plane, laps_catalogs[plane]);
+                    uec_snk->lapsSetPathCatalog(*uec_src, plane, laps_catalogs[plane]);
                 }
             }
 
