@@ -1,5 +1,6 @@
 #include <cassert>
 #include <memory>
+#include <sstream>
 
 #include "config.h"
 #define private public
@@ -396,6 +397,38 @@ void unpaired_laps_preserves_legacy_uec_behavior(EventList& eventlist) {
     assert(!nic.hasLapsRecovery());
 }
 
+void recovery_diagnostics_are_opt_in_and_strict_laps_only(EventList& eventlist) {
+    setStrictGlobals();
+    UecNIC nic(10, eventlist, speedFromGbps(100), 1);
+    UecSrc source(nullptr, eventlist, std::make_unique<UecMpLaps>(1, false, 1.0), nic, 1);
+    const LapsPathKey path{3};
+    LapsRecoveryDomain& domain = nic.lapsRecovery();
+    const LapsAttempt attempt = installStrictRecord(source, domain, path, 0, 70, 1'000);
+    assert(domain.acknowledge(attempt, timeFromUs(uint32_t{7})));
+
+    std::ostringstream captured;
+    std::streambuf* const original = std::cout.rdbuf(captured.rdbuf());
+    UecSrc::_laps_recovery_diagnostics = false;
+    source.emitLapsRecoverySummary();
+    assert(captured.str().empty());
+
+    UecSrc::_laps_recovery_diagnostics = true;
+    source.emitLapsRecoverySummary();
+    std::cout.rdbuf(original);
+    assert(captured.str().find("LAPS_RECOVERY_SUMMARY") != std::string::npos);
+    assert(captured.str().find("acked=1") != std::string::npos);
+
+    captured.str("");
+    captured.clear();
+    std::cout.rdbuf(captured.rdbuf());
+    UecSrc::_sender_cc_algo = UecSrc::NSCC;
+    source.emitLapsRecoverySummary();
+    std::cout.rdbuf(original);
+    assert(captured.str().empty());
+    UecSrc::_laps_recovery_diagnostics = false;
+    setStrictGlobals();
+}
+
 }  // namespace
 
 int main() {
@@ -421,5 +454,7 @@ int main() {
     legacy_retransmission_never_consults_laps_replay_state(eventlist);
     assert(EventList::getPendingSources().empty());
     unpaired_laps_preserves_legacy_uec_behavior(eventlist);
+    assert(EventList::getPendingSources().empty());
+    recovery_diagnostics_are_opt_in_and_strict_laps_only(eventlist);
     assert(EventList::getPendingSources().empty());
 }

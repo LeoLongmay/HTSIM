@@ -174,6 +174,7 @@ double          UecSrc::_prism_disengage_ratio  = 0.7;
 uint32_t        UecSrc::_prism_n_min            = 3;
 double          UecSrc::_laps_beta              = 1.0;
 simtime_picosec UecSrc::_laps_probe_interval    = timeFromUs(50u);
+bool            UecSrc::_laps_recovery_diagnostics = false;
 bool            UecSrc::_prism_oracle_validation = false;
 std::string     UecSrc::_prism_oracle_log_path = "";
 std::string     UecSrc::_prism_oracle_run_id = "";
@@ -893,6 +894,11 @@ bool UecSrc::lapsResolvePath(uint32_t entropy, const Route& send_route,
 }
 
 void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b bytes) {
+    lapsRecover(attempt, seqno, bytes, LapsRecoveryCause::TIMEOUT);
+}
+
+void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b bytes,
+                         LapsRecoveryCause cause) {
     const auto record = _tx_bitmap.find(seqno);
     if (record == _tx_bitmap.end() || record->second.pkt_size != bytes ||
         !record->second.laps_attempt.has_value() ||
@@ -905,6 +911,11 @@ void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b 
     assert(record->second.laps_path.has_value());
     assert(record->second.laps_plane.has_value());
     assert(record->second.laps_pid.has_value());
+    if (cause == LapsRecoveryCause::ACK_GAP) {
+        ++_laps_ack_gap_rtx;
+    } else {
+        ++_laps_timeout_rtx;
+    }
     const LapsRtxRoute route = {record->second.path_id, record->second.selection,
                                 *record->second.laps_path, *record->second.laps_plane,
                                 *record->second.laps_pid};
@@ -913,6 +924,30 @@ void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b 
     delFromSendTimes(send_time, seqno);
     _in_flight -= bytes;
     queueForRtx(seqno, bytes, route);
+}
+
+void UecSrc::emitLapsRecoverySummary() {
+    if (!isStrictLaps() || !_laps_recovery_diagnostics ||
+        _laps_recovery_summary_emitted || !_nic.hasLapsRecovery()) {
+        return;
+    }
+    const LapsRecoveryStats& stats = _nic.lapsRecovery().statsFor(*this);
+    cout << "LAPS_RECOVERY_SUMMARY"
+         << " flow=" << flowId()
+         << " acked=" << stats.acked
+         << " stale_ack=" << stats.stale_ack
+         << " ack_gap_events=" << stats.ack_gap_events
+         << " ack_gap_records=" << stats.ack_gap_records
+         << " timeout_events=" << stats.timeout_events
+         << " timeout_records=" << stats.timeout_records
+         << " nack=" << stats.nack
+         << " stale_nack=" << stats.stale_nack
+         << " retired=" << stats.retired
+         << " stale_retire=" << stats.stale_retire
+         << " source_ack_gap_rtx=" << _laps_ack_gap_rtx
+         << " source_timeout_rtx=" << _laps_timeout_rtx
+         << '\n';
+    _laps_recovery_summary_emitted = true;
 }
 
 void UecSrc::configureMotivationTokenObserver() {
@@ -1465,6 +1500,7 @@ bool UecSrc::checkFinished(UecDataPacket::seq_t cum_ack) {
              << " done_sending " << _done_sending << endl;
 
     if (_done_sending) {
+        emitLapsRecoverySummary();
         cancelLapsProbe();
         if (isStrictLaps() && _nic.hasLapsRecovery()) {
             _nic.lapsRecovery().removeOwner(*this);
@@ -3360,6 +3396,9 @@ void UecSrc::startConnection() {
     } 
 
     assert(!hasStarted());
+    _laps_ack_gap_rtx = 0;
+    _laps_timeout_rtx = 0;
+    _laps_recovery_summary_emitted = false;
     _last_event_time.emplace(eventlist().now());
     _flow_start_time = eventlist().now();
 

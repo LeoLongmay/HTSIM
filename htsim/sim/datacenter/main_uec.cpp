@@ -295,6 +295,9 @@ int main(int argc, char **argv) {
             UecSrc::_laps_probe_interval = timeFromUs(atof(argv[i+1]));
             cout << "laps_probe_interval " << atof(argv[i+1]) << " us" << endl;
             i++;
+        } else if (!strcmp(argv[i],"-laps_recovery_diagnostics")) {
+            UecSrc::_laps_recovery_diagnostics = true;
+            cout << "laps_recovery_diagnostics enabled" << endl;
         } else if (!strcmp(argv[i],"-laps_queue_margin")) {
             cerr << "-laps_queue_margin is not supported by strict LAPS; "
                  << "remove this legacy knob" << endl;

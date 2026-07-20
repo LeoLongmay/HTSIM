@@ -217,6 +217,9 @@ public:
     bool lapsResolvePath(uint32_t entropy, const Route& send_route,
                          LapsPathKey& path) const;
     void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override;
+    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes,
+                     LapsRecoveryCause cause) override;
+    void emitLapsRecoverySummary();
     using PrismOraclePathResolver = std::function<bool(
         uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void prismSetOraclePathResolver(PrismOraclePathResolver resolver,
@@ -533,6 +536,7 @@ public:
     static uint32_t        _prism_n_min;     // minimum genuine ACK samples needed to close an epoch
     static double          _laps_beta;           // Softmax inverse-temperature; default 1.0
     static simtime_picosec _laps_probe_interval; // microseconds on CLI; default 50us
+    static bool            _laps_recovery_diagnostics;
     // Motivation-only REPS admission gate. Disabled unless explicitly requested.
     static bool            _motivation_residual_recycle;
     static simtime_picosec _motivation_residual_threshold;
@@ -737,6 +741,9 @@ private:
     simtime_picosec _laps_pacer_timer_when = 0;
     simtime_picosec _laps_next_send_at = 0;
     LapsRateState _laps_rate;
+    uint64_t _laps_ack_gap_rtx = 0;
+    uint64_t _laps_timeout_rtx = 0;
+    bool _laps_recovery_summary_emitted = false;
     /******** END LAPS probe parameters *********/
 
 
