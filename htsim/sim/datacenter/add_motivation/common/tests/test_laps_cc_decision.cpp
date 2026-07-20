@@ -79,6 +79,23 @@ void decrease_uses_the_paper_halving_rule_without_a_uec_rate_floor() {
     assert(result.tgt_rate == speedFromGbps(1));
 }
 
+void repeated_decrease_keeps_a_representable_positive_laps_rate() {
+    LapsRateState state = {1, 1, 0, 0, 0};
+    const linkspeed_bps nic_rate = speedFromGbps(100);
+
+    // LAPS repeatedly halves under sustained high delay.  Integer rate units
+    // cannot represent half a bit/s, so the last representable rate must stay
+    // positive rather than making the pacer divide by zero.  This is not the
+    // inherited UEC 1Gbps floor.
+    for (simtime_picosec now = 0; now < 10; now += 2) {
+        state = advanceLapsRate(state, signal(true, true, 20, 1), now, nic_rate);
+        assert(state.cur_rate == 1);
+        assert(state.tgt_rate == 1);
+        assert(state.cur_rate < speedFromGbps(1));
+        assert(state.cur_rate <= nic_rate);
+    }
+}
+
 void increase_never_exceeds_the_nic_rate() {
     const LapsRateState result = advanceLapsRate(
         {speedFromGbps(200), speedFromGbps(300), 6, 0, 0}, signal(true, false, 20, 30), 100,
@@ -116,6 +133,7 @@ int main() {
     safe_signal_advances_50_gbps_to_75_gbps();
     stage_six_doubles_the_target_rate();
     decrease_uses_the_paper_halving_rule_without_a_uec_rate_floor();
+    repeated_decrease_keeps_a_representable_positive_laps_rate();
     increase_never_exceeds_the_nic_rate();
     cooldown_times_saturate_instead_of_wrapping();
     cooldown_uses_two_times_minimum_real_delay();

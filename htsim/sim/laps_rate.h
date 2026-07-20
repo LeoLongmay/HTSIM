@@ -22,6 +22,10 @@ struct LapsRateSignal {
     simtime_picosec min_delay;
 };
 
+// Rates are integer bits/s.  One bit/s is the smallest representable positive
+// LAPS pacing rate; it is deliberately not UEC's historical 1Gbps floor.
+inline constexpr linkspeed_bps kLapsMinimumPacingRate = 1;
+
 inline simtime_picosec saturatingAdd(simtime_picosec lhs, simtime_picosec rhs) {
     return rhs > std::numeric_limits<simtime_picosec>::max() - lhs
                ? std::numeric_limits<simtime_picosec>::max()
@@ -40,9 +44,16 @@ inline LapsRateState advanceLapsRate(LapsRateState state, const LapsRateSignal& 
         return state;
     }
 
+    // Strict LAPS is initialized from a positive NIC speed.  Keep both rate
+    // variables in the representable [1 bit/s, NIC] interval so repeated
+    // paper-style halving cannot feed a zero divisor to the LAPS pacer.
+    const linkspeed_bps minimum_rate = std::min(nic_rate, kLapsMinimumPacingRate);
+    state.cur_rate = std::max(minimum_rate, std::min(state.cur_rate, nic_rate));
+    state.tgt_rate = std::max(minimum_rate, std::min(state.tgt_rate, nic_rate));
+
     if (signal.all_paths_high && now >= state.next_decrease_at) {
         state.tgt_rate = state.cur_rate;
-        state.cur_rate /= 2;
+        state.cur_rate = std::max(minimum_rate, state.cur_rate / 2);
         state.inc_stage = 0;
         state.next_decrease_at = saturatingAdd(now, saturatingDouble(signal.min_delay));
         return state;
