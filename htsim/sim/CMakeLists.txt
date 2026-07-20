@@ -77,6 +77,7 @@ set(SOURCE_FILES
     fairpullqueue.cpp
     hpcc.cpp
     hpccpacket.cpp
+    laps_path_catalog.cpp
     laps_recovery.cpp
     logfile.cpp
     loggers.cpp
@@ -206,6 +207,12 @@ if ( ENABLE_TESTS )
     target_link_libraries(test_laps_recovery PRIVATE htsim_dc htsim)
     add_test(NAME laps_recovery COMMAND test_laps_recovery)
     set_tests_properties(laps_recovery PROPERTIES LABELS "laps;unit" TIMEOUT 60)
+
+    add_executable(test_laps_path_catalog
+        datacenter/add_motivation/common/tests/test_laps_path_catalog.cpp)
+    target_link_libraries(test_laps_path_catalog PRIVATE htsim_dc htsim)
+    add_test(NAME laps_path_catalog COMMAND test_laps_path_catalog)
+    set_tests_properties(laps_path_catalog PROPERTIES LABELS "laps;unit" TIMEOUT 60)
 
     add_executable(test_prism_coordination
         datacenter/add_motivation/common/tests/test_prism_coordination.cpp)

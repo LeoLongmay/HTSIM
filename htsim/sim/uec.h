@@ -21,6 +21,7 @@
 #include "oversubscribed_cc.h"
 #include "laps_rate.h"
 #include "laps_recovery.h"
+#include "laps_path_catalog.h"
 #include "uec_mp.h"
 #include "motivation_epoch.h"
 #include "prism_coordination.h"
@@ -182,6 +183,13 @@ public:
     using LapsPathResolver = std::function<bool(
         uint32_t, uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void lapsSetPathResolver(LapsPathResolver resolver);
+    void lapsSetPathCatalog(uint32_t plane, std::shared_ptr<const LapsPathCatalog> catalog) {
+        if (isStrictLaps()) {
+            if (plane >= _laps_path_catalogs.size())
+                _laps_path_catalogs.resize(plane + 1);
+            _laps_path_catalogs[plane] = std::move(catalog);
+        }
+    }
     bool lapsResolvePath(uint32_t entropy, uint32_t send_port,
                          LapsPathKey& path) const;
     bool lapsResolvePath(uint32_t entropy, const Route& send_route,
@@ -361,6 +369,7 @@ public:
     std::vector<MotivationResolvedPath> _motivation_paths;
     std::vector<bool> _motivation_path_attempted;
     LapsPathResolver _laps_path_resolver;
+    std::vector<std::shared_ptr<const LapsPathCatalog>> _laps_path_catalogs;
     uint64_t motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
                               simtime_picosec qdelay, bool genuine,
                               const UecMpSelection& selection,
@@ -791,6 +800,11 @@ class UecSink : public DataReceiver {
     }
     UecBasePacket::seq_t oooMaxDistance() const { return _ooo_distance_max; }
     void connectPort(uint32_t port_num, UecSrc& src, const Route& routeback);
+    void lapsSetPathCatalog(uint32_t plane, std::shared_ptr<const LapsPathCatalog> catalog) {
+        if (plane >= _laps_path_catalogs.size())
+            _laps_path_catalogs.resize(plane + 1);
+        _laps_path_catalogs[plane] = std::move(catalog);
+    }
     const Route* getPortRoute(uint32_t port_num) const {return _ports[port_num]->route();}
     UecSinkPort* getPort(uint32_t port_num) {return _ports[port_num];}
     void setSrc(uint32_t s) { _srcaddr = s; }
@@ -907,6 +921,7 @@ class UecSink : public DataReceiver {
 
     uint16_t _entropy;
     std::vector<uint32_t> _paths;
+    std::vector<std::shared_ptr<const LapsPathCatalog>> _laps_path_catalogs;
 
     //variables for PCIe model
     PCIeModel* _pcie;

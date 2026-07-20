@@ -1386,6 +1386,7 @@ int main(int argc, char **argv) {
             }
 
             uec_src = new UecSrc(traffic_logger, eventlist, move(mp), *nics.at(src), ports);
+            vector<shared_ptr<const LapsPathCatalog>> laps_catalogs;
             if (UecSrc::_prism_oracle_validation) {
                 FatTreeTopology* oracle_topology = topo[0].get();
                 uec_src->prismSetOraclePathResolver(
@@ -1403,14 +1404,52 @@ int main(int argc, char **argv) {
             }
 
             if (uec_src->isStrictLaps()) {
+                if (path_entropy_size > numeric_limits<uint16_t>::max()) {
+                    cerr << "Strict LAPS path count exceeds the catalog PID range" << endl;
+                    abort();
+                }
+                laps_catalogs.reserve(planes);
+                for (uint32_t plane = 0; plane < planes; ++plane) {
+                    if (!topo[plane]) {
+                        cerr << "Strict LAPS has no topology for plane " << plane << endl;
+                        abort();
+                    }
+                    unique_ptr<vector<const Route*>> candidates(
+                        topo[plane]->get_bidir_paths(src, dest, true));
+                    if (!candidates) {
+                        cerr << "Strict LAPS failed to enumerate bidirectional paths for flow "
+                             << src << "->" << dest << " on plane " << plane << endl;
+                        abort();
+                    }
+                    try {
+                        auto catalog = LapsPathCatalog::build(
+                            *candidates, plane, linkspeed, Packet::data_packet_size(),
+                            static_cast<uint16_t>(path_entropy_size));
+                        uec_src->lapsSetPathCatalog(plane, catalog);
+                        laps_catalogs.push_back(std::move(catalog));
+                    } catch (const exception& error) {
+                        cerr << "Strict LAPS failed to build path catalog for flow " << src
+                             << "->" << dest << " on plane " << plane << ": "
+                             << error.what() << endl;
+                        abort();
+                    }
+                }
                 uec_src->lapsSetPathResolver(
-                    [&topo, src, dest](uint32_t flow_id, uint32_t entropy,
-                                      uint32_t plane, vector<const BaseQueue*>& queues) {
-                        if (plane >= topo.size() || !topo[plane]) {
+                    [laps_catalogs](
+                        uint32_t, uint32_t entropy, uint32_t plane,
+                        vector<const BaseQueue*>& queues) {
+                        if (plane >= laps_catalogs.size() || !laps_catalogs[plane] ||
+                            laps_catalogs[plane]->size() == 0) {
                             return false;
                         }
-                        return topo[plane]->resolve_or_materialize_ecmp_path(
-                            src, dest, flow_id, entropy, queues);
+                        const auto& path = laps_catalogs[plane]->entry(
+                            static_cast<uint16_t>(entropy & (laps_catalogs[plane]->size() - 1)));
+                        queues.clear();
+                        for (size_t hop = 0; hop < path.forward->size(); ++hop) {
+                            if (const auto* queue = dynamic_cast<const BaseQueue*>(path.forward->at(hop)))
+                                queues.push_back(queue);
+                        }
+                        return !queues.empty();
                     });
             }
 
@@ -1432,6 +1471,13 @@ int main(int argc, char **argv) {
 
             if (crt->flowid) {
                 uec_snk->setFlowId(crt->flowid);
+            }
+
+            if (uec_src->isStrictLaps()) {
+                for (uint32_t plane = 0; plane < planes; ++plane) {
+                    assert(plane < laps_catalogs.size());
+                    uec_snk->lapsSetPathCatalog(plane, laps_catalogs[plane]);
+                }
             }
 
             // If cwnd is 0 initXXcc will set a sensible default value 
