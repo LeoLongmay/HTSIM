@@ -8,7 +8,8 @@ namespace {
 
 void low_latency_path_receives_more_softmax_selections() {
     srandom(17);
-    UecMpLaps laps(4, false, 1.0);
+    UecMpLaps laps(4, false, 0.01);
+    laps.configurePaths({10, 100, 100, 100});
     for (uint32_t path = 0; path != 4; ++path) {
         laps.observeLapsDelay(path, path == 0 ? 10 : 100, 1'000);
     }
@@ -26,6 +27,7 @@ void low_latency_path_receives_more_softmax_selections() {
 void zero_beta_sprays_uniformly_across_paths() {
     srandom(23);
     UecMpLaps laps(4, false, 0.0);
+    laps.configurePaths({10, 100, 100, 100});
     for (uint32_t path = 0; path != 4; ++path) {
         laps.observeLapsDelay(path, path == 0 ? 10 : 100, 1'000);
     }
@@ -40,23 +42,19 @@ void zero_beta_sprays_uniformly_across_paths() {
     }
 }
 
-void signal_is_not_ready_until_every_path_has_a_sample() {
+void catalog_base_values_calibrate_the_signal_before_traffic_observations() {
     UecMpLaps laps(4, false, 1.0);
-    laps.observeLapsDelay(0, 10, 1'000);
-    laps.observeLapsDelay(1, 100, 1'000);
-    laps.observeLapsDelay(2, 100, 1'000);
-    assert(!laps.lapsSignal(1'000).calibrated);
-
-    laps.observeLapsDelay(3, 100, 1'000);
-    const UecMpLapsSignal signal = laps.lapsSignal(1'000);
+    laps.configurePaths({10, 100, 100, 100});
+    const UecMpLapsSignal signal = laps.lapsSignal(0);
     assert(signal.calibrated);
     assert(signal.target_delay == 100);
-    assert(signal.max_delay == 100);
+    assert(signal.min_delay == 10);
     assert(!signal.all_paths_high);
 }
 
 void strict_all_path_high_uses_the_calibrated_target_delay() {
     UecMpLaps laps(4, false, 1.0);
+    laps.configurePaths({10, 100, 100, 100});
     for (uint32_t path = 0; path != 4; ++path) {
         laps.observeLapsDelay(path, path == 0 ? 10 : 100, 0);
     }
@@ -68,75 +66,92 @@ void strict_all_path_high_uses_the_calibrated_target_delay() {
     const UecMpLapsSignal signal = laps.lapsSignal(1);
     assert(signal.calibrated);
     assert(signal.target_delay == 100);
-    assert(signal.max_delay == 101);
+    assert(signal.min_delay == 101);
     assert(signal.all_paths_high);
 }
 
-void stale_path_is_probed_and_probe_feedback_refreshes_it() {
+void stale_pid_has_zero_weight_until_probe_ack() {
     UecMpLaps laps(4, false, 8.0);
-    laps.observeLapsDelay(0, 10, 0);
-    for (uint32_t path = 1; path != 4; ++path) {
-        laps.observeLapsDelay(path, 100, 100);
+    laps.configurePaths({100, 100, 100, 100});
+    for (uint16_t pid = 0; pid < 4; ++pid) {
+        laps.observeLapsDelay(pid, 100, 0);
     }
 
-    const auto probe = laps.nextLapsProbeEntropy(100);
+    assert(laps.nextLapsDeadline(0) == 201);
+    const auto probe = laps.nextLapsProbePid(201);
     assert(probe.has_value());
-    assert((*probe & 3) == 0);
+    assert(*probe == 0);
+    assert(!laps.pathIsSelectable(0));
+    for (int i = 0; i < 2'000; ++i) {
+        assert(laps.nextLapsPid() != 0);
+    }
 
-    laps.observeLapsProbe(*probe, 10, 100);
-    assert(!laps.nextLapsProbeEntropy(100).has_value());
+    laps.observeLapsProbe(*probe, 100, 201);
+    assert(laps.pathIsSelectable(0));
 }
 
 void multiple_stale_paths_are_probed_in_rotation() {
     UecMpLaps laps(4, false, 8.0);
+    laps.configurePaths({10, 10, 10, 10});
     for (uint32_t path = 0; path != 4; ++path) {
         laps.observeLapsDelay(path, 10, 0);
     }
 
-    const auto first = laps.nextLapsProbeEntropy(100);
-    const auto second = laps.nextLapsProbeEntropy(100);
+    const auto first = laps.nextLapsProbePid(21);
+    const auto second = laps.nextLapsProbePid(21);
     assert(first.has_value());
     assert(second.has_value());
-    assert((*first & 3) == 0);
-    assert((*second & 3) == 1);
+    assert(*first == 0);
+    assert(*second == 1);
 }
 
-void path_at_exact_stale_timeout_is_probed() {
+void path_after_stale_timeout_is_probed() {
     UecMpLaps laps(4, false, 8.0);
+    laps.configurePaths({10, 10, 10, 10});
     for (uint32_t path = 0; path != 4; ++path) {
         laps.observeLapsDelay(path, 10, 0);
     }
 
-    const auto probe = laps.nextLapsProbeEntropy(20);
+    assert(!laps.nextLapsProbePid(20).has_value());
+    const auto probe = laps.nextLapsProbePid(21);
     assert(probe.has_value());
-    assert((*probe & 3) == 0);
+    assert(*probe == 0);
 }
 
 void stale_samples_block_all_path_high_until_refreshed() {
     UecMpLaps laps(4, false, 8.0);
+    laps.configurePaths({10, 10, 10, 10});
     for (uint32_t path = 0; path != 4; ++path) {
         laps.observeLapsDelay(path, 10, 0);
         laps.observeLapsDelay(path, 30, 0);
     }
 
-    laps.observeLapsDelay(0, 30, 60);
-    const UecMpLapsSignal stale_signal = laps.lapsSignal(60);
-    assert(!stale_signal.calibrated);
-    assert(!stale_signal.all_paths_high);
+    laps.observeLapsDelay(0, 30, 61);
+    // Expiry becomes non-selectable when the deadline-driven probe is issued.
+    const auto first_probe = laps.nextLapsProbePid(61);
+    assert(first_probe.has_value());
+    assert(*first_probe == 1);
+    const UecMpLapsSignal stale_signal = laps.lapsSignal(61);
+    // Probed PIDs are invalid/zero-weight, but the remaining valid PID still
+    // drives Algorithm 2's all-valid-paths congestion decision.
+    assert(stale_signal.calibrated);
+    assert(stale_signal.target_delay == 10);
+    assert(stale_signal.min_delay == 30);
+    assert(stale_signal.all_paths_high);
 
-    for (uint32_t path = 1; path != 4; ++path) {
-        const auto probe = laps.nextLapsProbeEntropy(60);
+    for (uint32_t path = 2; path != 4; ++path) {
+        const auto probe = laps.nextLapsProbePid(61);
         assert(probe.has_value());
-        assert((*probe & 3) == path);
+        assert(*probe == path);
     }
-    const UecMpLapsSignal probed_signal = laps.lapsSignal(60);
-    assert(!probed_signal.calibrated);
-    assert(!probed_signal.all_paths_high);
+    const UecMpLapsSignal probed_signal = laps.lapsSignal(61);
+    assert(probed_signal.calibrated);
+    assert(probed_signal.all_paths_high);
 
     for (uint32_t path = 1; path != 4; ++path) {
-        laps.observeLapsProbe(path, 30, 60);
+        laps.observeLapsProbe(path, 30, 61);
     }
-    const UecMpLapsSignal refreshed_signal = laps.lapsSignal(60);
+    const UecMpLapsSignal refreshed_signal = laps.lapsSignal(61);
     assert(refreshed_signal.calibrated);
     assert(refreshed_signal.all_paths_high);
 }
@@ -156,11 +171,11 @@ void rejects_non_power_of_two_path_count() {
 int main() {
     low_latency_path_receives_more_softmax_selections();
     zero_beta_sprays_uniformly_across_paths();
-    signal_is_not_ready_until_every_path_has_a_sample();
+    catalog_base_values_calibrate_the_signal_before_traffic_observations();
     strict_all_path_high_uses_the_calibrated_target_delay();
-    stale_path_is_probed_and_probe_feedback_refreshes_it();
+    stale_pid_has_zero_weight_until_probe_ack();
     multiple_stale_paths_are_probed_in_rotation();
-    path_at_exact_stale_timeout_is_probed();
+    path_after_stale_timeout_is_probed();
     stale_samples_block_all_path_high_until_refreshed();
     rejects_non_power_of_two_path_count();
 }

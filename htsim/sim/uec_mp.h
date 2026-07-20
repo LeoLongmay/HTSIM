@@ -66,7 +66,7 @@ struct UecMpLapsSignal {
     bool all_paths_high = false;
     uint16_t sampled_paths = 0;
     simtime_picosec target_delay = 0;
-    simtime_picosec max_delay = 0;
+    simtime_picosec min_delay = 0;
 };
 
 class UecMultipath {
@@ -127,22 +127,32 @@ public:
                           simtime_picosec now) override;
     void observeLapsProbe(uint32_t path_id, simtime_picosec delay,
                           simtime_picosec now) override;
+    void configurePaths(std::vector<simtime_picosec> base_vals);
+    uint16_t nextLapsPid();
+    optional<uint16_t> nextLapsProbePid(simtime_picosec now);
+    optional<simtime_picosec> nextLapsDeadline(simtime_picosec now) const;
+    bool pathIsSelectable(uint16_t pid) const;
     optional<uint32_t> nextLapsProbeEntropy(simtime_picosec now) override;
     UecMpLapsSignal lapsSignal(simtime_picosec now) const override;
 private:
     struct LapsPathState {
         bool valid = false;
-        simtime_picosec base_latency = 0;
-        simtime_picosec real_latency = 0;
-        simtime_picosec observed_latency = 0;
-        simtime_picosec last_update = 0;
-        simtime_picosec last_probe = 0;
+        bool probe_pending = false;
+        simtime_picosec base_val = 0;
+        union {
+            simtime_picosec real_val = 0;
+            simtime_picosec real_latency;  // compatibility alias for focused route tests
+        };
+        union {
+            simtime_picosec updated_at = 0;
+            simtime_picosec last_update;  // compatibility alias for focused route tests
+        };
     };
 
     uint32_t pathIndex(uint32_t entropy) const;
     uint32_t entropyForPath(uint32_t path_id) const;
-    bool isStale(const LapsPathState& state, simtime_picosec now) const;
-    bool isControllerStale(const LapsPathState& state, simtime_picosec now) const;
+    optional<simtime_picosec> deadline(const LapsPathState& state) const;
+    bool isProbeDue(const LapsPathState& state, simtime_picosec now) const;
     void observe(uint32_t path_id, simtime_picosec delay, simtime_picosec now);
 
     uint16_t _no_of_paths;

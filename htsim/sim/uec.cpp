@@ -1678,6 +1678,7 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             _mp->observeLapsDelay(pkt.ev(), pkt.lapsOneWayDelay(), now);
         }
         updateLapsRate(now);
+        scheduleLapsProbe();
     }
 
     handleCumulativeAck(cum_ack);
@@ -3419,7 +3420,7 @@ bool UecSrc::isSendPermitted() {
     }
 
     mem_b next_packet_size = getNextPacketSize();        
-    if (_sender_based_cc && !can_send_NSCC(next_packet_size)) {
+    if (_sender_based_cc && !isStrictLaps() && !can_send_NSCC(next_packet_size)) {
         return false;
     }
 
@@ -3509,7 +3510,7 @@ UecBasePacket::pull_quanta UecSrc::computePullTarget() {
     mem_b pull_target = _backlog + _rtx_backlog;
     //mem_b pull_target = _backlog;
 
-    if (_sender_based_cc) {
+    if (_sender_based_cc && !isStrictLaps()) {
         if (pull_target > _cwnd + _mtu) {
             pull_target = _cwnd + _mtu;
         }
@@ -3941,8 +3942,10 @@ void UecSrc::sendProbe() {
 }
 
 void UecSrc::sendLapsProbe() {
-    const optional<uint32_t> entropy = _mp->nextLapsProbeEntropy(eventlist().now());
-    if (!entropy.has_value()) {
+    auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+    if (!laps) throw logic_error("strict LAPS has no LAPS multipath state");
+    const optional<uint16_t> pid = laps->nextLapsProbePid(eventlist().now());
+    if (!pid.has_value()) {
         return;
     }
 
@@ -3955,11 +3958,11 @@ void UecSrc::sendLapsProbe() {
                                     UecBasePacket::DATA_PROBE, 0, _dstaddr);
     p->set_src(_srcaddr);
     p->set_dst(_dstaddr);
-    p->set_pathid(*entropy);
+    p->set_pathid(*pid);
     if (_laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
         throw logic_error("strict LAPS probe has no path catalog");
     }
-    p->setLapsPid(static_cast<uint16_t>(*entropy & (_laps_path_catalogs[0]->size() - 1)));
+    p->setLapsPid(*pid);
     p->set_hop_count(0);
     p->setLapsSendTime(eventlist().now());
     _laps_probe_outstanding.insert(_laps_probe_seqno);
@@ -3968,11 +3971,18 @@ void UecSrc::sendLapsProbe() {
 }
 
 void UecSrc::scheduleLapsProbe() {
-    if (!isStrictLaps() || _done_sending || _laps_probe_interval == 0 ||
-        _laps_probe_timer_when != 0) {
+    if (!isStrictLaps() || _done_sending) {
         return;
     }
-    _laps_probe_timer_when = eventlist().now() + _laps_probe_interval;
+    const auto* laps = dynamic_cast<const UecMpLaps*>(_mp.get());
+    if (!laps) throw logic_error("strict LAPS has no LAPS multipath state");
+    const optional<simtime_picosec> deadline = laps->nextLapsDeadline(eventlist().now());
+    if (!deadline.has_value()) return;
+    if (_laps_probe_timer_when != 0 && _laps_probe_timer_when <= *deadline) return;
+    if (_laps_probe_timer_when != 0) {
+        eventlist().cancelPendingSourceByHandle(*this, _laps_probe_timer_handle);
+    }
+    _laps_probe_timer_when = *deadline;
     _laps_probe_timer_handle =
         eventlist().sourceIsPendingGetHandle(*this, _laps_probe_timer_when);
     if (_laps_probe_timer_handle == eventlist().nullHandle()) {
@@ -4024,23 +4034,12 @@ void UecSrc::cancelLapsPacer() {
     }
 }
 
-void UecSrc::setLapsSafetyWindow(simtime_picosec target_delay) {
-    const unsigned __int128 window =
-        static_cast<unsigned __int128>(2) * target_delay * _nic.linkspeed() /
-        (8U * 1000000000000ULL);
-    _cwnd = static_cast<mem_b>(std::min<unsigned __int128>(
-        window, static_cast<unsigned __int128>(numeric_limits<mem_b>::max())));
-}
-
 void UecSrc::updateLapsRate(simtime_picosec now) {
     assert(isStrictLaps());
     const UecMpLapsSignal sampled = _mp->lapsSignal(now);
     const LapsRateSignal signal = {sampled.calibrated, sampled.all_paths_high,
-                                   sampled.target_delay, sampled.max_delay};
+                                   sampled.target_delay, sampled.min_delay};
     _laps_rate = advanceLapsRate(_laps_rate, signal, now, _nic.linkspeed());
-    if (sampled.calibrated) {
-        setLapsSafetyWindow(sampled.target_delay);
-    }
 }
 
 void UecSrc::sendRTS() {
@@ -4143,7 +4142,7 @@ void UecSrc::timeToSend(const Route& route) {
     }
 
     mem_b next_packet_size = getNextPacketSize();
-    if (_sender_based_cc && !can_send_NSCC(next_packet_size)) {
+    if (_sender_based_cc && !isStrictLaps() && !can_send_NSCC(next_packet_size)) {
         if (_debug_src)
             cout << _flow.str() << " " << _node_num << " cantSend, limited by sender CWND " << _cwnd << " _in_flight "
                     << _in_flight << "\n";

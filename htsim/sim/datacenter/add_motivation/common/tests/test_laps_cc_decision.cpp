@@ -6,8 +6,8 @@
 namespace {
 
 LapsRateSignal signal(bool calibrated, bool all_paths_high, simtime_picosec target_delay,
-                      simtime_picosec max_delay) {
-    return {calibrated, all_paths_high, target_delay, max_delay};
+                      simtime_picosec min_delay) {
+    return {calibrated, all_paths_high, target_delay, min_delay};
 }
 
 void uncalibrated_signal_holds_every_rate_field() {
@@ -35,7 +35,7 @@ void all_paths_high_halves_100_gbps_to_50_gbps() {
     assert(result.next_increase_at == 0);
 }
 
-void decrease_is_blocked_until_its_two_max_delay_cooldown() {
+void decrease_is_blocked_until_its_two_minimum_real_delay_cooldown() {
     const LapsRateState initial = {speedFromGbps(50), speedFromGbps(100), 2, 160, 0};
 
     const LapsRateState result = advanceLapsRate(
@@ -56,7 +56,7 @@ void safe_signal_advances_50_gbps_to_75_gbps() {
     assert(result.cur_rate == speedFromGbps(75));
     assert(result.tgt_rate == speedFromGbps(100));
     assert(result.inc_stage == 1);
-    assert(result.next_increase_at == 140);
+    assert(result.next_increase_at == 160);
 }
 
 void stage_six_doubles_the_target_rate() {
@@ -67,15 +67,15 @@ void stage_six_doubles_the_target_rate() {
     assert(result.cur_rate == speedFromGbps(125));
     assert(result.tgt_rate == speedFromGbps(200));
     assert(result.inc_stage == 7);
-    assert(result.next_increase_at == 140);
+    assert(result.next_increase_at == 160);
 }
 
-void decrease_never_crosses_the_one_gbps_floor() {
+void decrease_uses_the_paper_halving_rule_without_a_uec_rate_floor() {
     const LapsRateState result = advanceLapsRate(
         {speedFromGbps(1), speedFromGbps(1), 3, 0, 0}, signal(true, true, 20, 30), 100,
         speedFromGbps(100));
 
-    assert(result.cur_rate == speedFromGbps(1));
+    assert(result.cur_rate == speedFromGbps(0.5));
     assert(result.tgt_rate == speedFromGbps(1));
 }
 
@@ -97,15 +97,26 @@ void cooldown_times_saturate_instead_of_wrapping() {
     assert(result.next_decrease_at == max_time);
 }
 
+void cooldown_uses_two_times_minimum_real_delay() {
+    const LapsRateSignal sampled = {true, true, 80, 30};
+    const LapsRateState result = advanceLapsRate(
+        {speedFromGbps(100), speedFromGbps(100), 0, 0, 0}, sampled, 100,
+        speedFromGbps(100));
+
+    assert(result.cur_rate == speedFromGbps(50));
+    assert(result.next_decrease_at == 160);
+}
+
 }  // namespace
 
 int main() {
     uncalibrated_signal_holds_every_rate_field();
     all_paths_high_halves_100_gbps_to_50_gbps();
-    decrease_is_blocked_until_its_two_max_delay_cooldown();
+    decrease_is_blocked_until_its_two_minimum_real_delay_cooldown();
     safe_signal_advances_50_gbps_to_75_gbps();
     stage_six_doubles_the_target_rate();
-    decrease_never_crosses_the_one_gbps_floor();
+    decrease_uses_the_paper_halving_rule_without_a_uec_rate_floor();
     increase_never_exceeds_the_nic_rate();
     cooldown_times_saturate_instead_of_wrapping();
+    cooldown_uses_two_times_minimum_real_delay();
 }

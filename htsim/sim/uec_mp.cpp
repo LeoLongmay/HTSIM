@@ -58,40 +58,54 @@ uint32_t UecMpLaps::entropyForPath(uint32_t path_id) const {
     return entropy | (_path_random ^ (_path_random & mask));
 }
 
-bool UecMpLaps::isStale(const LapsPathState& state, simtime_picosec now) const {
-    if (!state.valid || now < state.last_update) {
-        return false;
+optional<simtime_picosec> UecMpLaps::deadline(const LapsPathState& state) const {
+    if (!state.valid || state.probe_pending) {
+        return {};
     }
-    const simtime_picosec stale_after =
-        state.real_latency > std::numeric_limits<simtime_picosec>::max() / 2
+    // A zero delay is not a valid on-wire LAPS sample.  Treat it as immediately
+    // due so a probe repairs the state rather than leaving it selectable.
+    if (state.real_val == 0) return state.updated_at;
+    const simtime_picosec doubled =
+        state.real_val > std::numeric_limits<simtime_picosec>::max() / 2
             ? std::numeric_limits<simtime_picosec>::max()
-            : 2 * state.real_latency;
-    return now - state.last_update >= stale_after;
+            : 2 * state.real_val;
+    const simtime_picosec after_delay =
+        doubled > std::numeric_limits<simtime_picosec>::max() - state.updated_at
+            ? std::numeric_limits<simtime_picosec>::max()
+            : state.updated_at + doubled;
+    // A PID expires only after, rather than at, two real-delay intervals.
+    return after_delay == std::numeric_limits<simtime_picosec>::max()
+               ? after_delay
+               : after_delay + 1;
 }
 
-bool UecMpLaps::isControllerStale(const LapsPathState& state,
-                                  simtime_picosec now) const {
-    if (!state.valid || now < state.last_update) {
-        return false;
-    }
-    const simtime_picosec stale_after =
-        state.observed_latency > std::numeric_limits<simtime_picosec>::max() / 2
-            ? std::numeric_limits<simtime_picosec>::max()
-            : 2 * state.observed_latency;
-    return now - state.last_update >= stale_after;
+bool UecMpLaps::isProbeDue(const LapsPathState& state, simtime_picosec now) const {
+    const auto due = deadline(state);
+    return due.has_value() && now >= *due;
 }
 
 void UecMpLaps::observe(uint32_t path_id, simtime_picosec delay, simtime_picosec now) {
     LapsPathState& state = _paths[pathIndex(path_id)];
-    if (!state.valid) {
-        state.valid = true;
-        state.base_latency = delay;
-    } else {
-        state.base_latency = std::min(state.base_latency, delay);
+    if (!state.valid) return;
+    state.real_val = delay;
+    state.updated_at = now;
+    state.probe_pending = false;
+}
+
+void UecMpLaps::configurePaths(vector<simtime_picosec> base_vals) {
+    if (base_vals.size() != _no_of_paths) {
+        throw std::invalid_argument("LAPS catalog does not match the configured path count");
     }
-    state.real_latency = delay;
-    state.observed_latency = delay;
-    state.last_update = now;
+    for (uint16_t pid = 0; pid != _no_of_paths; ++pid) {
+        if (base_vals[pid] == 0) {
+            throw std::invalid_argument("LAPS catalog base delay must be non-zero");
+        }
+        _paths[pid] = {true, false, base_vals[pid], base_vals[pid], 0};
+    }
+}
+
+bool UecMpLaps::pathIsSelectable(uint16_t pid) const {
+    return pid < _no_of_paths && _paths[pid].valid && !_paths[pid].probe_pending;
 }
 
 void UecMpLaps::observeLapsDelay(uint32_t path_id, simtime_picosec delay,
@@ -105,33 +119,29 @@ void UecMpLaps::observeLapsProbe(uint32_t path_id, simtime_picosec delay,
 }
 
 uint32_t UecMpLaps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
-    simtime_picosec target_delay = 0;
-    simtime_picosec min_real_latency = std::numeric_limits<simtime_picosec>::max();
+    return entropyForPath(nextLapsPid());
+}
+
+uint16_t UecMpLaps::nextLapsPid() {
+    double common_exponent = -std::numeric_limits<double>::infinity();
+    bool has_selectable_path = false;
     for (const LapsPathState& state : _paths) {
-        if (!state.valid) {
-            const uint32_t path_id = _bootstrap_path++ & (_no_of_paths - 1);
-            return entropyForPath(path_id);
-        }
-        target_delay = std::max(target_delay, state.base_latency);
-        min_real_latency = std::min(min_real_latency, state.real_latency);
+        if (!state.valid || state.probe_pending) continue;
+        has_selectable_path = true;
+        common_exponent = std::max(common_exponent,
+                                   -_beta * static_cast<double>(state.real_val));
+    }
+    if (!has_selectable_path) {
+        return static_cast<uint16_t>(_bootstrap_path++ & (_no_of_paths - 1));
     }
 
-    if (_beta == 0.0) {
-        const uint32_t path_id = _bootstrap_path++ & (_no_of_paths - 1);
-        return entropyForPath(path_id);
-    }
-
-    const double temperature =
-        static_cast<double>(std::max<simtime_picosec>(target_delay, 1));
-    vector<double> weights(_no_of_paths, 1.0);
+    vector<double> weights(_no_of_paths, 0.0);
     double total_weight = 0.0;
     for (uint32_t path_id = 0; path_id != _no_of_paths; ++path_id) {
         const LapsPathState& state = _paths[path_id];
-        if (state.valid) {
-            const double normalized_delay =
-                static_cast<double>(state.real_latency - min_real_latency) / temperature;
-            weights[path_id] = std::exp(-_beta * normalized_delay);
-        }
+        if (!state.valid || state.probe_pending) continue;
+        weights[path_id] = std::exp(-_beta * static_cast<double>(state.real_val) -
+                                    common_exponent);
         total_weight += weights[path_id];
     }
 
@@ -141,52 +151,81 @@ uint32_t UecMpLaps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
     for (uint32_t path_id = 0; path_id != _no_of_paths; ++path_id) {
         cumulative_weight += weights[path_id];
         if (draw < cumulative_weight) {
-            return entropyForPath(path_id);
+            return static_cast<uint16_t>(path_id);
         }
     }
-    return entropyForPath(_no_of_paths - 1);
+    for (uint16_t pid = _no_of_paths; pid != 0; --pid) {
+        if (pathIsSelectable(pid - 1)) return pid - 1;
+    }
+    return 0;
 }
 
-optional<uint32_t> UecMpLaps::nextLapsProbeEntropy(simtime_picosec now) {
+optional<uint16_t> UecMpLaps::nextLapsProbePid(simtime_picosec now) {
     for (uint32_t offset = 0; offset != _no_of_paths; ++offset) {
         const uint32_t path_id = (_next_stale_probe + offset) & (_no_of_paths - 1);
         LapsPathState& state = _paths[path_id];
-        if (!isStale(state, now)) {
+        if (!isProbeDue(state, now)) {
             continue;
         }
 
         _next_stale_probe = (path_id + 1) & (_no_of_paths - 1);
-        state.last_probe = now;
-        state.real_latency = state.real_latency > std::numeric_limits<simtime_picosec>::max() / 2
-                                 ? std::numeric_limits<simtime_picosec>::max()
-                                 : 2 * state.real_latency;
-        return entropyForPath(path_id);
+        state.updated_at = now;
+        state.real_val = state.real_val > std::numeric_limits<simtime_picosec>::max() / 2
+                             ? std::numeric_limits<simtime_picosec>::max()
+                             : 2 * state.real_val;
+        state.probe_pending = true;
+        return static_cast<uint16_t>(path_id);
     }
     return {};
+}
+
+optional<simtime_picosec> UecMpLaps::nextLapsDeadline(simtime_picosec now) const {
+    optional<simtime_picosec> earliest;
+    for (const LapsPathState& state : _paths) {
+        const auto candidate = deadline(state);
+        if (candidate.has_value() && (!earliest.has_value() || *candidate < *earliest)) {
+            earliest = candidate;
+        }
+    }
+    return earliest;
+}
+
+optional<uint32_t> UecMpLaps::nextLapsProbeEntropy(simtime_picosec now) {
+    const auto pid = nextLapsProbePid(now);
+    return pid.has_value() ? optional<uint32_t>(entropyForPath(*pid)) : optional<uint32_t>{};
 }
 
 UecMpLapsSignal UecMpLaps::lapsSignal(simtime_picosec now) const {
     UecMpLapsSignal signal;
     simtime_picosec max_base_latency = 0;
-    bool has_stale_sample = false;
+    simtime_picosec min_real_latency = std::numeric_limits<simtime_picosec>::max();
     for (const LapsPathState& state : _paths) {
-        if (!state.valid) {
+        if (!state.valid || state.probe_pending) {
             continue;
         }
         ++signal.sampled_paths;
-        has_stale_sample = has_stale_sample || isControllerStale(state, now);
-        max_base_latency = std::max(max_base_latency, state.base_latency);
-        signal.max_delay = std::max(signal.max_delay, state.real_latency);
+        max_base_latency = std::max(max_base_latency, state.base_val);
+        min_real_latency = std::min(min_real_latency, state.real_val);
     }
     signal.target_delay = max_base_latency;
-    signal.calibrated = signal.sampled_paths == _no_of_paths && !has_stale_sample;
+    signal.min_delay = min_real_latency == std::numeric_limits<simtime_picosec>::max()
+                           ? 0
+                           : min_real_latency;
+    // A PID undergoing active probing is invalid: it has zero spray weight and
+    // is excluded from Algorithm 2 until a probe ACK refreshes its PIT entry.
+    // The remaining valid candidate paths still provide the flow's congestion
+    // signal; freezing rate control until every probe returns is not LAPS.
+    signal.calibrated = signal.sampled_paths != 0;
     if (!signal.calibrated) {
         return signal;
     }
 
     signal.all_paths_high = true;
     for (const LapsPathState& state : _paths) {
-        if (!state.valid || state.real_latency <= signal.target_delay) {
+        if ((!state.valid || state.probe_pending) || state.real_val <= signal.target_delay) {
+            if (!state.valid || state.probe_pending) {
+                continue;
+            }
             signal.all_paths_high = false;
             break;
         }

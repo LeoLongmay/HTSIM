@@ -19,10 +19,8 @@ struct LapsRateSignal {
     bool calibrated;
     bool all_paths_high;
     simtime_picosec target_delay;
-    simtime_picosec max_delay;
+    simtime_picosec min_delay;
 };
-
-inline const linkspeed_bps kLapsMinRate = speedFromGbps(1);
 
 inline simtime_picosec saturatingAdd(simtime_picosec lhs, simtime_picosec rhs) {
     return rhs > std::numeric_limits<simtime_picosec>::max() - lhs
@@ -43,23 +41,21 @@ inline LapsRateState advanceLapsRate(LapsRateState state, const LapsRateSignal& 
     }
 
     if (signal.all_paths_high && now >= state.next_decrease_at) {
-        state.tgt_rate = std::max(kLapsMinRate, state.cur_rate);
-        state.cur_rate = std::max(kLapsMinRate, state.cur_rate / 2);
+        state.tgt_rate = state.cur_rate;
+        state.cur_rate /= 2;
         state.inc_stage = 0;
-        state.next_decrease_at = saturatingAdd(now, saturatingDouble(signal.max_delay));
+        state.next_decrease_at = saturatingAdd(now, saturatingDouble(signal.min_delay));
         return state;
     }
 
     if (!signal.all_paths_high && now >= state.next_increase_at) {
         if (state.inc_stage > 5) {
-            state.tgt_rate = std::min(nic_rate, state.tgt_rate * 2);
+            state.tgt_rate = state.tgt_rate > nic_rate / 2 ? nic_rate : state.tgt_rate * 2;
         }
-        state.cur_rate = std::min(
-            nic_rate, std::max(state.cur_rate + speedFromGbps(1),
-                               (state.cur_rate + state.tgt_rate) / 2));
+        state.cur_rate = std::min(nic_rate, (state.cur_rate + state.tgt_rate) / 2);
         state.tgt_rate = std::max(state.tgt_rate, state.cur_rate);
         ++state.inc_stage;
-        state.next_increase_at = saturatingAdd(now, saturatingDouble(signal.target_delay));
+        state.next_increase_at = saturatingAdd(now, saturatingDouble(signal.min_delay));
     }
 
     return state;

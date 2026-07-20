@@ -188,6 +188,17 @@ public:
             if (plane >= _laps_path_catalogs.size())
                 _laps_path_catalogs.resize(plane + 1);
             _laps_path_catalogs[plane] = std::move(catalog);
+            // PIDs are shared across per-NIC-plane catalogs.  Plane zero
+            // supplies immutable PIT baselines; packets remain plane-pinned.
+            if (plane == 0) {
+                auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+                if (!laps) throw std::logic_error("strict LAPS has no LAPS multipath state");
+                std::vector<simtime_picosec> base_vals;
+                base_vals.reserve(_laps_path_catalogs[plane]->size());
+                for (uint16_t pid = 0; pid < _laps_path_catalogs[plane]->size(); ++pid)
+                    base_vals.push_back(_laps_path_catalogs[plane]->entry(pid).base_val);
+                laps->configurePaths(std::move(base_vals));
+            }
         }
     }
     const Route& lapsForwardRoute(uint16_t pid) const;
@@ -362,7 +373,6 @@ public:
     void scheduleLapsPacer();
     void cancelLapsPacer();
     void updateLapsRate(simtime_picosec now);
-    void setLapsSafetyWindow(simtime_picosec target_delay);
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
                           UecMpSelection selection, bool strict_laps_data = false,
                           std::optional<LapsPathKey> laps_path = std::nullopt,
