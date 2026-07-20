@@ -303,10 +303,12 @@ public:
         sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime,
                    UecMpSelection pselection, bool strict_laps_data,
                    std::optional<LapsAttempt> laps_attempt = std::nullopt,
-                   std::optional<LapsPathKey> laps_path = std::nullopt)
+                   std::optional<LapsPathKey> laps_path = std::nullopt,
+                   std::optional<uint32_t> laps_plane = std::nullopt,
+                   std::optional<uint16_t> laps_pid = std::nullopt)
             : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection),
               strict_laps_data(strict_laps_data), laps_attempt(laps_attempt),
-              laps_path(std::move(laps_path)){};
+              laps_path(std::move(laps_path)), laps_plane(laps_plane), laps_pid(laps_pid){};
         uint32_t path_id;
         mem_b pkt_size;
         simtime_picosec send_time;
@@ -314,16 +316,22 @@ public:
         bool strict_laps_data;
         std::optional<LapsAttempt> laps_attempt;
         std::optional<LapsPathKey> laps_path;
+        std::optional<uint32_t> laps_plane;
+        std::optional<uint16_t> laps_pid;
     };
     struct LapsRtxRoute {
         uint32_t path_id;
         UecMpSelection selection;
         LapsPathKey path;
+        uint32_t plane;
+        uint16_t pid;
     };
     struct RtxPathSelection {
         uint32_t entropy;
         UecMpSelection selection;
         std::optional<LapsPathKey> strict_laps_path;
+        std::optional<uint32_t> strict_laps_plane;
+        std::optional<uint16_t> strict_laps_pid;
     };
     UecLogger* _logger;
     TrafficLogger* _pktlogger;
@@ -357,7 +365,9 @@ public:
     void setLapsSafetyWindow(simtime_picosec target_delay);
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
                           UecMpSelection selection, bool strict_laps_data = false,
-                          std::optional<LapsPathKey> laps_path = std::nullopt);
+                          std::optional<LapsPathKey> laps_path = std::nullopt,
+                          std::optional<uint32_t> laps_plane = std::nullopt,
+                          std::optional<uint16_t> laps_pid = std::nullopt);
     RtxPathSelection selectRtxPath(UecDataPacket::seq_t seqno);
     void configureMotivationTokenObserver();
     struct MotivationResolvedPath {

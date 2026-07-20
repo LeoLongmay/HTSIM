@@ -122,6 +122,27 @@ void strict_laps_data_and_rtx_use_catalog_forward_route() {
     assert(static_cast<const UecDataPacket*>(rtx)->lapsPinnedRoute());
 }
 
+void strict_laps_recovery_replays_original_plane_when_other_port_is_free() {
+    StrictLapsFixture f;
+    constexpr UecDataPacket::seq_t seqno = 70;
+    constexpr uint16_t pid = 2;
+    LapsPathKey original_path;
+    assert(f.source.lapsResolvePath(pid, f.forwardFib(1), original_path));
+
+    f.source._rtx_queue.emplace(seqno, 1'500);
+    f.source._rtx_backlog = 1'500;
+    assert(f.source._laps_rtx_routes.emplace(
+        seqno, UecSrc::LapsRtxRoute{pid, {}, original_path, 1, pid}).second);
+
+    // The caller receives plane 0 because it is free, but strict LAPS recovery
+    // must replay the plane-1 catalog identity recorded for this packet.
+    assert(f.source.sendRtxPacket(f.forwardFib(0)) == 1'500);
+    const Packet* replay = f.lastForwardPacket(1, pid);
+    assert(replay != nullptr);
+    assert(replay->route() == f.catalog(1).entry(pid).forward);
+    assert(static_cast<const UecDataPacket*>(replay)->lapsPid() == pid);
+}
+
 void strict_laps_ack_and_probe_ack_use_catalog_reverse_route() {
     StrictLapsFixture f;
     PacketFlow flow(nullptr);
@@ -183,10 +204,34 @@ void pooled_packet_clears_laps_metadata() {
     reused->free();
 }
 
+void pooled_non_laps_control_cannot_keep_a_pinned_route() {
+    StrictLapsFixture f;
+    PacketFlow flow(nullptr);
+
+    f.sink.connectPort(0, f.source, *f.catalog(0).entry(0).reverse);
+    f.sink.connectPort(1, f.source, *f.catalog(0).entry(0).reverse);
+    auto* primed = UecNackPacket::newpkt(flow, f.catalog(1).entry(2).reverse,
+                                         1, 0, 0, 0);
+    static_cast<Packet&>(*primed).set_route(*f.catalog(1).entry(2).reverse);
+    primed->setLapsPid(2);
+    primed->setLapsPinnedRoute(true);
+    primed->free();
+
+    auto* nack = UecNackPacket::newpkt(flow, nullptr, 2, 0, 0, 0);
+    assert(!nack->lapsPidValid());
+    assert(!nack->lapsPinnedRoute());
+    f.sink_nic._rr_port = 1;
+    f.sink_nic.sendControlPacket(nack, nullptr, &f.sink);
+    assert(f.lastReversePacket(0, 0) == nack);
+    nack->free();
+}
+
 }  // namespace
 
 int main() {
     strict_laps_data_and_rtx_use_catalog_forward_route();
+    strict_laps_recovery_replays_original_plane_when_other_port_is_free();
     strict_laps_ack_and_probe_ack_use_catalog_reverse_route();
     pooled_packet_clears_laps_metadata();
+    pooled_non_laps_control_cannot_keep_a_pinned_route();
 }

@@ -69,8 +69,40 @@ void lapsFeedbackCarriesOneWayDelayAndResetsPooledPackets() {
     reused_data->free();
 }
 
+void every_pooled_control_type_resets_laps_route_metadata() {
+    PacketFlow flow(nullptr);
+
+    auto* pull = UecPullPacket::newpkt(flow, nullptr, 0, 0);
+    pull->setLapsPid(1);
+    pull->setLapsPinnedRoute(true);
+    pull->free();
+    pull = UecPullPacket::newpkt(flow, nullptr, 0, 0);
+    assert(!pull->lapsPidValid());
+    assert(!pull->lapsPinnedRoute());
+    pull->free();
+
+    auto* nack = UecNackPacket::newpkt(flow, nullptr, 0, 0, 0, 0);
+    nack->setLapsPid(2);
+    nack->setLapsPinnedRoute(true);
+    nack->free();
+    nack = UecNackPacket::newpkt(flow, nullptr, 0, 0, 0, 0);
+    assert(!nack->lapsPidValid());
+    assert(!nack->lapsPinnedRoute());
+    nack->free();
+
+    auto* rts = UecRtsPacket::newpkt(flow, nullptr, 0, 0);
+    rts->setLapsPid(3);
+    rts->setLapsPinnedRoute(true);
+    rts->free();
+    rts = UecRtsPacket::newpkt(flow, nullptr, 0, 0);
+    assert(!rts->lapsPidValid());
+    assert(!rts->lapsPinnedRoute());
+    rts->free();
+}
+
 }  // namespace
 
 int main() {
     lapsFeedbackCarriesOneWayDelayAndResetsPooledPackets();
+    every_pooled_control_type_resets_laps_route_metadata();
 }

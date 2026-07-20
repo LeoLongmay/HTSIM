@@ -185,6 +185,7 @@ public:
         p->_type = UECPULL;
         p->_is_header = true;
         p->_bounced = false;
+        p->resetLapsRouteMetadata();
         p->_pullno = pullno;
         p->_path_len = 0;
         p->set_dst(destination);
@@ -334,6 +335,7 @@ public:
         p->_type = UECNACK;
         p->_is_header = true;
         p->_bounced = false;
+        p->resetLapsRouteMetadata();
         p->_ref_epsn = ref_epsn;
         //p->_pullno = pullno;
         p->_ev = path_id; // used to indicate which path the data packet was trimmed on
@@ -394,6 +396,7 @@ public:
         p->_type = UECRTS;
         p->_is_header = true;
         p->_bounced = false;
+        p->resetLapsRouteMetadata();
         p->_pull_target = pull_target;
         p->_epsn = epsn;
         p->_direction = NONE;    
