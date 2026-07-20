@@ -4,11 +4,25 @@
 
 #include <cassert>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 
 EventList eventlist;
+
+class TerminalSink final : public PacketSink {
+public:
+    explicit TerminalSink(std::string name) : name_(std::move(name)) {}
+    void receivePacket(Packet&) override { ++received_; }
+    const string& nodename() override { return name_; }
+
+    uint32_t received_ = 0;
+
+private:
+    string name_;
+};
 
 LapsRoutePairs takeBidirectionalPaths(FatTreeTopology& topology, uint32_t src, uint32_t dst) {
     std::unique_ptr<std::vector<const Route*>> paths(topology.get_bidir_paths(src, dst, true));
@@ -45,6 +59,27 @@ void catalog_assigns_stable_pid_and_reverse_route() {
     for (uint16_t pid = 0; pid < 4; ++pid) {
         const auto& entry = catalog->entry(pid);
         assert(entry.pid == pid);
+        assert(entry.forward->reverse() == entry.reverse);
+        assert(entry.reverse->reverse() == entry.forward);
+    }
+}
+
+void catalog_routes_terminate_at_the_paired_transport_ports() {
+    const linkspeed_bps rate = speedFromGbps(100);
+    FatTreeTopologyCfg config(3, 16, rate, memFromPkt(100), timeFromUs(uint32_t{1}), 0,
+                              COMPOSITE, FAIR_PRIO);
+    FatTreeTopology topology(&config, nullptr, &eventlist, nullptr);
+    LapsRoutePairs pairs = takeBidirectionalPaths(topology, 0, 15);
+    TerminalSink destination("strict LAPS destination");
+    TerminalSink source("strict LAPS source");
+
+    appendLapsTransportEndpoints(pairs, destination, source);
+    const auto catalog = LapsPathCatalog::build(std::move(pairs), 0, rate, 1500, 4);
+
+    for (uint16_t pid = 0; pid < catalog->size(); ++pid) {
+        const auto& entry = catalog->entry(pid);
+        assert(entry.forward->at(entry.forward->size() - 1) == &destination);
+        assert(entry.reverse->at(entry.reverse->size() - 1) == &source);
         assert(entry.forward->reverse() == entry.reverse);
         assert(entry.reverse->reverse() == entry.forward);
     }
@@ -94,6 +129,7 @@ void catalog_baseline_has_five_packet_margin_per_switch() {
 
 int main() {
     catalog_assigns_stable_pid_and_reverse_route();
+    catalog_routes_terminate_at_the_paired_transport_ports();
     catalog_baseline_has_five_packet_margin_per_switch();
     catalog_owns_selected_route_pairs_after_candidate_container_is_destroyed();
     non_laps_sink_does_not_retain_a_path_catalog();

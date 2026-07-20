@@ -25,6 +25,13 @@ struct LapsRoutePair {
 
 using LapsRoutePairs = std::vector<LapsRoutePair>;
 
+// The topology enumerator returns queue/pipe-only routes.  Strict LAPS sends
+// directly on catalog routes, so complete each route with the transport port
+// that the normal switch FIB would have selected at the final host hop.
+void appendLapsTransportEndpoints(LapsRoutePairs& candidates,
+                                  PacketSink& forward_endpoint,
+                                  PacketSink& reverse_endpoint);
+
 class LapsPathCatalog {
 public:
     static std::shared_ptr<const LapsPathCatalog> build(

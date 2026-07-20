@@ -31,6 +31,20 @@ simtime_picosec saturatingAdd(simtime_picosec left, simtime_picosec right) {
 
 }  // namespace
 
+void appendLapsTransportEndpoints(LapsRoutePairs& candidates,
+                                  PacketSink& forward_endpoint,
+                                  PacketSink& reverse_endpoint) {
+    for (LapsRoutePair& pair : candidates) {
+        if (!pair.forward || !pair.reverse || pair.forward->reverse() != pair.reverse.get() ||
+            pair.reverse->reverse() != pair.forward.get()) {
+            throw std::invalid_argument(
+                "strict LAPS candidate has no mutually linked reverse route");
+        }
+        pair.forward->push_back(&forward_endpoint);
+        pair.reverse->push_back(&reverse_endpoint);
+    }
+}
+
 LapsPathCatalog::LapsPathCatalog(std::vector<LapsPathEntry> entries,
                                  LapsRoutePairs route_pairs)
     : entries_(std::move(entries)), route_pairs_(std::move(route_pairs)) {}

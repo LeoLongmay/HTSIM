@@ -1403,6 +1403,12 @@ int main(int argc, char **argv) {
                 assert(flowmap.find(crt->flowid) == flowmap.end()); // don't have dups
             }
 
+            if (receiver_driven)
+                uec_snk = new UecSink(NULL, pacers[dest].get(), *nics.at(dest),
+                                      ports);
+            else //each connection has its own pacer, so receiver driven mode does not kick in!
+                uec_snk = new UecSink(NULL,linkspeed,1.1,UecBasePacket::unquantize(UecSink::_credit_per_pull),eventlist,*nics.at(dest), ports);
+
             if (uec_src->isStrictLaps()) {
                 if (path_entropy_size > numeric_limits<uint16_t>::max()) {
                     cerr << "Strict LAPS path count exceeds the catalog PID range" << endl;
@@ -1438,6 +1444,8 @@ int main(int argc, char **argv) {
                             owned_candidates.push_back(
                                 {unique_ptr<Route>(owned_forward), unique_ptr<Route>(owned_reverse)});
                         }
+                        appendLapsTransportEndpoints(owned_candidates, *uec_snk->getPort(plane),
+                                                     *uec_src->getPort(plane));
                         auto catalog = LapsPathCatalog::build(
                             std::move(owned_candidates), plane, linkspeed, Packet::data_packet_size(),
                             static_cast<uint16_t>(path_entropy_size));
@@ -1476,12 +1484,6 @@ int main(int argc, char **argv) {
                 uec_src->makeReusable(pdc);
                 flow_pdc_map[uec_src->flowId()] = pdc;
             }
-
-            if (receiver_driven)
-                uec_snk = new UecSink(NULL, pacers[dest].get(), *nics.at(dest),
-                                      ports);
-            else //each connection has its own pacer, so receiver driven mode does not kick in! 
-                uec_snk = new UecSink(NULL,linkspeed,1.1,UecBasePacket::unquantize(UecSink::_credit_per_pull),eventlist,*nics.at(dest), ports);
 
             flowmap[uec_src->flowId()] = { uec_src, uec_snk };
 
