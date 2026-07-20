@@ -190,6 +190,8 @@ public:
             _laps_path_catalogs[plane] = std::move(catalog);
         }
     }
+    const Route& lapsForwardRoute(uint16_t pid) const;
+    const Route& lapsForwardRoute(uint16_t pid, const Route& nic_port_route) const;
     bool lapsResolvePath(uint32_t entropy, uint32_t send_port,
                          LapsPathKey& path) const;
     bool lapsResolvePath(uint32_t entropy, const Route& send_route,
@@ -808,6 +810,7 @@ class UecSink : public DataReceiver {
             _laps_path_catalogs.resize(plane + 1);
         _laps_path_catalogs[plane] = std::move(catalog);
     }
+    const Route& lapsReverseRoute(uint16_t pid) const;
     const Route* getPortRoute(uint32_t port_num) const {return _ports[port_num]->route();}
     UecSinkPort* getPort(uint32_t port_num) {return _ports[port_num];}
     void setSrc(uint32_t s) { _srcaddr = s; }

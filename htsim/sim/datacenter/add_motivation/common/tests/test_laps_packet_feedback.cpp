@@ -29,6 +29,8 @@ void lapsFeedbackCarriesOneWayDelayAndResetsPooledPackets() {
         flow, data_route, 0, 1'500, UecDataPacket::DATA_PULL, 0);
     data->set_pathid(0);
     data->setLapsSendTime(send_time);
+    data->setLapsPid(3);
+    data->setLapsPinnedRoute(true);
 
     EventList::sourceIsPending(clock, receive_time);
     assert(EventList::doNextEvent());
@@ -56,8 +58,12 @@ void lapsFeedbackCarriesOneWayDelayAndResetsPooledPackets() {
         flow, nullptr, 0, 0, 0, 0, false, 0, 0);
     assert(!reused_data->lapsSendTimeValid());
     assert(reused_data->lapsSendTime() == 0);
+    assert(!reused_data->lapsPidValid());
+    assert(!reused_data->lapsPinnedRoute());
     assert(!reused_ack->lapsDelayValid());
     assert(reused_ack->lapsOneWayDelay() == 0);
+    assert(!reused_ack->lapsPidValid());
+    assert(!reused_ack->lapsPinnedRoute());
 
     reused_ack->free();
     reused_data->free();

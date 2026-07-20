@@ -34,6 +34,23 @@ public:
     static pull_quanta quantize_floor(mem_b bytes); // quantize and round down
     static mem_b unquantize(pull_quanta credit_chunks);  // unquantize
     static mem_b get_ack_size() {return ACKSIZE;}
+
+    inline void setLapsPid(uint16_t pid) {
+        _laps_pid = pid;
+        _laps_pid_valid = true;
+    }
+    inline uint16_t lapsPid() const { return _laps_pid; }
+    inline bool lapsPidValid() const { return _laps_pid_valid; }
+    inline void setLapsPinnedRoute(bool pinned) { _laps_pinned_route = pinned; }
+    inline bool lapsPinnedRoute() const { return _laps_pinned_route; }
+
+protected:
+    void resetLapsRouteMetadata();
+
+private:
+    uint16_t _laps_pid;
+    bool _laps_pid_valid;
+    bool _laps_pinned_route;
 };
 
 class UecDataPacket : public UecBasePacket {
@@ -265,6 +282,7 @@ public:
     }
     inline simtime_picosec lapsOneWayDelay() const { return _laps_one_way_delay; }
     inline bool lapsDelayValid() const { return _laps_delay_valid; }
+    inline void setLapsRoute(const Route& route) { Packet::set_route(route); }
 
     virtual ~UecAckPacket(){}
 

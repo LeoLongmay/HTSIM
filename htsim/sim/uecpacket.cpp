@@ -6,12 +6,20 @@ PacketDB<UecNackPacket> UecNackPacket::_packetdb;
 PacketDB<UecPullPacket> UecPullPacket::_packetdb;
 PacketDB<UecRtsPacket> UecRtsPacket::_packetdb;
 
+void UecBasePacket::resetLapsRouteMetadata() {
+  _laps_pid = 0;
+  _laps_pid_valid = false;
+  _laps_pinned_route = false;
+}
+
 void UecDataPacket::resetLapsMetadata() {
+  resetLapsRouteMetadata();
   _laps_send_time = 0;
   _laps_send_time_valid = false;
 }
 
 void UecAckPacket::resetLapsMetadata() {
+  resetLapsRouteMetadata();
   _laps_one_way_delay = 0;
   _laps_delay_valid = false;
 }

@@ -547,13 +547,19 @@ void UecNIC::sendControlPktNow() {
 
     _control_size -= p->size();
     // At the NIC, only control packets or data packets with a payload size of zero are permitted to be transmitted at a higher priority.
-    assert(p->route() == NULL || (p->type() == UECDATA && p->size() == UecBasePacket::ACKSIZE));
-    const Route* route;
-    if (cp.src)
-        route = cp.src->getPortRoute(port_to_use);
-    else
-        route = cp.sink->getPortRoute(port_to_use);
-    p->set_route(*route);
+    assert(p->route() == NULL || p->lapsPinnedRoute() ||
+           (p->type() == UECDATA && p->size() == UecBasePacket::ACKSIZE));
+    if (p->lapsPinnedRoute()) {
+        assert(p->route() != nullptr);
+    } else if (cp.src && cp.src->isStrictLaps() && p->lapsPidValid()) {
+        const Route* nic_route = cp.src->getPortRoute(port_to_use);
+        p->set_route(cp.src->lapsForwardRoute(p->lapsPid(), *nic_route));
+        p->setLapsPinnedRoute(true);
+    } else {
+        const Route* route = cp.src ? cp.src->getPortRoute(port_to_use)
+                                    : cp.sink->getPortRoute(port_to_use);
+        p->set_route(*route);
+    }
     p->sendOn();
 }
 
@@ -802,6 +808,28 @@ bool UecSrc::isStrictLaps() const {
     return _sender_cc_algo == LAPS && dynamic_cast<const UecMpLaps*>(_mp.get()) != nullptr;
 }
 
+const Route& UecSrc::lapsForwardRoute(uint16_t pid) const {
+    if (!isStrictLaps() || _laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
+        throw logic_error("strict LAPS has no plane-0 path catalog");
+    }
+    return *_laps_path_catalogs[0]->entry(pid).forward;
+}
+
+const Route& UecSrc::lapsForwardRoute(uint16_t pid, const Route& nic_port_route) const {
+    if (!isStrictLaps()) {
+        throw logic_error("only strict LAPS can request a pinned catalog route");
+    }
+    for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
+        if (_ports[plane]->route() == &nic_port_route) {
+            if (plane >= _laps_path_catalogs.size() || !_laps_path_catalogs[plane]) {
+                throw logic_error("strict LAPS NIC plane has no path catalog");
+            }
+            return *_laps_path_catalogs[plane]->entry(pid).forward;
+        }
+    }
+    throw logic_error("strict LAPS route is not bound to a NIC plane");
+}
+
 void UecSrc::lapsSetPathResolver(LapsPathResolver resolver) {
     // The resolver materializes the forwarding path and is deliberately a
     // paired strict-LAPS facility.  Legacy LAPS keeps its old UEC behavior.
@@ -812,7 +840,30 @@ void UecSrc::lapsSetPathResolver(LapsPathResolver resolver) {
 
 bool UecSrc::lapsResolvePath(uint32_t entropy, uint32_t send_port,
                               LapsPathKey& path) const {
-    if (!isStrictLaps() || !_laps_path_resolver || send_port >= _ports.size()) {
+    if (!isStrictLaps() || send_port >= _ports.size()) {
+        return false;
+    }
+
+    if (send_port < _laps_path_catalogs.size() && _laps_path_catalogs[send_port]) {
+        const auto& catalog = *_laps_path_catalogs[send_port];
+        const auto& entry = catalog.entry(static_cast<uint16_t>(entropy & (catalog.size() - 1)));
+        ostringstream fingerprint;
+        // main_uec connects NIC port p to topology plane p.  The route in the
+        // catalog is therefore the authoritative physical path for this send.
+        fingerprint << "plane=" << send_port << ';';
+        for (size_t hop = 0; hop < entry.forward->size(); ++hop) {
+            PacketSink* sink = entry.forward->at(hop);
+            if (sink == nullptr) {
+                return false;
+            }
+            const string& name = sink->nodename();
+            fingerprint << name.size() << ':' << name;
+        }
+        path = LapsPathKey(fingerprint.str());
+        return entry.forward->size() != 0;
+    }
+
+    if (!_laps_path_resolver) {
         return false;
     }
 
@@ -2653,6 +2704,7 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         }
         _prism_epoch_sampled_paths.clear();
         _prism_epoch_samples = 0;
+        _prism_path_epoch.reset();
         _prism_epoch_sample_deferred = false;
         _prism_epoch_id++;
     }
@@ -3673,12 +3725,31 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     }
     _pull_target = computePullTarget();
 
-    auto* p = UecDataPacket::newpkt(_flow, route, _highest_sent, full_pkt_size, ptype,
-                                     _pull_target, _dstaddr);
-    p->set_src(_srcaddr);
-
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     const UecMpSelection selection = _mp->lastSelection();
+    const Route* packet_route = &route;
+    uint16_t laps_pid = 0;
+    if (isStrictLaps()) {
+        bool matched_plane = false;
+        for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
+            if (_ports[plane]->route() == &route) {
+                const auto& catalog = _laps_path_catalogs.at(plane);
+                if (!catalog) throw logic_error("strict LAPS NIC plane has no path catalog");
+                laps_pid = static_cast<uint16_t>(ev & (catalog->size() - 1));
+                packet_route = &lapsForwardRoute(laps_pid, route);
+                matched_plane = true;
+                break;
+            }
+        }
+        if (!matched_plane) throw logic_error("strict LAPS data route is not bound to a NIC plane");
+    }
+    auto* p = UecDataPacket::newpkt(_flow, *packet_route, _highest_sent, full_pkt_size, ptype,
+                                     _pull_target, _dstaddr);
+    p->set_src(_srcaddr);
+    if (isStrictLaps()) {
+        p->setLapsPid(laps_pid);
+        p->setLapsPinnedRoute(true);
+    }
     LapsPathKey laps_path;
     if (isStrictLaps() && !lapsResolvePath(ev, route, laps_path)) {
         cerr << "Strict LAPS failed to resolve a physical forwarding path for flow "
@@ -3754,12 +3825,29 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     _in_flight += full_pkt_size;
     _pull_target = computePullTarget();
     
-    auto* p = UecDataPacket::newpkt(_flow, route, seq_no, full_pkt_size, UecDataPacket::DATA_RTX,
-                                     _pull_target, _dstaddr);
-    p->set_src(_srcaddr);
-
     const RtxPathSelection selection = selectRtxPath(seq_no);
     const uint32_t ev = selection.entropy;
+    const Route* packet_route = &route;
+    uint16_t laps_pid = 0;
+    if (isStrictLaps()) {
+        for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
+            if (_ports[plane]->route() == &route) {
+                const auto& catalog = _laps_path_catalogs.at(plane);
+                if (!catalog) throw logic_error("strict LAPS NIC plane has no path catalog");
+                laps_pid = static_cast<uint16_t>(ev & (catalog->size() - 1));
+                packet_route = &lapsForwardRoute(laps_pid, route);
+                break;
+            }
+        }
+        if (packet_route == &route) throw logic_error("strict LAPS RTX route is not bound to a NIC plane");
+    }
+    auto* p = UecDataPacket::newpkt(_flow, *packet_route, seq_no, full_pkt_size,
+                                     UecDataPacket::DATA_RTX, _pull_target, _dstaddr);
+    p->set_src(_srcaddr);
+    if (isStrictLaps()) {
+        p->setLapsPid(laps_pid);
+        p->setLapsPinnedRoute(true);
+    }
     LapsPathKey laps_path;
     if (isStrictLaps() && !lapsResolvePath(ev, route, laps_path)) {
         cerr << "Strict LAPS failed to resolve a physical forwarding path for flow "
@@ -3844,6 +3932,10 @@ void UecSrc::sendLapsProbe() {
     p->set_src(_srcaddr);
     p->set_dst(_dstaddr);
     p->set_pathid(*entropy);
+    if (_laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
+        throw logic_error("strict LAPS probe has no path catalog");
+    }
+    p->setLapsPid(static_cast<uint16_t>(*entropy & (_laps_path_catalogs[0]->size() - 1)));
     p->set_hop_count(0);
     p->setLapsSendTime(eventlist().now());
     _laps_probe_outstanding.insert(_laps_probe_seqno);
@@ -4874,6 +4966,24 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
     pkt->set_rtx_echo(rtx_echo);
     pkt->set_probe_ack(false);
     pkt->set_hop_count(0);
+    if (_src != nullptr && _src->isStrictLaps() && received_data != nullptr &&
+        received_data->lapsPidValid()) {
+        const uint16_t pid = received_data->lapsPid();
+        const Route* forward = received_data->route();
+        const Route* reverse = nullptr;
+        for (const auto& catalog : _laps_path_catalogs) {
+            if (catalog && catalog->entry(pid).forward == forward) {
+                reverse = catalog->entry(pid).reverse;
+                break;
+            }
+        }
+        if (reverse == nullptr) {
+            throw logic_error("strict LAPS ACK has no reverse catalog route");
+        }
+        pkt->setLapsPid(pid);
+        pkt->setLapsPinnedRoute(true);
+        pkt->setLapsRoute(*reverse);
+    }
     if (received_data != nullptr && received_data->lapsSendTimeValid()) {
         const simtime_picosec now = _nic.eventlist().now();
         if (now >= received_data->lapsSendTime()) {
@@ -4881,6 +4991,13 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
         }
     }
     return pkt;
+}
+
+const Route& UecSink::lapsReverseRoute(uint16_t pid) const {
+    if (_laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
+        throw logic_error("strict LAPS sink has no plane-0 path catalog");
+    }
+    return *_laps_path_catalogs[0]->entry(pid).reverse;
 }
 
 UecNackPacket* UecSink::nack(uint32_t path_id, UecBasePacket::seq_t seqno,bool last_hop, bool ecn_echo) {
