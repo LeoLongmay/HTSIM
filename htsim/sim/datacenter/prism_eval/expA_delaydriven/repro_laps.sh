@@ -21,16 +21,69 @@ TOPOLOGY="fat_tree_128_1os.topo"
 
 dry_run=false
 replace_laps=false
+diagnose_recovery=false
 case "$#:$*" in
   0:) ;;
   1:--dry-run) dry_run=true ;;
   1:--replace-laps) replace_laps=true ;;
   2:--replace-laps\ --dry-run) replace_laps=true; dry_run=true ;;
+  1:--diagnose-recovery) diagnose_recovery=true ;;
+  2:--diagnose-recovery\ --dry-run) diagnose_recovery=true; dry_run=true ;;
   *)
     echo "usage: $0 [--dry-run|--replace-laps [--dry-run]]" >&2
     exit 2
     ;;
 esac
+
+if "$diagnose_recovery"; then
+  [ -f "$WORKLOAD" ] || { echo "ERROR: workload missing: $WORKLOAD" >&2; exit 1; }
+  [ -f "$RUN_LIB" ] || { echo "ERROR: run library missing: $RUN_LIB" >&2; exit 1; }
+  DIAGNOSTIC_DIR="$DATA_DIR/laps_recovery_diagnostic"
+  if "$dry_run"; then
+    for failed in 0 4 8; do
+      for seed in 13 17 19 23 29; do
+        printf 'PATHS=8 END_MS=8 EXTRA_ARGS=-disable_trim -laps_recovery_diagnostics bash %s laps laps %s %s %s %s flow expA_laps_diag_f%s_s%s %s\n' \
+          "$RUN_LIB" "$failed" "$TOPOLOGY" "$seed" "$WORKLOAD" "$failed" "$seed" "$DIAGNOSTIC_DIR"
+      done
+    done
+    exit 0
+  fi
+  mkdir -p "$DIAGNOSTIC_DIR"
+  diagnostic_idmap_backup="$(mktemp "${TMPDIR:-/tmp}/repro_laps-diagnostic-idmap.XXXXXX")"
+  diagnostic_idmap_existed=false
+  if [ -e "$SHARED_IDMAP" ] || [ -L "$SHARED_IDMAP" ]; then
+    [ -f "$SHARED_IDMAP" ] && [ ! -L "$SHARED_IDMAP" ] || {
+      rm -f -- "$diagnostic_idmap_backup"
+      echo "ERROR: shared idmap is not a regular file: $SHARED_IDMAP" >&2
+      exit 1
+    }
+    cp -- "$SHARED_IDMAP" "$diagnostic_idmap_backup"
+    diagnostic_idmap_existed=true
+  fi
+  restore_diagnostic_idmap() {
+    local status="$1"
+    trap - EXIT HUP INT TERM
+    if "$diagnostic_idmap_existed"; then
+      cp -- "$diagnostic_idmap_backup" "$SHARED_IDMAP" || status=1
+    else
+      rm -f -- "$SHARED_IDMAP" || status=1
+    fi
+    rm -f -- "$diagnostic_idmap_backup"
+    exit "$status"
+  }
+  trap 'restore_diagnostic_idmap $?' EXIT
+  trap 'restore_diagnostic_idmap 129' HUP
+  trap 'restore_diagnostic_idmap 130' INT
+  trap 'restore_diagnostic_idmap 143' TERM
+  for failed in 0 4 8; do
+    for seed in 13 17 19 23 29; do
+      tag="expA_laps_diag_f${failed}_s${seed}"
+      PATHS=8 END_MS=8 EXTRA_ARGS='-disable_trim -laps_recovery_diagnostics' \
+        bash "$RUN_LIB" laps laps "$failed" "$TOPOLOGY" "$seed" "$WORKLOAD" flow "$tag" "$DIAGNOSTIC_DIR"
+    done
+  done
+  exit 0
+fi
 
 print_run() {
   local failed="$1"
