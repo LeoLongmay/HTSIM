@@ -34,10 +34,13 @@ the following byte-valued options:
 - `-pfc_high_bytes 122880`
 - `-pfc_low_bytes 92160`
 - `-shared_buffer_bytes 33554432`
+- `-queue_size_bytes 150000`
 
-The program rejects a zero shared buffer, a zero high watermark, and any
-configuration where the low watermark is greater than or equal to the high
-watermark.  Existing queue types retain their current behavior.
+The program rejects a zero shared buffer, a zero queue size or high watermark,
+and any configuration where the low watermark is greater than or equal to the
+high watermark.  `-q` retains its legacy packet-count semantics; the new
+byte-valued option is required to represent the paper's 150KB queue exactly.
+Existing queue types retain their current behavior.
 
 ### Lossless queue and shared-buffer behavior
 
