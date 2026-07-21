@@ -1,6 +1,7 @@
 # LAPS lossless/PFC preview
 
-This is an isolated lossless/PFC comparison for OPS, REPS, LAPS, and Prism.
+This is an isolated lossless/PFC comparison for OPS, REPS, HTSIM-localized
+LAPS, and Prism.
 It does not reuse, overwrite, or reinterpret Experiment A's delay-driven
 results; all generated outputs stay in this directory's `data/` and `figs/`
 trees.
@@ -15,6 +16,13 @@ last in both the runner's arm ordering and the figures' green legend entry.
 bash repro.sh
 python3 make_figs.py
 ```
+
+`repro.sh` uses an 80 ms simulation end time by default. It can be overridden
+for diagnostics with `END_MS=<milliseconds> bash repro.sh`; 80 ms came from the
+pre-scan recovery diagnostic, not from an algorithm-specific tuning parameter.
+Before producing any performance figure, `make_figs.py` rejects every missing
+or incomplete flow cell (`completion_rate != 1.0`) so partial results cannot be
+reported as performance data.
 
 `--all-baselines` is an explicit future expansion to 280 cells. It adds
 Swift, MSwift, MNSCC, and STrack, while retaining the same topology, workload,

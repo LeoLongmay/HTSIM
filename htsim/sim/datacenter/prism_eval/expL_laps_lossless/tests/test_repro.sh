@@ -15,12 +15,7 @@ assert_matrix() {
   local output="$TMP/${mode:-preview}.txt"
   bash "$RUNNER" $mode --dry-run >"$output"
 
-  local count
-  count="$(grep -c '^PATHS=8 END_MS=8 EXTRA_ARGS=' "$output")"
-  [ "$count" -eq "$expected" ] || {
-    echo "expected $expected dry-run commands, got $count" >&2
-    exit 1
-  }
+  grep -c '^PATHS=8 END_MS=80 EXTRA_ARGS=' "$output" | grep -qx "$expected"
   [ "$(wc -l <"$output" | tr -d ' ')" -eq "$expected" ] || {
     echo "dry-run printed non-command output" >&2
     exit 1
@@ -32,5 +27,6 @@ assert_matrix() {
 
 assert_matrix '' 140
 assert_matrix '--all-baselines' 280
+END_MS=37 bash "$RUNNER" --dry-run | grep -c '^PATHS=8 END_MS=37 EXTRA_ARGS=' | grep -qx 140
 
 echo 'ok lossless/PFC preview runner contract'
