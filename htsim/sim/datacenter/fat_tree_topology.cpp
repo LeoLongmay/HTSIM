@@ -921,6 +921,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
             
                 queues_nlp_ns[tor][srv][b] = alloc_queue(queueLogger, _cfg->_queue_down[TOR_TIER], DOWNLINK, TOR_TIER, true);
                 queues_nlp_ns[tor][srv][b]->setName("LS" + ntoa(tor) + "->DST" +ntoa(srv) + "(" + ntoa(b) + ")");
+                if (_cfg->_qt == LOSSLESS_INPUT)
+                    static_cast<LosslessOutputQueue*>(queues_nlp_ns[tor][srv][b])->setSharedBuffer(*shared_buffer_pools_lp[tor]);
                 //if (logfile) logfile->writeName(*(queues_nlp_ns[tor][srv]));
                 simtime_picosec hop_latency = (_cfg->_hop_latency == 0) ? _cfg->_link_latencies[TOR_TIER] : _cfg->_hop_latency;
                 pipes_nlp_ns[tor][srv][b] = new Pipe(hop_latency, *_eventlist);
@@ -944,9 +946,7 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
 
                 if (cfg->_qt==LOSSLESS_INPUT || cfg->_qt == LOSSLESS_INPUT_ECN){
                     //no virtual queue needed at server
-                    auto* ingress = new LosslessInputQueue(*_eventlist, queues_ns_nlp[srv][tor][b], switches_lp[tor], hop_latency);
-                    if (_cfg->_qt == LOSSLESS_INPUT)
-                        ingress->setSharedBuffer(*shared_buffer_pools_lp[tor]);
+                    new LosslessInputQueue(*_eventlist, queues_ns_nlp[srv][tor][b], switches_lp[tor], hop_latency);
                 }
         
                 pipes_ns_nlp[srv][tor][b] = new Pipe(hop_latency, *_eventlist);
@@ -992,6 +992,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                     queues_nup_nlp[agg][tor][b] = alloc_queue((QueueLogger*)queueLogger, (const mem_b)_cfg->_queue_down[AGG_TIER], DOWNLINK, AGG_TIER);
 
                 queues_nup_nlp[agg][tor][b]->setName("US" + ntoa(agg) + "->LS_" + ntoa(tor) + "(" + ntoa(b) + ")");
+                if (_cfg->_qt == LOSSLESS_INPUT)
+                    static_cast<LosslessOutputQueue*>(queues_nup_nlp[agg][tor][b])->setSharedBuffer(*shared_buffer_pools_up[agg]);
                 //if (logfile) logfile->writeName(*(queues_nup_nlp[agg][tor]));
             
                 simtime_picosec hop_latency = (_cfg->_hop_latency == 0) ? _cfg->_link_latencies[AGG_TIER] : _cfg->_hop_latency;
@@ -1014,6 +1016,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                     queues_nlp_nup[tor][agg][b] = alloc_queue(queueLogger, _cfg->_queue_up[TOR_TIER], UPLINK, TOR_TIER, true);
 
                 queues_nlp_nup[tor][agg][b]->setName("LS" + ntoa(tor) + "->US" + ntoa(agg) + "(" + ntoa(b) + ")");
+                if (_cfg->_qt == LOSSLESS_INPUT)
+                    static_cast<LosslessOutputQueue*>(queues_nlp_nup[tor][agg][b])->setSharedBuffer(*shared_buffer_pools_lp[tor]);
                 //cout << queues_nlp_nup[tor][agg][b]->str() << endl;
                 //if (logfile) logfile->writeName(*(queues_nlp_nup[tor][agg]));
 
@@ -1027,12 +1031,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                   ((LosslessQueue*)queues_nup_nlp[agg][tor])->setRemoteEndpoint(queues_nlp_nup[tor][agg]);
                   }else */
                 if (_cfg->_qt==LOSSLESS_INPUT || _cfg->_qt == LOSSLESS_INPUT_ECN){            
-                    auto* ingress_at_agg = new LosslessInputQueue(*_eventlist, queues_nlp_nup[tor][agg][b],switches_up[agg], hop_latency);
-                    auto* ingress_at_tor = new LosslessInputQueue(*_eventlist, queues_nup_nlp[agg][tor][b],switches_lp[tor], hop_latency);
-                    if (_cfg->_qt == LOSSLESS_INPUT) {
-                        ingress_at_agg->setSharedBuffer(*shared_buffer_pools_up[agg]);
-                        ingress_at_tor->setSharedBuffer(*shared_buffer_pools_lp[tor]);
-                    }
+                    new LosslessInputQueue(*_eventlist, queues_nlp_nup[tor][agg][b],switches_up[agg], hop_latency);
+                    new LosslessInputQueue(*_eventlist, queues_nup_nlp[agg][tor][b],switches_lp[tor], hop_latency);
                 }
         
                 pipes_nlp_nup[tor][agg][b] = new Pipe(hop_latency, *_eventlist);
@@ -1072,6 +1072,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                     assert(queues_nup_nc[agg][core][b] == NULL);
                     queues_nup_nc[agg][core][b] = alloc_queue(queueLogger, _cfg->_queue_up[AGG_TIER], UPLINK, AGG_TIER);
                     queues_nup_nc[agg][core][b]->setName("US" + ntoa(agg) + "->CS" + ntoa(core) + "(" + ntoa(b) + ")");
+                    if (_cfg->_qt == LOSSLESS_INPUT)
+                        static_cast<LosslessOutputQueue*>(queues_nup_nc[agg][core][b])->setSharedBuffer(*shared_buffer_pools_up[agg]);
                     //cout << queues_nup_nc[agg][core][b]->str() << endl;
                     //if (logfile) logfile->writeName(*(queues_nup_nc[agg][core]));
         
@@ -1095,6 +1097,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                     }
         
                     queues_nc_nup[core][agg][b]->setName("CS" + ntoa(core) + "->US" + ntoa(agg) + "(" + ntoa(b) + ")");
+                    if (_cfg->_qt == LOSSLESS_INPUT)
+                        static_cast<LosslessOutputQueue*>(queues_nc_nup[core][agg][b])->setSharedBuffer(*shared_buffer_pools_c[core]);
 
                     assert(switches_up[agg]->addPort(queues_nup_nc[agg][core][b]) < 64);
                     assert(switches_c[core]->addPort(queues_nc_nup[core][agg][b]) < 64);
@@ -1107,12 +1111,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                       }
                       else*/
                     if (_cfg->_qt == LOSSLESS_INPUT || _cfg->_qt == LOSSLESS_INPUT_ECN){
-                        auto* ingress_at_core = new LosslessInputQueue(*_eventlist, queues_nup_nc[agg][core][b], switches_c[core], hop_latency);
-                        auto* ingress_at_agg = new LosslessInputQueue(*_eventlist, queues_nc_nup[core][agg][b], switches_up[agg], hop_latency);
-                        if (_cfg->_qt == LOSSLESS_INPUT) {
-                            ingress_at_core->setSharedBuffer(*shared_buffer_pools_c[core]);
-                            ingress_at_agg->setSharedBuffer(*shared_buffer_pools_up[agg]);
-                        }
+                        new LosslessInputQueue(*_eventlist, queues_nup_nc[agg][core][b], switches_c[core], hop_latency);
+                        new LosslessInputQueue(*_eventlist, queues_nc_nup[core][agg][b], switches_up[agg], hop_latency);
                     }
                     //if (logfile) logfile->writeName(*(queues_nc_nup[core][agg]));
             

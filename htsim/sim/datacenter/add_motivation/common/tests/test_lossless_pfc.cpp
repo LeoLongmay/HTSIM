@@ -48,14 +48,12 @@ private:
     string name_;
 };
 
-void pfc_pauses_at_high_watermark_and_resumes_after_drain() {
-    EventList eventlist;
+void pfc_pauses_at_high_watermark_and_resumes_after_drain(EventList& eventlist) {
     LosslessInputQueue::configurePfc(80, 60);
 
     PauseRecorder recorder(eventlist);
     LosslessInputQueue ingress(eventlist, &recorder);
     SharedBufferPool pool(100, 80, 60);
-    ingress.setSharedBuffer(pool);
 
     LosslessOutputQueue egress(speedFromGbps(100), 1'000, eventlist, nullptr);
     PacketRecorder delivered;
@@ -72,12 +70,78 @@ void pfc_pauses_at_high_watermark_and_resumes_after_drain() {
     assert(recorder.pause_count == 1);
     assert(EventList::doNextEvent());
     assert(recorder.resume_count == 1);
-    assert(pool.used() == 59);
-    assert(delivered.packet_count == 1);
+    assert(pool.used() == 0);
+    assert(EventList::doNextEvent());
+    assert(delivered.packet_count == 2);
+}
+
+void output_queue_reserves_only_overflow_and_releases_it_after_drain(EventList& eventlist) {
+    LosslessInputQueue::configurePfc(120, 90);
+
+    PauseRecorder recorder(eventlist);
+    LosslessInputQueue ingress(eventlist, &recorder);
+    LosslessOutputQueue egress(speedFromGbps(100), 100, eventlist, nullptr);
+    SharedBufferPool pool(40, 40, 39);
+    egress.setSharedBuffer(pool);
+    PacketRecorder delivered;
+    Route route;
+    route.push_back(&egress);
+    route.push_back(&delivered);
+    PacketFlow flow(nullptr);
+
+    CbrPacket* first = CbrPacket::newpkt(flow, route, 1, 80);
+    CbrPacket* second = CbrPacket::newpkt(flow, route, 2, 30);
+    ingress.receivePacket(*first);
+    ingress.receivePacket(*second);
+
+    assert(pool.used() == 10);
+    assert(EventList::doNextEvent());
+    assert(EventList::doNextEvent());
+    assert(pool.used() == 0);
+    assert(delivered.packet_count == 2);
+}
+
+void output_queue_rejects_overflow_without_mutating_queue_or_pool(EventList& eventlist) {
+    LosslessInputQueue::configurePfc(120, 90);
+
+    PauseRecorder recorder(eventlist);
+    LosslessInputQueue ingress(eventlist, &recorder);
+    LosslessOutputQueue egress(speedFromGbps(100), 100, eventlist, nullptr);
+    SharedBufferPool pool(40, 40, 39);
+    egress.setSharedBuffer(pool);
+    PacketRecorder delivered;
+    Route route;
+    route.push_back(&egress);
+    route.push_back(&delivered);
+    PacketFlow flow(nullptr);
+
+    CbrPacket* first = CbrPacket::newpkt(flow, route, 1, 100);
+    ingress.receivePacket(*first);
+    const mem_b pool_used_before = pool.used();
+    const mem_b queue_size_before = egress.queuesize();
+
+    CbrPacket* rejected = CbrPacket::newpkt(flow, route, 2, 41);
+    try {
+        ingress.receivePacket(*rejected);
+        assert(false);
+    } catch (const std::logic_error& error) {
+        assert(string(error.what()) == "shared-buffer capacity exceeded");
+    }
+
+    assert(pool.used() == pool_used_before);
+    assert(egress.queuesize() == queue_size_before);
+    rejected->free();
+    assert(EventList::doNextEvent());
 }
 
 }  // namespace
 
 int main() {
-    pfc_pauses_at_high_watermark_and_resumes_after_drain();
+    EventList eventlist;
+    pfc_pauses_at_high_watermark_and_resumes_after_drain(eventlist);
+    assert(EventList::getPendingSources().empty());
+    output_queue_reserves_only_overflow_and_releases_it_after_drain(eventlist);
+    assert(EventList::getPendingSources().empty());
+    output_queue_rejects_overflow_without_mutating_queue_or_pool(eventlist);
+    assert(EventList::getPendingSources().empty());
 }
