@@ -174,7 +174,6 @@ double          UecSrc::_prism_disengage_ratio  = 0.7;
 uint32_t        UecSrc::_prism_n_min            = 3;
 double          UecSrc::_laps_beta              = 1.0;
 simtime_picosec UecSrc::_laps_probe_interval    = timeFromUs(50u);
-bool            UecSrc::_laps_recovery_diagnostics = false;
 bool            UecSrc::_prism_oracle_validation = false;
 std::string     UecSrc::_prism_oracle_log_path = "";
 std::string     UecSrc::_prism_oracle_run_id = "";
@@ -404,13 +403,6 @@ UecNIC::UecNIC(id_t src_num, EventList& eventList, linkspeed_bps linkspeed, uint
     _crt = 0;
 }
 
-LapsRecoveryDomain& UecNIC::lapsRecovery() {
-    if (!_laps_recovery) {
-        _laps_recovery = make_unique<LapsRecoveryDomain>(eventlist());
-    }
-    return *_laps_recovery;
-}
-
 // srcs call request_sending to see if they can send now.  If the
 // answer is no, they'll be called back when it's time to send.
 const Route* UecNIC::requestSending(UecSrc& src) {
@@ -552,7 +544,7 @@ void UecNIC::sendControlPktNow() {
            (p->type() == UECDATA && p->size() == UecBasePacket::ACKSIZE));
     if (p->lapsPinnedRoute()) {
         assert(p->route() != nullptr);
-    } else if (cp.src && cp.src->isStrictLaps() && p->lapsPidValid()) {
+    } else if (cp.src && cp.src->isLaps() && p->lapsPidValid()) {
         const Route* nic_route = cp.src->getPortRoute(port_to_use);
         p->set_route(cp.src->lapsForwardRoute(p->lapsPid(), *nic_route));
         p->setLapsPinnedRoute(true);
@@ -561,7 +553,7 @@ void UecNIC::sendControlPktNow() {
                                     : cp.sink->getPortRoute(port_to_use);
         p->set_route(*route);
     }
-    if (cp.src && cp.src->isStrictLaps() && p->lapsPidValid()) {
+    if (cp.src && cp.src->isLaps() && p->lapsPidValid()) {
         if (const auto audit = cp.src->lapsRouteAudit()) {
             assert(p->type() == UECDATA);
             audit->recordForward(cp.src->flowId(), static_cast<UecDataPacket*>(p)->epsn(),
@@ -694,10 +686,6 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
     _laps_probe_timer_when = 0;
     _laps_probe_seqno = 0;
     _laps_probe_outstanding.clear();
-    _laps_pacer_timer_handle = eventlist().nullHandle();
-    _laps_pacer_timer_when = 0;
-    _laps_next_send_at = 0;
-    _laps_rate = {_nic.linkspeed(), _nic.linkspeed(), 0, 0, 0};
 
     _flow_logger = NULL;
 
@@ -782,9 +770,8 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 updateCwndOnNack = &UecSrc::updateCwndOnNack_SWIFT;
                 break;
             case LAPS:
-                updateCwndOnAck = &UecSrc::dontUpdateCwndOnAck;
-                updateCwndOnNack = isStrictLaps() ? &UecSrc::dontUpdateCwndOnNack
-                                                   : &UecSrc::updateCwndOnNack_NSCC;
+                updateCwndOnAck = &UecSrc::updateCwndOnAck_NSCC;
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;
                 break;
             default:
                 cout << "Unknown CC algo specified " << _sender_cc_algo << endl;
@@ -806,49 +793,43 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
 
 UecSrc::~UecSrc() {
     cancelLapsProbe();
-    cancelLapsPacer();
-    if (isStrictLaps() && _nic.hasLapsRecovery()) {
-        _nic.lapsRecovery().removeOwner(*this);
-    }
 }
 
-bool UecSrc::isStrictLaps() const {
+bool UecSrc::isLaps() const {
     return _sender_cc_algo == LAPS && dynamic_cast<const UecMpLaps*>(_mp.get()) != nullptr;
 }
 
 const Route& UecSrc::lapsForwardRoute(uint16_t pid) const {
-    if (!isStrictLaps() || _laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
-        throw logic_error("strict LAPS has no plane-0 path catalog");
+    if (!isLaps() || _laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
+        throw logic_error("LAPS has no plane-0 path catalog");
     }
     return *_laps_path_catalogs[0]->entry(pid).forward;
 }
 
 const Route& UecSrc::lapsForwardRoute(uint16_t pid, const Route& nic_port_route) const {
-    if (!isStrictLaps()) {
-        throw logic_error("only strict LAPS can request a pinned catalog route");
+    if (!isLaps()) {
+        throw logic_error("only LAPS can request a pinned catalog route");
     }
     for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
         if (_ports[plane]->route() == &nic_port_route) {
             if (plane >= _laps_path_catalogs.size() || !_laps_path_catalogs[plane]) {
-                throw logic_error("strict LAPS NIC plane has no path catalog");
+                throw logic_error("LAPS NIC plane has no path catalog");
             }
             return *_laps_path_catalogs[plane]->entry(pid).forward;
         }
     }
-    throw logic_error("strict LAPS route is not bound to a NIC plane");
+    throw logic_error("LAPS route is not bound to a NIC plane");
 }
 
 void UecSrc::lapsSetPathResolver(LapsPathResolver resolver) {
-    // The resolver materializes the forwarding path and is deliberately a
-    // paired strict-LAPS facility.  Legacy LAPS keeps its old UEC behavior.
-    if (isStrictLaps()) {
+    if (isLaps()) {
         _laps_path_resolver = std::move(resolver);
     }
 }
 
 bool UecSrc::lapsResolvePath(uint32_t entropy, uint32_t send_port,
                               LapsPathKey& path) const {
-    if (!isStrictLaps() || send_port >= _ports.size()) {
+    if (!isLaps() || send_port >= _ports.size()) {
         return false;
     }
 
@@ -875,8 +856,8 @@ bool UecSrc::lapsResolvePath(uint32_t entropy, uint32_t send_port,
             return false;
         }
     }
-    // Resolver fallback only supports legacy test scaffolding. Production
-    // strict LAPS always uses the catalog branch above.
+    // Resolver fallback only supports test scaffolding. Production LAPS uses
+    // the catalog branch above.
     path = LapsPathKey{static_cast<uint16_t>(entropy)};
     return true;
 }
@@ -888,66 +869,9 @@ bool UecSrc::lapsResolvePath(uint32_t entropy, const Route& send_route,
             return lapsResolvePath(entropy, port, path);
         }
     }
-    // A paired strict-LAPS send without a configured source port cannot be
+    // A paired LAPS send without a configured source port cannot be
     // mapped to a physical plane, so do not silently fall back to entropy.
     return false;
-}
-
-void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b bytes) {
-    lapsRecover(attempt, seqno, bytes, LapsRecoveryCause::TIMEOUT);
-}
-
-void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b bytes,
-                         LapsRecoveryCause cause) {
-    const auto record = _tx_bitmap.find(seqno);
-    if (record == _tx_bitmap.end() || record->second.pkt_size != bytes ||
-        !record->second.laps_attempt.has_value() ||
-        *record->second.laps_attempt != attempt) {
-        return;
-    }
-
-    assert(isStrictLaps());
-    assert(record->second.strict_laps_data);
-    assert(record->second.laps_path.has_value());
-    assert(record->second.laps_plane.has_value());
-    assert(record->second.laps_pid.has_value());
-    if (cause == LapsRecoveryCause::ACK_GAP) {
-        ++_laps_ack_gap_rtx;
-    } else {
-        ++_laps_timeout_rtx;
-    }
-    const LapsRtxRoute route = {record->second.path_id, record->second.selection,
-                                *record->second.laps_path, *record->second.laps_plane,
-                                *record->second.laps_pid};
-    const simtime_picosec send_time = record->second.send_time;
-    _tx_bitmap.erase(record);
-    delFromSendTimes(send_time, seqno);
-    _in_flight -= bytes;
-    queueForRtx(seqno, bytes, route);
-}
-
-void UecSrc::emitLapsRecoverySummary() {
-    if (!isStrictLaps() || !_laps_recovery_diagnostics ||
-        _laps_recovery_summary_emitted || !_nic.hasLapsRecovery()) {
-        return;
-    }
-    const LapsRecoveryStats& stats = _nic.lapsRecovery().statsFor(*this);
-    cout << "LAPS_RECOVERY_SUMMARY"
-         << " flow=" << flowId()
-         << " acked=" << stats.acked
-         << " stale_ack=" << stats.stale_ack
-         << " ack_gap_events=" << stats.ack_gap_events
-         << " ack_gap_records=" << stats.ack_gap_records
-         << " timeout_events=" << stats.timeout_events
-         << " timeout_records=" << stats.timeout_records
-         << " nack=" << stats.nack
-         << " stale_nack=" << stats.stale_nack
-         << " retired=" << stats.retired
-         << " stale_retire=" << stats.stale_retire
-         << " source_ack_gap_rtx=" << _laps_ack_gap_rtx
-         << " source_timeout_rtx=" << _laps_timeout_rtx
-         << '\n';
-    _laps_recovery_summary_emitted = true;
 }
 
 void UecSrc::configureMotivationTokenObserver() {
@@ -1227,7 +1151,6 @@ mem_b UecSrc::handleAckno(UecDataPacket::seq_t ackno) {
             // packet was in RTX queue
             mem_b pkt_size = rtx_i->second;
             _rtx_queue.erase(rtx_i);
-            _laps_rtx_routes.erase(ackno);
             _rtx_backlog -= pkt_size;
             _in_flight += pkt_size; // don't double count - we decremented when we marked for rtx
             if (_debug_src) {
@@ -1260,10 +1183,6 @@ mem_b UecSrc::handleAckno(UecDataPacket::seq_t ackno) {
             _msg_tracker.value()->addSAck(ackno);
         }
 
-        if (isStrictLaps() && i->second.strict_laps_data) {
-            assert(i->second.laps_attempt.has_value());
-            _nic.lapsRecovery().retire(*i->second.laps_attempt);
-        }
         _tx_bitmap.erase(i);
         // _send_times.erase(send_time);
         delFromSendTimes(send_time, ackno);
@@ -1312,7 +1231,6 @@ mem_b UecSrc::handleCumulativeAck(UecDataPacket::seq_t cum_ack) {
         if (seqno < cum_ack) {
             mem_b pkt_size = _rtx_queue.begin()->second;
             _rtx_queue.erase(_rtx_queue.begin());
-            _laps_rtx_routes.erase(seqno);
             _rtx_backlog -= pkt_size;
             _in_flight += pkt_size; // don't double count - we decremented when we marked for rtx
         } else {
@@ -1342,10 +1260,6 @@ mem_b UecSrc::handleCumulativeAck(UecDataPacket::seq_t cum_ack) {
             cout << timeAsUs(eventlist().now()) << " flowid " << _flow.flow_id() << " handleCumulativeAck seqno " << seqno
                 << endl;
         }  
-        if (isStrictLaps() && i->second.strict_laps_data) {
-            assert(i->second.laps_attempt.has_value());
-            _nic.lapsRecovery().retire(*i->second.laps_attempt);
-        }
         _tx_bitmap.erase(i);
         i = _tx_bitmap.begin();
         // _send_times.erase(send_time);
@@ -1500,11 +1414,7 @@ bool UecSrc::checkFinished(UecDataPacket::seq_t cum_ack) {
              << " done_sending " << _done_sending << endl;
 
     if (_done_sending) {
-        emitLapsRecoverySummary();
         cancelLapsProbe();
-        if (isStrictLaps() && _nic.hasLapsRecovery()) {
-            _nic.lapsRecovery().removeOwner(*this);
-        }
     }
     return _done_sending;
 }
@@ -1559,7 +1469,7 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     // handleCumulativeAck or handleAckno.
     // assert(_in_flight >= 0);
 
-    if (_sender_based_cc && !isStrictLaps() && pkt.rcv_wnd_pen() < 255) {
+    if (_sender_based_cc && pkt.rcv_wnd_pen() < 255) {
             sint64_t window_decrease = newly_recvd_bytes - newly_recvd_bytes * pkt.rcv_wnd_pen() / 255;
             _cwnd = max(_cwnd-window_decrease, (mem_b)_mtu);
     }
@@ -1682,18 +1592,9 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         }
     }
 
-    const std::optional<simtime_picosec> laps_one_way_delay =
-        pkt.lapsDelayValid() && pkt.lapsOneWayDelay() != 0
-            ? std::optional<simtime_picosec>(pkt.lapsOneWayDelay())
-            : std::nullopt;
-    if (isStrictLaps() && valid_normal_send_attempt && i->second.strict_laps_data) {
-        assert(i->second.laps_attempt.has_value());
-        _nic.lapsRecovery().acknowledge(*i->second.laps_attempt, laps_one_way_delay);
-    }
-
     const bool valid_laps_probe_ack = pkt.is_probe_ack() &&
         _laps_probe_outstanding.find(pkt.acked_psn()) != _laps_probe_outstanding.end();
-    const bool usable_laps_measurement = isStrictLaps() &&
+    const bool usable_laps_measurement = isLaps() &&
         pkt.lapsDelayValid() && (valid_normal_send_attempt || valid_laps_probe_ack);
     if (usable_laps_measurement) {
         const simtime_picosec now = eventlist().now();
@@ -1703,7 +1604,6 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         } else {
             _mp->observeLapsDelay(pkt.ev(), pkt.lapsOneWayDelay(), now);
         }
-        updateLapsRate(now);
         scheduleLapsProbe();
     }
 
@@ -1873,7 +1773,7 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             << " sending_time " << timeAsUs(send_time)
             << endl;
     }
-    if (_sender_based_cc && !isStrictLaps()){
+    if (_sender_based_cc){
         /*if (pkt.ecn_echo()){
             (this->*updateCwndOnAck)(pkt.ecn_echo(), delay, pkt_size);
             (this->*updateCwndOnAck)(false, delay, newly_recvd_bytes - pkt_size);
@@ -1887,7 +1787,7 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         cout << "At " << timeAsUs(eventlist().now()) << " " << _flow.str() << " " << _nodename << " processAck: " << cum_ack << " flow " << _flow.str() << " cwnd " << _cwnd << " flightsize " << _in_flight << " delay " << timeAsUs(delay) << " newlyrecvd " << newly_recvd_bytes << " skip " << pkt.ecn_echo() << " raw rtt " << raw_rtt << endl;
     }
 
-    if (_sender_based_cc && _enable_sleek && !isStrictLaps()) {
+    if (_sender_based_cc && _enable_sleek) {
         //probe packets
         if (_probe_timer_when != 0){
             if (_probe_timer_handle->second != this){
@@ -3057,13 +2957,6 @@ uint16_t UecSrc::get_avg_pktsize(){
 }
 
 void UecSrc::runSleek(uint32_t ooo, UecBasePacket::seq_t cum_ack) {
-    // Strict LAPS owns data-record recovery through the NIC-scoped attempt
-    // domain.  SLEEK erases records directly, so it must never run here even
-    // if a caller bypasses the normal processAck dispatch gate.
-    if (isStrictLaps()) {
-        return;
-    }
-
     mem_b avg_size = get_avg_pktsize();
     mem_b threshold = min((mem_b)(loss_retx_factor*_cwnd), _maxwnd);
     threshold = max(threshold, min_retx_config*avg_size);
@@ -3198,11 +3091,11 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
     simtime_picosec send_time = i->second.send_time;
     simtime_picosec raw_rtt = eventlist().now() - send_time;
 
-    if (!isStrictLaps() && update_base_rtt_on_nack) {
+    if (update_base_rtt_on_nack) {
         update_base_rtt(raw_rtt);
     }
     
-    if(!isStrictLaps() && raw_rtt >= _base_rtt) {
+    if(raw_rtt >= _base_rtt) {
         update_delay(raw_rtt, false, true);
     }
 
@@ -3211,23 +3104,13 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
             << " seqno " << seqno
             << " trimming " << endl;
     }
-    if (_sender_based_cc && !isStrictLaps()){
+    if (_sender_based_cc){
         (this->*updateCwndOnNack)(ev, pkt_size,pkt.last_hop());
     }
 
     if (_debug_src)
         cout << _flow.str() << " " << _nodename << " erasing send record, seqno: " << seqno << " flow " << _flow.str()
              << endl;
-    std::optional<LapsRtxRoute> laps_route;
-    if (isStrictLaps() && i->second.strict_laps_data) {
-        assert(i->second.laps_attempt.has_value());
-        assert(i->second.laps_path.has_value());
-        assert(i->second.laps_plane.has_value());
-        assert(i->second.laps_pid.has_value());
-        laps_route = {i->second.path_id, i->second.selection, *i->second.laps_path,
-                      *i->second.laps_plane, *i->second.laps_pid};
-        _nic.lapsRecovery().nack(*i->second.laps_attempt);
-    }
     _tx_bitmap.erase(i);
     assert(_tx_bitmap.find(seqno) == _tx_bitmap.end());  // xxx remove when working
 
@@ -3237,22 +3120,18 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
     // _send_times.erase(send_time);
     delFromSendTimes(send_time, seqno);
 
-    if (!isStrictLaps()) {
-        stopSpeculating();
-    }
-    queueForRtx(seqno, pkt_size, laps_route);
+    stopSpeculating();
+    queueForRtx(seqno, pkt_size);
 
     if (send_time == _rto_send_time) {
         recalculateRTO();
     }
 
-    if (!isStrictLaps()) {
-        _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
-        if (pkt.last_hop())
-            _mp->processEv(ev, pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
-        else
-            _mp->processEv(ev, UecMultipath::PATH_NACK);
-    }
+    _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
+    if (pkt.last_hop())
+        _mp->processEv(ev, pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
+    else
+        _mp->processEv(ev, UecMultipath::PATH_NACK);
 
     sendIfPermitted();
 }
@@ -3287,7 +3166,7 @@ void UecSrc::doNextEvent() {
         startConnection();
     }
 
-    if (_sender_based_cc && _enable_sleek && !isStrictLaps()) {
+    if (_sender_based_cc && _enable_sleek) {
         if (_probe_timer_when != 0 && _probe_timer_when == eventlist().now()){
             if ( _flow.flow_id() == _debug_flowid || _debug_src ) {
                 cout << timeAsUs(eventlist().now())<< " doNextEvent probe " <<  _rtx_timeout_pending << " flowid " << _flow.flow_id() << endl;
@@ -3296,7 +3175,7 @@ void UecSrc::doNextEvent() {
         }
     }
 
-    if (isStrictLaps() && _laps_probe_timer_when != 0 &&
+    if (isLaps() && _laps_probe_timer_when != 0 &&
         _laps_probe_timer_when == eventlist().now()) {
         _laps_probe_timer_when = 0;
         _laps_probe_timer_handle = eventlist().nullHandle();
@@ -3306,12 +3185,6 @@ void UecSrc::doNextEvent() {
         }
     }
 
-    if (isStrictLaps() && _laps_pacer_timer_when != 0 &&
-        _laps_pacer_timer_when == eventlist().now()) {
-        _laps_pacer_timer_when = 0;
-        _laps_pacer_timer_handle = eventlist().nullHandle();
-        sendIfPermitted();
-    }
 }
 
 bool UecSrc::hasStarted() {
@@ -3341,8 +3214,7 @@ bool UecSrc::isActivelySending() {
     } else if (!_done_sending) {
         // 3.
         // Nothing to send, but the connection is not fully acked yet.
-        // Strict LAPS delegates data recovery to the NIC-scoped domain.
-        assert(isStrictLaps() || _rtx_timeout_pending);
+        assert(_rtx_timeout_pending);
         is_sending = false;
     } else {
         // 4.
@@ -3382,9 +3254,6 @@ void UecSrc::startConnection() {
     } 
 
     assert(!hasStarted());
-    _laps_ack_gap_rtx = 0;
-    _laps_timeout_rtx = 0;
-    _laps_recovery_summary_emitted = false;
     _last_event_time.emplace(eventlist().now());
     _flow_start_time = eventlist().now();
 
@@ -3411,11 +3280,6 @@ void UecSrc::startConnection() {
     _rtx_backlog = 0;
     _send_blocked_on_nic = false;
     scheduleLapsProbe();
-
-    if (isStrictLaps()) {
-        sendIfPermitted();
-        return;
-    }
 
     while (_send_blocked_on_nic == false && isSendPermitted()) {
         if (_debug_src) {
@@ -3453,7 +3317,7 @@ bool UecSrc::isSendPermitted() {
     }
 
     mem_b next_packet_size = getNextPacketSize();        
-    if (_sender_based_cc && !isStrictLaps() && !can_send_NSCC(next_packet_size)) {
+    if (_sender_based_cc && !can_send_NSCC(next_packet_size)) {
         return false;
     }
 
@@ -3472,11 +3336,6 @@ void UecSrc::continueConnection() {
     assert(_send_blocked_on_nic == false);
 
     _last_event_time.emplace(eventlist().now());
-
-    if (isStrictLaps()) {
-        sendIfPermitted();
-        return;
-    }
 
     if (isSendPermitted()) {
         uint32_t pkts_sent = 0;
@@ -3543,7 +3402,7 @@ UecBasePacket::pull_quanta UecSrc::computePullTarget() {
     mem_b pull_target = _backlog + _rtx_backlog;
     //mem_b pull_target = _backlog;
 
-    if (_sender_based_cc && !isStrictLaps()) {
+    if (_sender_based_cc) {
         if (pull_target > _cwnd + _mtu) {
             pull_target = _cwnd + _mtu;
         }
@@ -3612,7 +3471,7 @@ void UecSrc::sendIfPermitted() {
 
     //cout << timeAsUs(eventlist().now()) << " " << nodename() << " FOO " << _cwnd << " " << _in_flight << endl;                                                  
     mem_b next_packet_size = getNextPacketSize();        
-    if (_sender_based_cc && !isStrictLaps()) {
+    if (_sender_based_cc) {
         if (!can_send_NSCC(next_packet_size)) {
             return;
         }
@@ -3623,11 +3482,7 @@ void UecSrc::sendIfPermitted() {
             return;
         }
     }
-    if (isStrictLaps() && eventlist().now() < _laps_next_send_at) {
-        scheduleLapsPacer();
-        return;
-    }
-    if (isStrictLaps()) {
+    if (isLaps()) {
         const auto* laps = dynamic_cast<const UecMpLaps*>(_mp.get());
         if (laps == nullptr || !laps->hasSelectablePath()) {
             scheduleLapsProbe();
@@ -3756,12 +3611,12 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     }
     assert(full_pkt_size <= _mtu);
 
-    optional<uint32_t> strict_laps_entropy;
-    if (isStrictLaps()) {
+    optional<uint32_t> laps_entropy;
+    if (isLaps()) {
         auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
-        if (!laps) throw logic_error("strict LAPS has no LAPS multipath state");
-        strict_laps_entropy = laps->nextLapsEntropy();
-        if (!strict_laps_entropy.has_value()) {
+        if (!laps) throw logic_error("LAPS has no LAPS multipath state");
+        laps_entropy = laps->nextLapsEntropy();
+        if (!laps_entropy.has_value()) {
             scheduleLapsProbe();
             return 0;
         }
@@ -3782,40 +3637,32 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     }
     _pull_target = computePullTarget();
 
-    uint32_t ev = strict_laps_entropy.has_value()
-                      ? *strict_laps_entropy
+    uint32_t ev = laps_entropy.has_value()
+                      ? *laps_entropy
                       : _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     const UecMpSelection selection = _mp->lastSelection();
     const Route* packet_route = &route;
     uint16_t laps_pid = 0;
-    uint32_t laps_plane = 0;
-    if (isStrictLaps()) {
+    if (isLaps()) {
         bool matched_plane = false;
         for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
             if (_ports[plane]->route() == &route) {
                 const auto& catalog = _laps_path_catalogs.at(plane);
-                if (!catalog) throw logic_error("strict LAPS NIC plane has no path catalog");
+                if (!catalog) throw logic_error("LAPS NIC plane has no path catalog");
                 laps_pid = static_cast<uint16_t>(ev & (catalog->size() - 1));
-                laps_plane = plane;
                 packet_route = &lapsForwardRoute(laps_pid, route);
                 matched_plane = true;
                 break;
             }
         }
-        if (!matched_plane) throw logic_error("strict LAPS data route is not bound to a NIC plane");
+        if (!matched_plane) throw logic_error("LAPS data route is not bound to a NIC plane");
     }
     auto* p = UecDataPacket::newpkt(_flow, *packet_route, _highest_sent, full_pkt_size, ptype,
                                      _pull_target, _dstaddr);
     p->set_src(_srcaddr);
-    if (isStrictLaps()) {
+    if (isLaps()) {
         p->setLapsPid(laps_pid);
         p->setLapsPinnedRoute(true);
-    }
-    LapsPathKey laps_path;
-    if (isStrictLaps() && !lapsResolvePath(ev, route, laps_path)) {
-        cerr << "Strict LAPS failed to resolve a physical forwarding path for flow "
-             << flowId() << " entropy " << ev << endl;
-        abort();
     }
     p->set_pathid(ev);
     p->set_hop_count(0);
@@ -3824,14 +3671,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     if (_backlog == 0 || (_receiver_based_cc && _credit <= 0) || ( _sender_based_cc &&  (_in_flight + full_pkt_size) >= _cwnd )) 
         p->set_ar(true);
     
-    createSendRecord(ev, _highest_sent, full_pkt_size, selection, isStrictLaps(), laps_path,
-                     isStrictLaps() ? std::optional<uint32_t>(laps_plane) : std::nullopt,
-                     isStrictLaps() ? std::optional<uint16_t>(laps_pid) : std::nullopt);
-    if (isStrictLaps()) {
-        const LapsAttempt attempt =
-            _nic.lapsRecovery().sent(std::move(laps_path), *this, _highest_sent, full_pkt_size);
-        _tx_bitmap.at(_highest_sent).laps_attempt = attempt;
-    }
+    createSendRecord(ev, _highest_sent, full_pkt_size, selection);
     if (_debug_src)
         cout << timeAsUs(eventlist().now()) << " " << _flow.str() << " sending pkt " << _highest_sent
              << " size " << full_pkt_size << " pull target " << _pull_target << " ack request " << p->ar()
@@ -3844,9 +3684,8 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
              << " ar " << p->ar()
              << endl;
     }
-    if (isStrictLaps()) {
+    if (isLaps()) {
         p->setLapsSendTime(eventlist().now());
-        advanceLapsPacer(full_pkt_size);
         if (_laps_route_audit) {
             _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
         }
@@ -3857,9 +3696,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     }
     _highest_sent++;
     _stats.new_pkts_sent++;
-    if (!isStrictLaps()) {
-        startRTO(eventlist().now());
-    }
+    startRTO(eventlist().now());
 
     assert(full_pkt_size > 0);
 
@@ -3867,17 +3704,8 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
 }
 
 UecSrc::RtxPathSelection UecSrc::selectRtxPath(UecDataPacket::seq_t seqno) {
-    if (!isStrictLaps()) {
-        const uint32_t entropy = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd / _mss);
-        return {entropy, _mp->lastSelection(), std::nullopt, std::nullopt, std::nullopt};
-    }
-    const auto replay = _laps_rtx_routes.find(seqno);
-    if (replay != _laps_rtx_routes.end()) {
-        return {replay->second.path_id, replay->second.selection, replay->second.path,
-                replay->second.plane, replay->second.pid};
-    }
     const uint32_t entropy = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd / _mss);
-    return {entropy, _mp->lastSelection(), std::nullopt, std::nullopt, std::nullopt};
+    return {entropy, _mp->lastSelection()};
 }
 
 mem_b UecSrc::sendRtxPacket(const Route& route) {
@@ -3885,16 +3713,6 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     auto seq_no = _rtx_queue.begin()->first;
     mem_b full_pkt_size = _rtx_queue.begin()->second;
 
-    optional<uint32_t> strict_laps_entropy;
-    if (isStrictLaps() && _laps_rtx_routes.find(seq_no) == _laps_rtx_routes.end()) {
-        auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
-        if (!laps) throw logic_error("strict LAPS has no LAPS multipath state");
-        strict_laps_entropy = laps->nextLapsEntropy();
-        if (!strict_laps_entropy.has_value()) {
-            scheduleLapsProbe();
-            return 0;
-        }
-    }
     spendCredit(full_pkt_size);
 
     _rtx_queue.erase(_rtx_queue.begin());
@@ -3903,67 +3721,34 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     _in_flight += full_pkt_size;
     _pull_target = computePullTarget();
     
-    const RtxPathSelection selection = strict_laps_entropy.has_value()
-                                           ? RtxPathSelection{*strict_laps_entropy, {}, std::nullopt,
-                                                              std::nullopt, std::nullopt}
-                                           : selectRtxPath(seq_no);
+    const RtxPathSelection selection = selectRtxPath(seq_no);
     const uint32_t ev = selection.entropy;
     const Route* packet_route = &route;
     uint16_t laps_pid = 0;
-    uint32_t laps_plane = 0;
-    if (isStrictLaps()) {
-        if (selection.strict_laps_plane.has_value()) {
-            assert(selection.strict_laps_pid.has_value());
-            laps_plane = *selection.strict_laps_plane;
-            laps_pid = *selection.strict_laps_pid;
-            if (laps_plane >= _laps_path_catalogs.size() || !_laps_path_catalogs[laps_plane]) {
-                throw logic_error("strict LAPS recovery plane has no path catalog");
-            }
-            packet_route = _laps_path_catalogs[laps_plane]->entry(laps_pid).forward;
-        } else {
-            for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
-                if (_ports[plane]->route() == &route) {
-                    const auto& catalog = _laps_path_catalogs.at(plane);
-                    if (!catalog) throw logic_error("strict LAPS NIC plane has no path catalog");
-                    laps_pid = static_cast<uint16_t>(ev & (catalog->size() - 1));
-                    laps_plane = plane;
-                    packet_route = &lapsForwardRoute(laps_pid, route);
-                    break;
-                }
+    if (isLaps()) {
+        for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
+            if (_ports[plane]->route() == &route) {
+                const auto& catalog = _laps_path_catalogs.at(plane);
+                if (!catalog) throw logic_error("LAPS NIC plane has no path catalog");
+                laps_pid = static_cast<uint16_t>(ev & (catalog->size() - 1));
+                packet_route = &lapsForwardRoute(laps_pid, route);
+                break;
             }
         }
-        if (packet_route == &route) throw logic_error("strict LAPS RTX route is not bound to a NIC plane");
+        if (packet_route == &route) throw logic_error("LAPS RTX route is not bound to a NIC plane");
     }
     auto* p = UecDataPacket::newpkt(_flow, *packet_route, seq_no, full_pkt_size,
                                      UecDataPacket::DATA_RTX, _pull_target, _dstaddr);
     p->set_src(_srcaddr);
-    if (isStrictLaps()) {
+    if (isLaps()) {
         p->setLapsPid(laps_pid);
         p->setLapsPinnedRoute(true);
-    }
-    LapsPathKey laps_path;
-    if (isStrictLaps() && !lapsResolvePath(ev, laps_plane, laps_path)) {
-        cerr << "Strict LAPS failed to resolve a physical forwarding path for flow "
-             << flowId() << " entropy " << ev << endl;
-        abort();
-    }
-    if (selection.strict_laps_path.has_value()) {
-        assert(isStrictLaps());
-        assert(laps_path.pid == selection.strict_laps_path->pid);
-        assert(_laps_rtx_routes.erase(seq_no) == 1);
     }
     p->set_pathid(ev);
     p->set_hop_count(0);
     p->flow().logTraffic(*p, *this, TrafficLogger::PKT_CREATESEND);
 
-    createSendRecord(ev, seq_no, full_pkt_size, selection.selection, isStrictLaps(), laps_path,
-                     isStrictLaps() ? std::optional<uint32_t>(laps_plane) : std::nullopt,
-                     isStrictLaps() ? std::optional<uint16_t>(laps_pid) : std::nullopt);
-    if (isStrictLaps()) {
-        const LapsAttempt attempt =
-            _nic.lapsRecovery().sent(std::move(laps_path), *this, seq_no, full_pkt_size);
-        _tx_bitmap.at(seq_no).laps_attempt = attempt;
-    }
+    createSendRecord(ev, seq_no, full_pkt_size, selection.selection);
 
     if (_debug_src)
         cout << timeAsUs(eventlist().now()) << " " << _flow.str() << " " << _nodename << " sending rtx pkt " << seq_no
@@ -3976,18 +3761,15 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
              << " in_flight " << _in_flight << " pull_target " << _pull_target << " pull " << _pull << endl;
     }
     p->set_ar(true);
-    if (isStrictLaps()) {
+    if (isLaps()) {
         p->setLapsSendTime(eventlist().now());
-        advanceLapsPacer(full_pkt_size);
         if (_laps_route_audit) {
             _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
         }
     }
     p->sendOn();
     _stats.rtx_pkts_sent++;
-    if (!isStrictLaps()) {
-        startRTO(eventlist().now());
-    }
+    startRTO(eventlist().now());
     return full_pkt_size;
 }
 
@@ -4016,7 +3798,7 @@ void UecSrc::sendProbe() {
 
 void UecSrc::sendLapsProbe() {
     auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
-    if (!laps) throw logic_error("strict LAPS has no LAPS multipath state");
+    if (!laps) throw logic_error("LAPS has no LAPS multipath state");
     const optional<uint16_t> pid = laps->nextLapsProbePid(eventlist().now());
     if (!pid.has_value()) {
         return;
@@ -4033,7 +3815,7 @@ void UecSrc::sendLapsProbe() {
     p->set_dst(_dstaddr);
     p->set_pathid(*pid);
     if (_laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
-        throw logic_error("strict LAPS probe has no path catalog");
+        throw logic_error("LAPS probe has no path catalog");
     }
     p->setLapsPid(*pid);
     p->set_hop_count(0);
@@ -4044,11 +3826,11 @@ void UecSrc::sendLapsProbe() {
 }
 
 void UecSrc::scheduleLapsProbe() {
-    if (!isStrictLaps() || _done_sending) {
+    if (!isLaps() || _done_sending) {
         return;
     }
     const auto* laps = dynamic_cast<const UecMpLaps*>(_mp.get());
-    if (!laps) throw logic_error("strict LAPS has no LAPS multipath state");
+    if (!laps) throw logic_error("LAPS has no LAPS multipath state");
     const optional<simtime_picosec> deadline = laps->nextLapsDeadline(eventlist().now());
     if (!deadline.has_value()) return;
     if (_laps_probe_timer_when != 0 && _laps_probe_timer_when <= *deadline) return;
@@ -4070,49 +3852,6 @@ void UecSrc::cancelLapsProbe() {
         _laps_probe_timer_handle = eventlist().nullHandle();
     }
     _laps_probe_outstanding.clear();
-}
-
-void UecSrc::advanceLapsPacer(mem_b bytes) {
-    assert(isStrictLaps());
-    assert(bytes > 0);
-    assert(_laps_rate.cur_rate > 0);
-
-    const unsigned __int128 numerator =
-        static_cast<unsigned __int128>(bytes) * 8U * 1000000000000ULL;
-    const simtime_picosec serialization = static_cast<simtime_picosec>(
-        (numerator + _laps_rate.cur_rate - 1) / _laps_rate.cur_rate);
-    _laps_next_send_at = EventList::now() > numeric_limits<simtime_picosec>::max() - serialization
-                              ? numeric_limits<simtime_picosec>::max()
-                              : EventList::now() + serialization;
-}
-
-void UecSrc::scheduleLapsPacer() {
-    if (!isStrictLaps() || _laps_next_send_at <= eventlist().now() ||
-        _laps_pacer_timer_when != 0) {
-        return;
-    }
-    _laps_pacer_timer_when = _laps_next_send_at;
-    _laps_pacer_timer_handle =
-        eventlist().sourceIsPendingGetHandle(*this, _laps_pacer_timer_when);
-    if (_laps_pacer_timer_handle == eventlist().nullHandle()) {
-        _laps_pacer_timer_when = 0;
-    }
-}
-
-void UecSrc::cancelLapsPacer() {
-    if (_laps_pacer_timer_when != 0) {
-        eventlist().cancelPendingSourceByHandle(*this, _laps_pacer_timer_handle);
-        _laps_pacer_timer_when = 0;
-        _laps_pacer_timer_handle = eventlist().nullHandle();
-    }
-}
-
-void UecSrc::updateLapsRate(simtime_picosec now) {
-    assert(isStrictLaps());
-    const UecMpLapsSignal sampled = _mp->lapsSignal(now);
-    const LapsRateSignal signal = {sampled.calibrated, sampled.all_paths_high,
-                                   sampled.target_delay, sampled.min_delay};
-    _laps_rate = advanceLapsRate(_laps_rate, signal, now, _nic.linkspeed());
 }
 
 void UecSrc::sendRTS() {
@@ -4151,19 +3890,14 @@ void UecSrc::sendRTS() {
 }
 
 void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno,
-                              mem_b full_pkt_size, UecMpSelection selection,
-                              bool strict_laps_data, std::optional<LapsPathKey> laps_path,
-                              std::optional<uint32_t> laps_plane,
-                              std::optional<uint16_t> laps_pid) {
+                              mem_b full_pkt_size, UecMpSelection selection) {
     if (_debug_src)
         cout << _flow.str() << " " << _nodename << " createSendRecord seqno: " << seqno << " size " << full_pkt_size
              << endl;
 
     assert(_tx_bitmap.find(seqno) == _tx_bitmap.end());
 
-    _tx_bitmap.emplace(seqno, sendRecord(path_id, full_pkt_size, eventlist().now(), selection,
-                                         strict_laps_data, std::nullopt, std::move(laps_path),
-                                         laps_plane, laps_pid));
+    _tx_bitmap.emplace(seqno, sendRecord(path_id, full_pkt_size, eventlist().now(), selection));
     _send_times.emplace(eventlist().now(), seqno);
 
     if (_rtx_times.find(seqno) == _rtx_times.end()) {
@@ -4173,13 +3907,8 @@ void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno,
     }
 }
 
-void UecSrc::queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size,
-                         std::optional<LapsRtxRoute> laps_route) {
+void UecSrc::queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size) {
     assert(_rtx_queue.find(seqno) == _rtx_queue.end());
-    if (laps_route.has_value()) {
-        assert(isStrictLaps());
-        assert(_laps_rtx_routes.emplace(seqno, std::move(*laps_route)).second);
-    }
     _rtx_queue.emplace(seqno, pkt_size);
     _rtx_backlog += pkt_size;
     if (!_speculating || !_receiver_based_cc)
@@ -4203,19 +3932,13 @@ void UecSrc::timeToSend(const Route& route) {
     // we are in sync either way.
     _send_blocked_on_nic = false;
 
-    if (isStrictLaps() && eventlist().now() < _laps_next_send_at) {
-        scheduleLapsPacer();
-        _nic.cantSend(*this);
-        return;
-    }
-
     if (_backlog == 0 && _rtx_queue.empty()) {
         _nic.cantSend(*this);
         return;
     }
 
     mem_b next_packet_size = getNextPacketSize();
-    if (_sender_based_cc && !isStrictLaps() && !can_send_NSCC(next_packet_size)) {
+    if (_sender_based_cc && !can_send_NSCC(next_packet_size)) {
         if (_debug_src)
             cout << _flow.str() << " " << _node_num << " cantSend, limited by sender CWND " << _cwnd << " _in_flight "
                     << _in_flight << "\n";
@@ -4273,13 +3996,8 @@ void UecSrc::recalculateRTO() {
     // we're no longer waiting for the packet we set the timer for -
     // figure out what the timer should be now.
     cancelRTO();
-    for (const auto& [send_time, seqno] : _send_times) {
-        const auto record = _tx_bitmap.find(seqno);
-        assert(record != _tx_bitmap.end());
-        if (!isStrictLaps() || !record->second.strict_laps_data) {
-            startRTO(send_time);
-            return;
-        }
+    if (!_send_times.empty()) {
+        startRTO(_send_times.begin()->first);
     }
 }
 
@@ -4287,21 +4005,12 @@ void UecSrc::rtxTimerExpired() {
     assert(eventlist().now() == _rtx_timeout);
     clearRTO();
 
-    auto first_entry = _send_times.end();
-    for (auto entry = _send_times.begin(); entry != _send_times.end(); ++entry) {
-        const auto record = _tx_bitmap.find(entry->second);
-        assert(record != _tx_bitmap.end());
-        if (!isStrictLaps() || !record->second.strict_laps_data) {
-            first_entry = entry;
-            break;
-        }
-    }
+    auto first_entry = _send_times.begin();
     assert(first_entry != _send_times.end());
     const auto seqno = first_entry->second;
 
     auto send_record = _tx_bitmap.find(seqno);
     assert(send_record != _tx_bitmap.end());
-    assert(!isStrictLaps() || !send_record->second.strict_laps_data);
     mem_b pkt_size = send_record->second.pkt_size;
 
     _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
@@ -4327,7 +4036,7 @@ void UecSrc::rtxTimerExpired() {
 
     //Yanfang: this is a hack, we remove timestamp for these seqno, 
     //I would expect that that the fast loss recovery will retransmit this packet, when the send_times record the sending timestamp for this packet
-    if (_sender_based_cc && _enable_sleek && !isStrictLaps()) {
+    if (_sender_based_cc && _enable_sleek) {
         if (_loss_recovery_mode) {
             if (_rtx_times[seqno] < 1) {
                 recalculateRTO();
@@ -4365,7 +4074,7 @@ void UecSrc::rtxTimerExpired() {
     // there's no queue, so maybe we could just resend now?
     queueForRtx(seqno, pkt_size);
 
-    if (_sender_based_cc && !isStrictLaps()) {
+    if (_sender_based_cc) {
         if (_cwnd < pkt_size + _in_flight) {
             // window won't allow us to send yet.
             if (_debug_src)
@@ -4757,7 +4466,7 @@ void UecSink::processData(UecDataPacket& pkt) {
              << _out_of_order_count << " ecn " << ecn << " shouldSack " << shouldSack()
              << " forceack " << force_ack << endl;
     }
-    if ((_src != nullptr && _src->isStrictLaps()) || ecn || shouldSack() || force_ack) {
+    if ((_src != nullptr && _src->isLaps()) || ecn || shouldSack() || force_ack) {
         UecAckPacket* ack_packet =
             sack(pkt.path_id(), (ecn || pkt.ar()) ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted(), &pkt);
 
@@ -5065,7 +4774,7 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
     pkt->set_rtx_echo(rtx_echo);
     pkt->set_probe_ack(false);
     pkt->set_hop_count(0);
-    if (_src != nullptr && _src->isStrictLaps() && received_data != nullptr &&
+    if (_src != nullptr && _src->isLaps() && received_data != nullptr &&
         received_data->lapsPidValid()) {
         const uint16_t pid = received_data->lapsPid();
         const Route* forward = received_data->route();
@@ -5077,7 +4786,7 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
             }
         }
         if (reverse == nullptr) {
-            throw logic_error("strict LAPS ACK has no reverse catalog route");
+            throw logic_error("LAPS ACK has no reverse catalog route");
         }
         pkt->setLapsPid(pid);
         pkt->setLapsPinnedRoute(true);
@@ -5097,7 +4806,7 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
 
 const Route& UecSink::lapsReverseRoute(uint16_t pid) const {
     if (_laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
-        throw logic_error("strict LAPS sink has no plane-0 path catalog");
+        throw logic_error("LAPS sink has no plane-0 path catalog");
     }
     return *_laps_path_catalogs[0]->entry(pid).reverse;
 }

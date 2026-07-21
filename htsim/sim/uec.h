@@ -20,8 +20,8 @@
 #include "pciemodel.h"
 #include "oversubscribed_cc.h"
 #include "laps_rate.h"
-#include "laps_recovery.h"
 #include "laps_path_catalog.h"
+#include "laps_recovery.h"
 #include "laps_route_audit.h"
 #include "uec_mp.h"
 #include "motivation_epoch.h"
@@ -74,7 +74,6 @@ public:
     void doNextEvent();
 
     linkspeed_bps linkspeed() const {return _linkspeed;}
-    bool hasLapsRecovery() const { return _laps_recovery != nullptr; }
 
     int activeSources() const { return _active_srcs.size(); }
     virtual const string& nodename() const {return _nodename;}
@@ -83,7 +82,6 @@ public:
 private:
     friend class UecSrc;
 
-    LapsRecoveryDomain& lapsRecovery();
     void sendControlPktNow();
     uint32_t sendOnFreePortNow(simtime_picosec endtime, const Route* rt);
     list<struct CtrlPacket> _control;
@@ -100,7 +98,6 @@ private:
     int _ratio_data, _ratio_control, _crt;
 
     string _nodename;
-    unique_ptr<LapsRecoveryDomain> _laps_recovery;
 };
 
 // Packets are received on ports, but then passed to the Src for handling
@@ -117,8 +114,7 @@ private:
     const Route* _route;  // we're only going to support ECMP_HOST for now.
 };
 
-class UecSrc : public EventSource, public TriggerTarget, public UecTransportConnection,
-               public LapsRecoveryOwner {
+class UecSrc : public EventSource, public TriggerTarget, public UecTransportConnection {
 public:
     static void configureMotivationTrace(const std::string& prefix, const std::string& run_id,
                                          const std::string& scenario, uint32_t seed,
@@ -180,12 +176,12 @@ public:
     void doNextEvent();
     uint32_t dst() { return _dstaddr; }
     void setDst(uint32_t dst) { _dstaddr = dst; }
-    bool isStrictLaps() const;
+    bool isLaps() const;
     using LapsPathResolver = std::function<bool(
         uint32_t, uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void lapsSetPathResolver(LapsPathResolver resolver);
     void lapsSetPathCatalog(uint32_t plane, std::shared_ptr<const LapsPathCatalog> catalog) {
-        if (isStrictLaps()) {
+        if (isLaps()) {
             if (plane >= _laps_path_catalogs.size())
                 _laps_path_catalogs.resize(plane + 1);
             _laps_path_catalogs[plane] = std::move(catalog);
@@ -193,7 +189,7 @@ public:
             // supplies immutable PIT baselines; packets remain plane-pinned.
             if (plane == 0) {
                 auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
-                if (!laps) throw std::logic_error("strict LAPS has no LAPS multipath state");
+                if (!laps) throw std::logic_error("LAPS has no LAPS multipath state");
                 std::vector<simtime_picosec> base_vals;
                 base_vals.reserve(_laps_path_catalogs[plane]->size());
                 for (uint16_t pid = 0; pid < _laps_path_catalogs[plane]->size(); ++pid)
@@ -204,7 +200,7 @@ public:
     }
     void lapsSetRouteAudit(std::shared_ptr<LapsRouteAudit> audit) {
         _laps_route_audit = std::move(audit);
-        if (_laps_route_audit && isStrictLaps()) {
+        if (_laps_route_audit && isLaps()) {
             for (const auto& catalog : _laps_path_catalogs)
                 if (catalog) _laps_route_audit->registerCatalog(*catalog);
         }
@@ -216,10 +212,6 @@ public:
                          LapsPathKey& path) const;
     bool lapsResolvePath(uint32_t entropy, const Route& send_route,
                          LapsPathKey& path) const;
-    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override;
-    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes,
-                     LapsRecoveryCause cause) override;
-    void emitLapsRecoverySummary();
     using PrismOraclePathResolver = std::function<bool(
         uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void prismSetOraclePathResolver(PrismOraclePathResolver resolver,
@@ -324,37 +316,16 @@ public:
     struct sendRecord {
         // need a constructor to be able to put this in a map
         sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime,
-                   UecMpSelection pselection, bool strict_laps_data,
-                   std::optional<LapsAttempt> laps_attempt = std::nullopt,
-                   std::optional<LapsPathKey> laps_path = std::nullopt,
-                   std::optional<uint32_t> laps_plane = std::nullopt,
-                   std::optional<uint16_t> laps_pid = std::nullopt)
-            : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection),
-              strict_laps_data(strict_laps_data), laps_attempt(laps_attempt),
-              laps_path(std::move(laps_path)), laps_plane(laps_plane), laps_pid(laps_pid){};
+                   UecMpSelection pselection)
+            : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection){};
         uint32_t path_id;
         mem_b pkt_size;
         simtime_picosec send_time;
         UecMpSelection selection;
-        bool strict_laps_data;
-        std::optional<LapsAttempt> laps_attempt;
-        std::optional<LapsPathKey> laps_path;
-        std::optional<uint32_t> laps_plane;
-        std::optional<uint16_t> laps_pid;
-    };
-    struct LapsRtxRoute {
-        uint32_t path_id;
-        UecMpSelection selection;
-        LapsPathKey path;
-        uint32_t plane;
-        uint16_t pid;
     };
     struct RtxPathSelection {
         uint32_t entropy;
         UecMpSelection selection;
-        std::optional<LapsPathKey> strict_laps_path;
-        std::optional<uint32_t> strict_laps_plane;
-        std::optional<uint16_t> strict_laps_pid;
     };
     UecLogger* _logger;
     TrafficLogger* _pktlogger;
@@ -370,7 +341,6 @@ public:
     map<UecDataPacket::seq_t, uint16_t> _rtx_times;
 
     map<UecDataPacket::seq_t, mem_b> _rtx_queue;
-    map<UecDataPacket::seq_t, LapsRtxRoute> _laps_rtx_routes;
     bool isSendPermitted();
     void sendIfPermitted();
     mem_b sendPacket(const Route& route);
@@ -381,15 +351,8 @@ public:
     void sendLapsProbe();
     void scheduleLapsProbe();
     void cancelLapsProbe();
-    void advanceLapsPacer(mem_b bytes);
-    void scheduleLapsPacer();
-    void cancelLapsPacer();
-    void updateLapsRate(simtime_picosec now);
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
-                          UecMpSelection selection, bool strict_laps_data = false,
-                          std::optional<LapsPathKey> laps_path = std::nullopt,
-                          std::optional<uint32_t> laps_plane = std::nullopt,
-                          std::optional<uint16_t> laps_pid = std::nullopt);
+                          UecMpSelection selection);
     RtxPathSelection selectRtxPath(UecDataPacket::seq_t seqno);
     void configureMotivationTokenObserver();
     struct MotivationResolvedPath {
@@ -412,8 +375,7 @@ public:
                               uint64_t new_data_bytes_sent_total,
                               uint64_t cwnd_bytes);
     void motivationLogPendingEpoch();
-    void queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size,
-                     std::optional<LapsRtxRoute> laps_route = std::nullopt);
+    void queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size);
     bool validateSendTs(UecBasePacket::seq_t acked_psn, bool rtx_echo);
     void recalculateRTO();
     void startRTO(simtime_picosec send_time);
@@ -536,7 +498,6 @@ public:
     static uint32_t        _prism_n_min;     // minimum genuine ACK samples needed to close an epoch
     static double          _laps_beta;           // Softmax inverse-temperature; default 1.0
     static simtime_picosec _laps_probe_interval; // microseconds on CLI; default 50us
-    static bool            _laps_recovery_diagnostics;
     // Motivation-only REPS admission gate. Disabled unless explicitly requested.
     static bool            _motivation_residual_recycle;
     static simtime_picosec _motivation_residual_threshold;
@@ -737,13 +698,6 @@ private:
     UecDataPacket::seq_t _laps_probe_seqno = 0;
     std::set<UecDataPacket::seq_t> _laps_probe_outstanding;
     EventList::Handle _laps_probe_timer_handle;
-    EventList::Handle _laps_pacer_timer_handle;
-    simtime_picosec _laps_pacer_timer_when = 0;
-    simtime_picosec _laps_next_send_at = 0;
-    LapsRateState _laps_rate;
-    uint64_t _laps_ack_gap_rtx = 0;
-    uint64_t _laps_timeout_rtx = 0;
-    bool _laps_recovery_summary_emitted = false;
     /******** END LAPS probe parameters *********/
 
 
@@ -841,14 +795,14 @@ class UecSink : public DataReceiver {
     void connectPort(uint32_t port_num, UecSrc& src, const Route& routeback);
     void lapsSetPathCatalog(const UecSrc& source, uint32_t plane,
                             std::shared_ptr<const LapsPathCatalog> catalog) {
-        if (!source.isStrictLaps())
+        if (!source.isLaps())
             return;
         if (plane >= _laps_path_catalogs.size())
             _laps_path_catalogs.resize(plane + 1);
         _laps_path_catalogs[plane] = std::move(catalog);
     }
     void lapsSetRouteAudit(const UecSrc& source, std::shared_ptr<LapsRouteAudit> audit) {
-        if (!source.isStrictLaps()) return;
+        if (!source.isLaps()) return;
         _laps_route_audit = std::move(audit);
         if (_laps_route_audit) {
             for (const auto& catalog : _laps_path_catalogs)
