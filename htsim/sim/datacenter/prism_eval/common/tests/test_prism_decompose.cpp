@@ -42,6 +42,12 @@ int main() {
     assert(decide_region_hyst(0, 6,  10, 8, 0.25, HOLD)     == INCREASE); // 6<=6 -> spread leaves high
     printf("ok decide_region_hyst\n");
 
+    assert(apply_hold_override(HOLD, true) == INCREASE);
+    assert(apply_hold_override(INCREASE, true) == INCREASE);
+    assert(apply_hold_override(DECREASE, true) == DECREASE);
+    assert(apply_hold_override(HOLD, false) == HOLD);
+    printf("ok hold override\n");
+
     printf("ALL PASS\n");
     return 0;
 }

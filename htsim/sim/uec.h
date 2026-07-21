@@ -26,6 +26,7 @@
 #include "uec_mp.h"
 #include "motivation_epoch.h"
 #include "prism_coordination.h"
+#include "prism_path_signal.h"
 #include "atlahs_event.h"
 #include "atlahs_htsim_api.h"
 
@@ -534,6 +535,9 @@ public:
     static double          _prism_engage_mult;
     static double          _prism_disengage_ratio;
     static uint32_t        _prism_n_min;     // minimum genuine ACK samples needed to close an epoch
+    static bool            _prism_path_median_signal;
+    static bool            _prism_path_median_spread;
+    static bool            _prism_hold_as_increase;
     static double          _laps_beta;           // Softmax inverse-temperature; default 1.0
     static simtime_picosec _laps_probe_interval; // microseconds on CLI; default 50us
     static bool            _laps_recovery_diagnostics;
@@ -661,6 +665,7 @@ private:
     bool            _prism_genuine_sample = false;  // set in processAck: true iff this ACK gave a
                                                     // genuine raw_rtt-base sample (not avg fallback)
     uint32_t        _prism_genuine_sample_path = UINT32_MAX;
+    prism::PathMedianEpoch _prism_path_epoch;
     simtime_picosec _prism_floor_s       = 0;
     simtime_picosec _prism_spread_s      = 0;
     simtime_picosec _prism_spread_long   = 0;

@@ -233,6 +233,12 @@ if ( ENABLE_TESTS )
     add_test(NAME prism_decompose COMMAND test_prism_decompose)
     set_tests_properties(prism_decompose PROPERTIES LABELS "prism" TIMEOUT 60)
 
+    add_executable(test_prism_path_signal
+        datacenter/prism_eval/common/tests/test_prism_path_signal.cpp)
+    target_link_libraries(test_prism_path_signal PRIVATE htsim)
+    add_test(NAME prism_path_signal COMMAND test_prism_path_signal)
+    set_tests_properties(prism_path_signal PROPERTIES LABELS "prism" TIMEOUT 60)
+
     add_executable(test_legacy_reps_trace
         datacenter/add_motivation/common/tests/test_legacy_reps_trace.cpp)
     target_link_libraries(test_legacy_reps_trace PRIVATE htsim)

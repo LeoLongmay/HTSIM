@@ -21,6 +21,10 @@ inline Region decide_region(uint64_t c_cc, uint64_t c_spray,
     return DECREASE;                                    // floor high: even the best path is queued
 }
 
+inline Region apply_hold_override(Region region, bool hold_as_increase) {
+    return hold_as_increase && region == HOLD ? INCREASE : region;
+}
+
 // Hysteretic variant of decide_region: the region is "sticky" so it does not chatter on a signal
 // hovering at a threshold. prev encodes the last region; entering a high state needs signal >= t*(1+h),
 // leaving needs signal <= t*(1-h). h=0 is NOT used (callers use decide_region when h==0).

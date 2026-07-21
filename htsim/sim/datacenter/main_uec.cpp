@@ -287,6 +287,15 @@ int main(int argc, char **argv) {
             UecSrc::_prism_n_min = atoi(argv[i+1]);
             cout << "prism_n_min " << UecSrc::_prism_n_min << endl;
             i++;
+        } else if (!strcmp(argv[i],"-prism_path_median_signal")) {
+            UecSrc::_prism_path_median_signal = true;
+            cout << "prism_path_median_signal enabled" << endl;
+        } else if (!strcmp(argv[i],"-prism_path_median_spread")) {
+            UecSrc::_prism_path_median_spread = true;
+            cout << "prism_path_median_spread enabled" << endl;
+        } else if (!strcmp(argv[i],"-prism_hold_as_increase")) {
+            UecSrc::_prism_hold_as_increase = true;
+            cout << "prism_hold_as_increase enabled" << endl;
         } else if (!strcmp(argv[i],"-laps_beta")) {
             UecSrc::_laps_beta = atof(argv[i+1]);
             cout << "laps_beta " << UecSrc::_laps_beta << endl;

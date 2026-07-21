@@ -73,6 +73,19 @@ python3 htsim/sim/datacenter/add_motivation/expM3_residual_spread_coordination/a
 It prints either `supported` or `not_supported: <first predicate>` and exits
 zero for either valid verdict.
 
+## Cache-to-Path Read-Only Analysis
+
+`repro_outcome_recycle.sh` also writes three read-only cache attribution files
+under `data/outcome_recycle/aggregate/`: `cache_path_targets.csv` records every
+residual-targeted entry with its resolved physical queue group,
+`cache_path_group_summary.csv` compares each group's target share against its
+ordinary cache-admission share per seed, and `cache_path_matrix_summary.csv`
+summarizes those values across seeds. Queue groups use stable physical link
+names such as `reduced:CS4->US0(0)`, not run-local queue IDs. This analysis does
+not change REPS, PRISM, routing, or congestion control behavior. Target rows
+also record the active same-group cohort size and the number of additional
+same-group entries that a per-flow batch replacement could remove.
+
 ## Historical Output
 
 The final reproduction command was:
