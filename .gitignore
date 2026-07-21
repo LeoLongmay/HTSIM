@@ -15,6 +15,11 @@ idmap.txt
 *.png
 !example_validate.json
 build/
+htsim/sim/build-laps/
+htsim/sim/build-laps-asan/
+htsim/sim/datacenter/mvp_runs/
+htsim/sim/datacenter/add_motivation/expM6_path_robust_signal/data/
+htsim/sim/datacenter/add_motivation/expM7_hold_state_ablation/data/
 *.bin
 *:Zone.Identifier
 **/*:Zone.Identifier
@@ -33,6 +38,17 @@ htsim/sim/datacenter/core_*
 /.superpowers/
 /Skeleton_of_III.md
 /prism_oracle_validation_codex_prompt.md
+/Exper_design.md
+/LAPS/
+/LAPS_imple.md
+/Mswift/
+/Strack/
+/Swift/
+/codex_prompt_prism_motivation_steps_1_2.md
+/figure_bar_data.md
+/prompt.md
+/prompt2.md
+/residual_spread_coordination.md
 
 /docs/
 /.worktrees/
