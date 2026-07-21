@@ -273,6 +273,66 @@
 
   Expected: generated `data/laps_diagnosis/` files remain ignored and unstaged.  If Task 3 required a README command correction, stage only that README and commit `docs: record localized LAPS diagnostic`; otherwise make no commit.
 
+### Task 3a: Block generic recovery sends while every LAPS PID is probing
+
+**Files:**
+- Modify: `htsim/sim/uec.cpp:3711-3773,3853-3885`
+- Modify: `htsim/sim/datacenter/add_motivation/common/tests/test_laps_source_routing.cpp`
+
+**Interfaces:**
+- Consumes: `UecMpLaps::nextLapsEntropy()`, `UecMpLaps::hasSelectablePath()`, and `UecSrc::scheduleLapsProbe()`.
+- Produces: a zero-byte LAPS retransmission/RTS deferral when all PIDs are probe-pending; the queued retransmission, credit, and in-flight state remain unchanged until a probe ACK refreshes a PID.
+
+- [ ] **Step 1: Write a failing all-probe-pending retransmission test**
+
+  In `test_laps_source_routing.cpp`, use the existing localized fixture to set every
+  `UecMpLaps::_paths` entry's `probe_pending` to true, enqueue one retransmission,
+  and assert that sending does not throw or mutate ownership:
+
+  ```cpp
+  const mem_b in_flight_before = f.source._in_flight;
+  const mem_b backlog_before = f.source._rtx_backlog;
+  f.source._rtx_queue.emplace(91, 1'500);
+  f.source._rtx_backlog = 1'500;
+  for (auto& state : laps->_paths) state.probe_pending = true;
+  assert(f.source.sendRtxPacket(f.forwardFib(0)) == 0);
+  assert(f.source._rtx_queue.count(91) == 1);
+  assert(f.source._rtx_backlog == backlog_before);
+  assert(f.source._in_flight == in_flight_before);
+  ```
+
+  Add a companion test that calls `sendRTS()` under the same all-pending state
+  and asserts it emits no RTS/send record, then run the test target.  The old
+  implementation must fail by throwing `LAPS data selection requested while
+  every PID is probe-pending`.
+
+- [ ] **Step 2: Make LAPS recovery routing probe-safe**
+
+  In `sendRtxPacket`, resolve `nextLapsEntropy()` before `spendCredit()` when
+  `isLaps()`.  If it has no value, call `scheduleLapsProbe()` and return `0`;
+  otherwise construct `RtxPathSelection{*entropy, _mp->lastSelection()}`.
+  Use the existing generic `selectRtxPath()` only for non-LAPS algorithms.
+
+  In `sendRTS`, use the same `nextLapsEntropy()` branch for LAPS.  With no
+  selectable PID, schedule a LAPS probe and return before allocating an RTS or
+  mutating sequence/RTO state.  Non-LAPS RTS behavior remains byte-for-byte
+  unchanged.
+
+- [ ] **Step 3: Verify the targeted regression and commit**
+
+  Run:
+
+  ```bash
+  cmake --build htsim/sim/build-lossless --target test_laps_source_routing test_laps_uec_isolation htsim_uec -j2
+  htsim/sim/build-lossless/test_laps_source_routing
+  htsim/sim/build-lossless/test_laps_uec_isolation
+  rg -n 'nextEntropy\\(' htsim/sim/uec.cpp
+  ```
+
+  Expected: all tests pass; the only LAPS call sites that can invoke generic
+  `nextEntropy()` are unreachable from data/retransmission/RTS paths while all
+  LAPS PIDs are probe-pending.  Commit with `fix: defer LAPS recovery during probes`.
+
 ### Task 4: Rebuild the four-arm lossless preview only after the gate passes
 
 **Files:**
