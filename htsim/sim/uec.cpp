@@ -2526,9 +2526,6 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
                 _prism_epoch_min = min(_prism_epoch_min, q);
                 _prism_epoch_max = max(_prism_epoch_max, q);
             }
-            if ((_prism_path_median_signal || _prism_path_median_spread) &&
-                _prism_genuine_sample_path != UINT32_MAX)
-                _prism_path_epoch.observe(_prism_genuine_sample_path, q);
             _prism_epoch_samples++;
             if (_prism_oracle_validation && _prism_genuine_sample_path != UINT32_MAX) {
                 _prism_epoch_sampled_paths.insert(_prism_genuine_sample_path);
@@ -2543,13 +2540,6 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         if (epoch_time_ready && _prism_epoch_samples >= _prism_n_min) {
             simtime_picosec c_cc = _prism_epoch_min;
             simtime_picosec c_spray = _prism_epoch_max - _prism_epoch_min;
-            if (_prism_path_median_signal) {
-                const auto path_signal = _prism_path_epoch.signal();
-                c_cc = path_signal.floor;
-                c_spray = path_signal.spread;
-            } else if (_prism_path_median_spread) {
-                c_spray = _prism_path_epoch.signal(2).spread;
-            }
             prismUpdateSignals(c_cc, c_spray);
             simtime_picosec eng_th = prismEngageThresh();
             if (eng_th > 0 && _prism_spread_long >= eng_th) {
@@ -2569,7 +2559,6 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             prismEpochLog(c_cc, c_spray, -1, false);
             _prism_epoch_sampled_paths.clear();
             _prism_epoch_samples = 0;
-            _prism_path_epoch.reset();
             _prism_epoch_sample_deferred = false;
             _prism_epoch_id++;
         }
@@ -2590,9 +2579,6 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             _prism_epoch_min = min(_prism_epoch_min, q);
             _prism_epoch_max = max(_prism_epoch_max, q);
         }
-        if ((_prism_path_median_signal || _prism_path_median_spread) &&
-            _prism_genuine_sample_path != UINT32_MAX)
-            _prism_path_epoch.observe(_prism_genuine_sample_path, q);
         _prism_epoch_samples++;
         if (_prism_oracle_validation && _prism_genuine_sample_path != UINT32_MAX) {
             _prism_epoch_sampled_paths.insert(_prism_genuine_sample_path);
