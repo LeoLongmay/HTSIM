@@ -3,6 +3,8 @@
 #include <math.h>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
+#include "shared_buffer_pool.h"
 #include "switch.h"
 
 uint64_t LosslessInputQueue::_high_threshold = 0;
@@ -11,7 +13,8 @@ uint64_t LosslessInputQueue::_low_threshold = 0;
 LosslessInputQueue::LosslessInputQueue(EventList& eventlist)
     : Queue(speedFromGbps(1),Packet::data_packet_size()*2000,eventlist,NULL),
       VirtualQueue(),
-      _state_recv(READY)
+      _state_recv(READY),
+      pool_(NULL)
 {
     assert(_high_threshold>0);
     assert(_high_threshold > _low_threshold);
@@ -22,7 +25,8 @@ LosslessInputQueue::LosslessInputQueue(EventList& eventlist)
 LosslessInputQueue::LosslessInputQueue(EventList& eventlist,BaseQueue* peer)
     : Queue(speedFromGbps(1),Packet::data_packet_size()*2000,eventlist,NULL),
       VirtualQueue(),
-      _state_recv(READY)
+      _state_recv(READY),
+      pool_(NULL)
 {
     assert(_high_threshold>0);
     assert(_high_threshold > _low_threshold);
@@ -40,7 +44,8 @@ LosslessInputQueue::LosslessInputQueue(EventList& eventlist,BaseQueue* peer)
 LosslessInputQueue::LosslessInputQueue(EventList& eventlist,BaseQueue* peer, Switch* sw, simtime_picosec wire_latency)
     : Queue(speedFromGbps(1),Packet::data_packet_size()*2000,eventlist,NULL),
       VirtualQueue(),
-      _state_recv(READY)
+      _state_recv(READY),
+      pool_(NULL)
 {
     assert(_high_threshold>0);
     assert(_high_threshold > _low_threshold);
@@ -58,19 +63,45 @@ LosslessInputQueue::LosslessInputQueue(EventList& eventlist,BaseQueue* peer, Swi
     peer->setRemoteEndpoint(this);
 }
 
+void LosslessInputQueue::configurePfc(mem_b high, mem_b low) {
+    if (low <= 0 || high <= low) {
+        throw std::invalid_argument("invalid PFC thresholds");
+    }
 
-void
-LosslessInputQueue::receivePacket(Packet& pkt) 
-{
-    /* normal packet, enqueue it */
-    _queuesize += pkt.size();
+    _high_threshold = high;
+    _low_threshold = low;
+}
 
-    //send PAUSE notifications if that is the case!
-    assert(_queuesize > 0);
-    if ((uint64_t)_queuesize > _high_threshold && _state_recv!=PAUSED){
+void LosslessInputQueue::setSharedBuffer(SharedBufferPool& pool) {
+    pool_ = &pool;
+}
+
+void LosslessInputQueue::refreshPauseState() {
+    const bool should_pause = static_cast<uint64_t>(_queuesize) > _high_threshold ||
+                              (pool_ && pool_->paused());
+    if (should_pause && _state_recv != PAUSED) {
         _state_recv = PAUSED;
         sendPause(1000);
     }
+    if (!should_pause && static_cast<uint64_t>(_queuesize) < _low_threshold &&
+        _state_recv == PAUSED) {
+        _state_recv = READY;
+        sendPause(0);
+    }
+}
+
+void
+LosslessInputQueue::receivePacket(Packet& pkt)
+{
+    if (pool_ && !pool_->reserve(pkt.size())) {
+        throw std::logic_error("shared-buffer capacity exceeded");
+    }
+
+    /* normal packet, enqueue it */
+    _queuesize += pkt.size();
+
+    assert(_queuesize > 0);
+    refreshPauseState();
 
     //if (_state_recv==PAUSED)
     //cout << timeAsMs(eventlist().now()) << " queue " << _name << " switch (" << _switch->_name << ") "<< " recv when paused pkt " << pkt.type() << " sz " << _queuesize << endl;        
@@ -95,12 +126,12 @@ LosslessInputQueue::receivePacket(Packet& pkt)
 void LosslessInputQueue::completedService(Packet& pkt){
     _queuesize -= pkt.size();
 
-    //unblock if that is the case
-    assert(_queuesize >= 0);
-    if ((uint64_t)_queuesize < _low_threshold && _state_recv == PAUSED) {
-        _state_recv = READY;
-        sendPause(0);
+    if (pool_) {
+        pool_->release(pkt.size());
     }
+
+    assert(_queuesize >= 0);
+    refreshPauseState();
 }
 
 void LosslessInputQueue::sendPause(unsigned int wait){

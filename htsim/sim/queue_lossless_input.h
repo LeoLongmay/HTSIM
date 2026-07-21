@@ -16,6 +16,7 @@
 #include "callback_pipe.h"
 
 class Switch;
+class SharedBufferPool;
 
 class LosslessInputQueue : public Queue, public VirtualQueue {
 public:
@@ -24,6 +25,9 @@ public:
     LosslessInputQueue(EventList &eventlist,BaseQueue* peer);
 
     virtual void receivePacket(Packet& pkt);
+
+    static void configurePfc(mem_b high, mem_b low);
+    void setSharedBuffer(SharedBufferPool& pool);
 
     void sendPause(unsigned int wait);
     virtual void completedService(Packet& pkt);
@@ -40,8 +44,11 @@ public:
     static uint64_t _high_threshold;
 
 private:
+    void refreshPauseState();
+
     int _state_recv;
     CallbackPipe* _wire;
+    SharedBufferPool* pool_;
 };
 
 #endif

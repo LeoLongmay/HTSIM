@@ -192,6 +192,12 @@ if ( ENABLE_TESTS )
     add_test(NAME shared_buffer_pool COMMAND test_shared_buffer_pool)
     set_tests_properties(shared_buffer_pool PROPERTIES LABELS "lossless;unit" TIMEOUT 60)
 
+    add_executable(test_lossless_pfc
+        datacenter/add_motivation/common/tests/test_lossless_pfc.cpp)
+    target_link_libraries(test_lossless_pfc PRIVATE htsim)
+    add_test(NAME lossless_pfc COMMAND test_lossless_pfc)
+    set_tests_properties(lossless_pfc PROPERTIES LABELS "lossless;unit" TIMEOUT 60)
+
     add_executable(test_laps_cc_decision
         datacenter/add_motivation/common/tests/test_laps_cc_decision.cpp)
     target_link_libraries(test_laps_cc_decision PRIVATE htsim)
