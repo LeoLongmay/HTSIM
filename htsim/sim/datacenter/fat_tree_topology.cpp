@@ -96,6 +96,7 @@ FatTreeTopologyCfg::FatTreeTopologyCfg(queue_type q, queue_type snd):
                         _radix_up{0,0},
                         _queue_down{0,0,0},
                         _queue_up{0,0},
+                        _shared_buffer_size(0),
                         _hosts_per_pod(0),
                         _enable_ecn(false),
                         _enable_ecn_on_tor_downlink(false),
@@ -888,6 +889,22 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
         simtime_picosec switch_latency = (_cfg->_switch_latencies[CORE_TIER] > 0) ? _cfg->_switch_latencies[CORE_TIER] : _cfg->_switch_latency;
         switches_c[j] = new FatTreeSwitch(*_eventlist, "Switch_Core_"+ntoa(j), FatTreeSwitch::CORE,j,switch_latency,this);
     }
+
+    if (_cfg->_qt == LOSSLESS_INPUT) {
+        const mem_b shared_buffer_size = _cfg->_shared_buffer_size;
+        for (uint32_t j = 0; j < _cfg->NTOR; ++j) {
+            shared_buffer_pools_lp.push_back(make_unique<SharedBufferPool>(
+                shared_buffer_size, shared_buffer_size, shared_buffer_size - 1));
+        }
+        for (uint32_t j = 0; j < _cfg->NAGG; ++j) {
+            shared_buffer_pools_up.push_back(make_unique<SharedBufferPool>(
+                shared_buffer_size, shared_buffer_size, shared_buffer_size - 1));
+        }
+        for (uint32_t j = 0; j < _cfg->NCORE; ++j) {
+            shared_buffer_pools_c.push_back(make_unique<SharedBufferPool>(
+                shared_buffer_size, shared_buffer_size, shared_buffer_size - 1));
+        }
+    }
       
     // links from lower layer pod switch to server
     for (uint32_t tor = 0; tor < _cfg->NTOR; tor++) {
@@ -904,6 +921,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
             
                 queues_nlp_ns[tor][srv][b] = alloc_queue(queueLogger, _cfg->_queue_down[TOR_TIER], DOWNLINK, TOR_TIER, true);
                 queues_nlp_ns[tor][srv][b]->setName("LS" + ntoa(tor) + "->DST" +ntoa(srv) + "(" + ntoa(b) + ")");
+                if (_cfg->_qt == LOSSLESS_INPUT)
+                    static_cast<LosslessOutputQueue*>(queues_nlp_ns[tor][srv][b])->setSharedBuffer(*shared_buffer_pools_lp[tor]);
                 //if (logfile) logfile->writeName(*(queues_nlp_ns[tor][srv]));
                 simtime_picosec hop_latency = (_cfg->_hop_latency == 0) ? _cfg->_link_latencies[TOR_TIER] : _cfg->_hop_latency;
                 pipes_nlp_ns[tor][srv][b] = new Pipe(hop_latency, *_eventlist);
@@ -973,6 +992,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                     queues_nup_nlp[agg][tor][b] = alloc_queue((QueueLogger*)queueLogger, (const mem_b)_cfg->_queue_down[AGG_TIER], DOWNLINK, AGG_TIER);
 
                 queues_nup_nlp[agg][tor][b]->setName("US" + ntoa(agg) + "->LS_" + ntoa(tor) + "(" + ntoa(b) + ")");
+                if (_cfg->_qt == LOSSLESS_INPUT)
+                    static_cast<LosslessOutputQueue*>(queues_nup_nlp[agg][tor][b])->setSharedBuffer(*shared_buffer_pools_up[agg]);
                 //if (logfile) logfile->writeName(*(queues_nup_nlp[agg][tor]));
             
                 simtime_picosec hop_latency = (_cfg->_hop_latency == 0) ? _cfg->_link_latencies[AGG_TIER] : _cfg->_hop_latency;
@@ -995,6 +1016,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                     queues_nlp_nup[tor][agg][b] = alloc_queue(queueLogger, _cfg->_queue_up[TOR_TIER], UPLINK, TOR_TIER, true);
 
                 queues_nlp_nup[tor][agg][b]->setName("LS" + ntoa(tor) + "->US" + ntoa(agg) + "(" + ntoa(b) + ")");
+                if (_cfg->_qt == LOSSLESS_INPUT)
+                    static_cast<LosslessOutputQueue*>(queues_nlp_nup[tor][agg][b])->setSharedBuffer(*shared_buffer_pools_lp[tor]);
                 //cout << queues_nlp_nup[tor][agg][b]->str() << endl;
                 //if (logfile) logfile->writeName(*(queues_nlp_nup[tor][agg]));
 
@@ -1049,6 +1072,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                     assert(queues_nup_nc[agg][core][b] == NULL);
                     queues_nup_nc[agg][core][b] = alloc_queue(queueLogger, _cfg->_queue_up[AGG_TIER], UPLINK, AGG_TIER);
                     queues_nup_nc[agg][core][b]->setName("US" + ntoa(agg) + "->CS" + ntoa(core) + "(" + ntoa(b) + ")");
+                    if (_cfg->_qt == LOSSLESS_INPUT)
+                        static_cast<LosslessOutputQueue*>(queues_nup_nc[agg][core][b])->setSharedBuffer(*shared_buffer_pools_up[agg]);
                     //cout << queues_nup_nc[agg][core][b]->str() << endl;
                     //if (logfile) logfile->writeName(*(queues_nup_nc[agg][core]));
         
@@ -1072,6 +1097,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                     }
         
                     queues_nc_nup[core][agg][b]->setName("CS" + ntoa(core) + "->US" + ntoa(agg) + "(" + ntoa(b) + ")");
+                    if (_cfg->_qt == LOSSLESS_INPUT)
+                        static_cast<LosslessOutputQueue*>(queues_nc_nup[core][agg][b])->setSharedBuffer(*shared_buffer_pools_c[core]);
 
                     assert(switches_up[agg]->addPort(queues_nup_nc[agg][core][b]) < 64);
                     assert(switches_c[core]->addPort(queues_nc_nup[core][agg][b]) < 64);

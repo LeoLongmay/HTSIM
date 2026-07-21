@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-// Test-only, opt-in audit trail for strict LAPS source routing.  It observes
+// Test-only, opt-in audit trail for LAPS source routing.  It observes
 // the Route selected at the transport boundary; it never affects forwarding.
 class LapsRouteAudit {
 public:

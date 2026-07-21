@@ -12,6 +12,7 @@
 #include "logfile.h"
 #include "eventlist.h"
 #include "switch.h"
+#include "shared_buffer_pool.h"
 #include <ostream>
 #include <memory>
 #include <optional>
@@ -95,6 +96,9 @@ public:
 
     void set_linkspeeds(linkspeed_bps linkspeed);
     void set_queue_sizes(mem_b queuesize);
+    void set_shared_buffer_size(mem_b shared_buffer_size) {
+        _shared_buffer_size = shared_buffer_size;
+    }
     linkspeed_bps degraded_link_normal_rate() const;
     uint32_t max_degraded_links() const;
     void validate_degraded_link_scaling() const;
@@ -218,6 +222,7 @@ private:
     // switch queue size used.  Eg _queue_down[0] = 32 indicates 32 downlinks from ToRs.  _queue_up[2] should be zero in a 3-tier topology.  
     mem_b _queue_down[3];
     mem_b _queue_up[2];
+    mem_b _shared_buffer_size;
 
     // number of hosts in a pod.  
     uint32_t _hosts_per_pod; 
@@ -252,6 +257,9 @@ public:
     vector <Switch*> switches_lp;
     vector <Switch*> switches_up;
     vector <Switch*> switches_c;
+    vector<unique_ptr<SharedBufferPool>> shared_buffer_pools_lp;
+    vector<unique_ptr<SharedBufferPool>> shared_buffer_pools_up;
+    vector<unique_ptr<SharedBufferPool>> shared_buffer_pools_c;
 
     // 3rd index is link number in bundle
     vector< vector< vector<Pipe*> > > pipes_nc_nup;

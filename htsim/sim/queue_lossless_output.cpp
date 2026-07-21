@@ -2,10 +2,12 @@
 #include <math.h>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include "switch.h"
 #include "hpccpacket.h"
 #include "queue_lossless_output.h"
 #include "queue_lossless_input.h"
+#include "shared_buffer_pool.h"
 
 int LosslessOutputQueue::_ecn_enabled = false;
 int LosslessOutputQueue::_K = 0;
@@ -13,7 +15,8 @@ int LosslessOutputQueue::_K = 0;
 LosslessOutputQueue::LosslessOutputQueue(linkspeed_bps bitrate, mem_b maxsize, 
                                          EventList& eventlist, QueueLogger* logger)
     : Queue(bitrate,maxsize,eventlist,logger), 
-      _state_send(READY)
+      _state_send(READY),
+      pool_(NULL)
 {
     //assume worst case: PAUSE frame waits for one MSS packet to be sent to other switch, and there is 
     //an MSS just beginning to be sent when PAUSE frame arrives; this means 2 packets per incoming
@@ -28,6 +31,9 @@ LosslessOutputQueue::LosslessOutputQueue(linkspeed_bps bitrate, mem_b maxsize,
     _nodename = ss.str();
 }
 
+void LosslessOutputQueue::setSharedBuffer(SharedBufferPool& pool) {
+    pool_ = &pool;
+}
 
 void
 LosslessOutputQueue::receivePacket(Packet& pkt){
@@ -81,13 +87,21 @@ LosslessOutputQueue::receivePacket(Packet& pkt,VirtualQueue* prev)
 
     bool queueWasEmpty = _enqueued.empty();
 
+    const mem_b old_overflow = _queuesize > _maxsize ? _queuesize - _maxsize : 0;
+    const mem_b new_queuesize = _queuesize + pkt.size();
+    const mem_b new_overflow = new_queuesize > _maxsize ? new_queuesize - _maxsize : 0;
+    const mem_b overflow_delta = new_overflow - old_overflow;
+    if (pool_ && overflow_delta > 0 && !pool_->reserve(overflow_delta)) {
+        throw std::logic_error("shared-buffer capacity exceeded");
+    }
+
     _vq.push_front(prev);
     Packet* pkt_p = &pkt;
     _enqueued.push(pkt_p);
 
-    _queuesize += pkt.size();
+    _queuesize = new_queuesize;
 
-    if (_queuesize > _maxsize){
+    if (_queuesize > _maxsize && !pool_){
         cout << " Queue " << _name << " LOSSLESS not working! I should have dropped this packet" << _queuesize / Packet::data_packet_size() << endl;
     }
 
@@ -141,7 +155,13 @@ void LosslessOutputQueue::completeService(){
         h->_int_hop++;
     }   
 
+    const mem_b old_overflow = _queuesize > _maxsize ? _queuesize - _maxsize : 0;
     _queuesize -= pkt->size();
+    const mem_b new_overflow = _queuesize > _maxsize ? _queuesize - _maxsize : 0;
+    const mem_b overflow_delta = old_overflow - new_overflow;
+    if (pool_ && overflow_delta > 0) {
+        pool_->release(overflow_delta);
+    }
     _txbytes += pkt->size();
 
     pkt->flow().logTraffic(*pkt, *this, TrafficLogger::PKT_DEPART);
