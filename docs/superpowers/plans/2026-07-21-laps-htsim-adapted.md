@@ -234,7 +234,7 @@
 
   ```bash
   mkdir -p prism_eval/expL_laps_lossless/data/laps_diagnosis
-  PATHS=8 END_MS=80 EXTRA_ARGS='-queue_type lossless_input -queue_size_bytes 150000 -pfc_high_bytes 122880 -pfc_low_bytes 92160 -shared_buffer_bytes 33554432 -laps_recovery_diagnostics' \
+  PATHS=8 END_MS=80 EXTRA_ARGS='-queue_type lossless_input -queue_size_bytes 150000 -pfc_high_bytes 122880 -pfc_low_bytes 92160 -shared_buffer_bytes 33554432' \
     bash prism_eval/common/run_lib.sh laps laps 8 fat_tree_128_1os.topo 13 \
       prism_eval/expL_laps_lossless/data/m2m.cm flow laps_localized_f8_s13 \
       prism_eval/expL_laps_lossless/data/laps_diagnosis
@@ -257,11 +257,13 @@
   PY
   ! rg -n 'LOSSLESS not working|shared-buffer capacity exceeded' \
     prism_eval/expL_laps_lossless/data/laps_diagnosis/laps_localized_f8_s13.stdout
-  rg -n 'LAPS_RECOVERY_SUMMARY' \
+  rg -n '^New: .* Rtx: .* NACKs:' \
     prism_eval/expL_laps_lossless/data/laps_diagnosis/laps_localized_f8_s13.stdout
+  ! rg -n 'lapsRecovery\\(|lapsRecover\\(|_laps_rtx_routes|LAPS_RECOVERY_SUMMARY' \
+    ../../uec.cpp ../../uec.h
   ```
 
-  Expected: 64/64 completion, no lossless/shared-buffer diagnostics, and no strict timeout-recovery storm.  Record the observed timeout/retransmission counters alongside the old 56,045 strict timeout records; do not select a performance target.
+  Expected: 64/64 completion, no lossless/shared-buffer diagnostics, a generic UEC `Rtx`/`NACKs` summary, and no source-level strict-recovery implementation.  The old strict 56,045 count measured PIT timeout *records*, whereas `Rtx` counts packets, so record both as non-comparable evidence rather than an improvement ratio; do not select a performance target.
 
 - [ ] **Step 4: Commit only source/documentation changes if needed**
 
