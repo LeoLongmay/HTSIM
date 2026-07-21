@@ -50,17 +50,20 @@ Existing queue types retain their current behavior.
 
 The experiment uses the existing `LOSSLESS_INPUT` topology mode: ingress
 virtual queues account for traffic arriving at a switch, while lossless output
-queues hold and transmit packets.  Each switch owns one shared-buffer object.
-All data egress queues belonging to that switch reserve bytes from this object
-when they enqueue a packet and return exactly those bytes when the packet
-leaves service.
+queues hold and transmit packets. Each data egress queue first consumes its
+150KB dedicated allocation. Only the portion of its occupancy above 150KB is
+reserved from the 32MiB shared pool of its owning switch; the reservation is
+returned exactly as that overflow drains. Thus the 150KB value is a dedicated
+per-interface allocation, while the 32MiB pool absorbs simultaneous PFC
+in-flight overshoot from multiple ingress links instead of emitting a false
+"LOSSLESS not working" capacity warning.
 
 An ingress virtual queue sends PAUSE when its accounted occupancy exceeds
-120 KiB and sends resume when the occupancy falls below 90 KiB.  A shared pool
-at capacity keeps affected ingress traffic paused; it must not silently accept
-more bytes or convert the packet to a DropTail loss.  A shared-buffer accounting
-overflow is a simulator error.  The model leaves existing control-packet
-priority handling intact.
+120 KiB and sends resume when the occupancy falls below 90 KiB. The existing
+per-ingress PFC state machine remains the only sender-control mechanism in
+this change. A shared pool at capacity is a simulator error; it must not
+silently accept more bytes or convert the packet to a DropTail loss. The model
+leaves existing control-packet priority handling intact.
 
 ### Experiment driver and figures
 
@@ -84,8 +87,9 @@ Before a full matrix run, automated tests must establish all of the following:
    and rejects invalid watermarks.
 2. A lossless queue crossing 120 KiB produces PAUSE; draining below 90 KiB
    produces resume; no data packet is dropped by the queue.
-3. Shared-buffer reservations and releases are byte-conserving and capacity is
-   never exceeded.
+3. A lossless output queue reserves only its occupancy above its 150KB
+   dedicated allocation, returns that exact overflow on drain, and never
+   exceeds its switch's shared-pool capacity.
 4. A short lossless smoke workload completes for OPS, REPS, LAPS, and Prism.
 5. The default preview dry run emits exactly 140 commands with the same
    lossless flags and no `-disable_trim` flag; `--all-baselines` emits 280.
