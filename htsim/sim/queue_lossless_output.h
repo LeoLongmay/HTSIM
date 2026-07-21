@@ -14,10 +14,13 @@
 #include "eth_pause_packet.h"
 #include "ecn.h"
 
+class SharedBufferPool;
+
 class LosslessOutputQueue : public Queue {
 public:
     LosslessOutputQueue(linkspeed_bps bitrate, mem_b maxsize, EventList &eventlist, QueueLogger* logger);
 
+    void setSharedBuffer(SharedBufferPool& pool);
     void receivePacket(Packet& pkt);
     void receivePacket(Packet& pkt,VirtualQueue* q);
 
@@ -34,6 +37,7 @@ private:
     int _state_send;
     int _sending;
     uint64_t _txbytes;
+    SharedBufferPool* pool_;
 
 public:
     static int _ecn_enabled;

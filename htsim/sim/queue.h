@@ -50,6 +50,11 @@ class BaseQueue  : public EventSource, public PacketSink, public Drawable {
     virtual mem_b queuesize() const = 0;
     virtual mem_b maxsize() const = 0;
     virtual mem_b queuesize_high_watermark() const { return 0; }
+    linkspeed_bps bitrate() const { return _bitrate; }
+    const std::string& queueName() const { return _nodename; }
+    inline simtime_picosec backlogDrainTime() const {
+            return (simtime_picosec)(queuesize() * _ps_per_byte);
+    }
     
     inline simtime_picosec drainTime(Packet *pkt) { 
             return (simtime_picosec)(pkt->size() * _ps_per_byte); 

@@ -375,3 +375,27 @@ far fewer, better-targeted floor-driven cuts underlie both its higher goodput an
 ```
 bash prism_eval/expA_delaydriven/repro.sh   # from sim/datacenter; ~210 failed-sweep + 5 mechanism + 150 offered-load sims
 ```
+
+### Strict LAPS overlay
+
+The LAPS series uses the official LAPS control/recovery semantics port in this
+HTSIM ExpA workload; it is not a reproduction of the LAPS paper's topology or
+workload. From `htsim/sim`, build and validate the transport first, then
+replace only the old LAPS artifacts and render the opt-in overlay figures:
+
+```
+cmake -S . -B build-laps -DENABLE_TESTS=ON
+cmake --build build-laps -j2
+ctest --test-dir build-laps -L laps --output-on-failure
+bash datacenter/prism_eval/expA_delaydriven/tests/test_repro_laps.sh
+python3 datacenter/prism_eval/expA_delaydriven/tests/test_make_figs_laps.py
+bash datacenter/prism_eval/expA_delaydriven/repro_laps.sh --replace-laps
+python3 datacenter/prism_eval/expA_delaydriven/make_figs.py --with-laps
+```
+
+`--replace-laps` is deliberately required before any existing LAPS sweep data
+or `*_laps` overlay figures can be removed. It enumerates the fixed 35-cell
+LAPS matrix and deletes only those LAPS files; the seven baseline data files
+and the three original figures remain untouched. Use
+`repro_laps.sh --replace-laps --dry-run` to inspect the exact targets and run
+matrix without deleting or simulating anything.

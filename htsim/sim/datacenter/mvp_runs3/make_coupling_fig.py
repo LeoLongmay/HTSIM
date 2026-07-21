@@ -13,7 +13,7 @@ the LB produces. Reads mvp_runs3/cp{A,B}_tqd{Q}.s{S}.{sink.txt,q.txt,idmap}. Run
   python3 make_coupling_fig.py            # render figI
   python3 make_coupling_fig.py --selftest # run parser self-checks
 """
-import os, sys, collections, statistics as st
+import argparse, collections, os, re, statistics as st, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 TQD = [2, 4, 6, 8, 12, 16]
 SEEDS = [13, 14, 15, 16, 17]
@@ -21,6 +21,14 @@ WIN_S = (0.5e-3, 1.5e-3)      # steady window, seconds (sink timestamps)
 WIN_US = (500.0, 1500.0)      # steady window, microseconds (queue timestamps)
 BYTES_TO_US = 8e-5            # 1 byte @100Gbps queueing delay
 DEFAULT_TQD = 6              # the "independently chosen" default
+INPUT_SUFFIX = ""
+OUTPUT_SUFFIX = ""
+
+def run_tag(prefix, q, seed):
+    return f"{prefix}{INPUT_SUFFIX}_tqd{q}.s{seed}"
+
+def output_stem(stem):
+    return f"{stem}{OUTPUT_SUFFIX}"
 
 def goodput_gbps(tag):
     """Steady-window aggregate goodput (Gbps) = sum of UEC_SINK Rate (bits/s)."""
@@ -64,7 +72,7 @@ def across_seeds(fn, prefix):
     """(means, stds) over seeds for each target_q_delay; tags = {prefix}_tqd{Q}.s{S}."""
     means, stds = [], []
     for q in TQD:
-        vals = [fn(f"{prefix}_tqd{q}.s{s}") for s in SEEDS]
+        vals = [fn(run_tag(prefix, q, s)) for s in SEEDS]
         means.append(st.mean(vals))
         stds.append(st.stdev(vals) if len(vals) > 1 else 0.0)
     return means, stds
@@ -173,7 +181,7 @@ def render_dualaxis():
         axl.annotate("Best", xy=(qB_best + 0.7, min(lm) + 1), xytext=(1, 14), textcoords="offset points",
                      color=PURPLE, ha="left", fontsize=10) # va="bottom"
         # color-coded axes; "(^better)" makes the inverted latency axis self-explanatory
-        axg.set_xlabel("NSCC target_q_delay (us)")
+        axg.set_xlabel("Target queueing delay (us)")
         axg.set_ylabel("Goodput (Gbps)")
         axg.yaxis.set_label_coords(-0.08, 0.45)
         axl.set_ylabel("Latency (us)")
@@ -185,9 +193,9 @@ def render_dualaxis():
                    Line2D([0], [0], color=PURPLE, marker="s", lw=2.0, label="Latency")]
         axg.legend(handles=handles, loc="center right", bbox_to_anchor=(1.0, 0.42), fontsize=10, framealpha=0.9, handlelength=1.6)
         plt.tight_layout()
-        fig.savefig(os.path.join(HERE, "figI2_cc_lb_tuning_coupled.png"), dpi=160,
+        fig.savefig(os.path.join(HERE, output_stem("figI2_cc_lb_tuning_coupled") + ".png"), dpi=160,
                     bbox_inches="tight", pad_inches=0.04)
-        fig.savefig(os.path.join(HERE, "figI2_cc_lb_tuning_coupled.pdf"),
+        fig.savefig(os.path.join(HERE, output_stem("figI2_cc_lb_tuning_coupled") + ".pdf"),
                     bbox_inches="tight", pad_inches=0.04)
         plt.close(fig)
     print("figI2: dual-axis | goodput-best tqd", qA_best, "| latency-best tqd", qB_best)
@@ -217,8 +225,23 @@ def _selftest():
     print("ok goodput_gbps + mean_latency_us")
 
 if __name__ == "__main__":
-    if "--selftest" in sys.argv:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--input-suffix", default="",
+                        help="Suffix appended to cpA/cpB raw-data tags, e.g. _s")
+    parser.add_argument("--output-suffix", default="",
+                        help="Suffix appended to rendered figure names, e.g. _s")
+    parser.add_argument("--only-dualaxis", action="store_true",
+                        help="Render figI2 only; does not require figI decomposition traces")
+    args = parser.parse_args()
+    if args.selftest:
         _selftest()
     else:
-        render()
+        for suffix in (args.input_suffix, args.output_suffix):
+            if suffix and not re.fullmatch(r"_[A-Za-z0-9_]+", suffix):
+                parser.error("suffixes must be empty or begin with '_' and contain only letters, digits, and '_'")
+        INPUT_SUFFIX = args.input_suffix
+        OUTPUT_SUFFIX = args.output_suffix
+        if not args.only_dualaxis:
+            render()
         render_dualaxis()

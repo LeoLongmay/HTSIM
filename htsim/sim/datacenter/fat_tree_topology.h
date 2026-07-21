@@ -12,9 +12,11 @@
 #include "logfile.h"
 #include "eventlist.h"
 #include "switch.h"
+#include "shared_buffer_pool.h"
 #include <ostream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 
 //#define N K*K*K/4
 
@@ -66,8 +68,14 @@ public:
         _ecn_high = ecn_high;
     }
 
-    void set_failed_links(int num_failed_links) {
+    void set_failed_links(uint32_t num_failed_links) {
         _num_failed_links = num_failed_links;
+    }
+
+    void set_degraded_link_ratio(double ratio) {
+        if (!(ratio > 0.0 && ratio <= 1.0))
+            throw std::invalid_argument("degraded link ratio must be in (0,1]");
+        _failed_link_ratio = ratio;
     }
 
     void set_tiers(uint32_t tiers) { if(tiers!=0) _tiers = tiers;}
@@ -88,6 +96,12 @@ public:
 
     void set_linkspeeds(linkspeed_bps linkspeed);
     void set_queue_sizes(mem_b queuesize);
+    void set_shared_buffer_size(mem_b shared_buffer_size) {
+        _shared_buffer_size = shared_buffer_size;
+    }
+    linkspeed_bps degraded_link_normal_rate() const;
+    uint32_t max_degraded_links() const;
+    void validate_degraded_link_scaling() const;
 
     void set_params(uint32_t no_of_nodes);
     void set_custom_params(uint32_t no_of_nodes);
@@ -208,6 +222,7 @@ private:
     // switch queue size used.  Eg _queue_down[0] = 32 indicates 32 downlinks from ToRs.  _queue_up[2] should be zero in a 3-tier topology.  
     mem_b _queue_down[3];
     mem_b _queue_up[2];
+    mem_b _shared_buffer_size;
 
     // number of hosts in a pod.  
     uint32_t _hosts_per_pod; 
@@ -242,6 +257,9 @@ public:
     vector <Switch*> switches_lp;
     vector <Switch*> switches_up;
     vector <Switch*> switches_c;
+    vector<unique_ptr<SharedBufferPool>> shared_buffer_pools_lp;
+    vector<unique_ptr<SharedBufferPool>> shared_buffer_pools_up;
+    vector<unique_ptr<SharedBufferPool>> shared_buffer_pools_c;
 
     // 3rd index is link number in bundle
     vector< vector< vector<Pipe*> > > pipes_nc_nup;
@@ -263,6 +281,17 @@ public:
     FirstFit* _ff;
 
     virtual vector<const Route*>* get_bidir_paths(uint32_t src, uint32_t dest, bool reverse);
+
+    // Resolve one sender entropy through the live ECMP FIB without mutating it.
+    // Returns false until all FIB entries on that entropy path have been populated.
+    bool resolve_ecmp_path(uint32_t src, uint32_t dest, uint32_t flow_id,
+                           uint32_t entropy, vector<const BaseQueue*>& queues);
+
+    // Strict-LAPS resolver. Materializes any missing FIB route vectors through
+    // the same switch helper used by packet forwarding before applying ECMP.
+    bool resolve_or_materialize_ecmp_path(uint32_t src, uint32_t dest,
+                                          uint32_t flow_id, uint32_t entropy,
+                                          vector<const BaseQueue*>& queues);
 
     BaseQueue* alloc_src_queue(QueueLogger* q);
     BaseQueue* alloc_queue(QueueLogger* q, const mem_b queuesize, link_direction dir, int switch_tier, bool tor=false);

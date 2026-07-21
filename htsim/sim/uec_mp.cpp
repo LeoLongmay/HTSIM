@@ -2,8 +2,10 @@
 #include "uec_mp.h"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -16,6 +18,242 @@ void tokenize(const std::string& str, char delim, std::vector<std::string>& out)
     }
 }
 }  // namespace
+
+UecMpLaps::UecMpLaps(uint16_t no_of_paths, bool debug, double beta)
+    : UecMultipath(debug),
+      _no_of_paths(no_of_paths),
+      _path_random(0),
+      _bootstrap_path(0),
+      _next_stale_probe(0),
+      _beta(beta),
+      _paths(no_of_paths) {
+    if (no_of_paths == 0 || (no_of_paths & (no_of_paths - 1)) != 0) {
+        throw std::invalid_argument("LAPS requires a non-zero power-of-two path count");
+    }
+    if (beta < 0.0) {
+        throw std::invalid_argument("LAPS beta must be non-negative");
+    }
+
+    _path_random = rand() % UINT16_MAX;
+    if (_debug) {
+        cout << "Multipath"
+             << " LAPS"
+             << " _no_of_paths " << _no_of_paths
+             << " _beta " << _beta
+             << endl;
+    }
+}
+
+double UecMpLaps::softmaxDelayInPaperUnits(simtime_picosec delay) {
+    // LAPS INT timestamps and measured path latency are represented in
+    // microseconds in the paper; HTSIM stores time internally in picoseconds.
+    return static_cast<double>(delay) / static_cast<double>(timeFromUs(uint32_t{1}));
+}
+
+void UecMpLaps::processEv(uint32_t path_id, PathFeedback feedback) {
+    return;
+}
+
+uint32_t UecMpLaps::pathIndex(uint32_t entropy) const {
+    return entropy & (_no_of_paths - 1);
+}
+
+uint32_t UecMpLaps::entropyForPath(uint32_t path_id) const {
+    const uint16_t mask = _no_of_paths - 1;
+    const uint16_t entropy = path_id & mask;
+    return entropy | (_path_random ^ (_path_random & mask));
+}
+
+optional<simtime_picosec> UecMpLaps::deadline(const LapsPathState& state) const {
+    if (!state.valid || state.probe_pending) {
+        return {};
+    }
+    // A zero delay is not a valid on-wire LAPS sample.  Treat it as immediately
+    // due so a probe repairs the state rather than leaving it selectable.
+    if (state.real_val == 0) return state.updated_at;
+    const simtime_picosec doubled =
+        state.real_val > std::numeric_limits<simtime_picosec>::max() / 2
+            ? std::numeric_limits<simtime_picosec>::max()
+            : 2 * state.real_val;
+    const simtime_picosec after_delay =
+        doubled > std::numeric_limits<simtime_picosec>::max() - state.updated_at
+            ? std::numeric_limits<simtime_picosec>::max()
+            : state.updated_at + doubled;
+    // A PID expires only after, rather than at, two real-delay intervals.
+    return after_delay == std::numeric_limits<simtime_picosec>::max()
+               ? after_delay
+               : after_delay + 1;
+}
+
+bool UecMpLaps::isProbeDue(const LapsPathState& state, simtime_picosec now) const {
+    const auto due = deadline(state);
+    return due.has_value() && now >= *due;
+}
+
+void UecMpLaps::observe(uint32_t path_id, simtime_picosec delay, simtime_picosec now) {
+    LapsPathState& state = _paths[pathIndex(path_id)];
+    if (!state.valid) return;
+    state.real_val = delay;
+    state.updated_at = now;
+    state.probe_pending = false;
+}
+
+void UecMpLaps::configurePaths(vector<simtime_picosec> base_vals) {
+    if (base_vals.size() != _no_of_paths) {
+        throw std::invalid_argument("LAPS catalog does not match the configured path count");
+    }
+    for (uint16_t pid = 0; pid != _no_of_paths; ++pid) {
+        if (base_vals[pid] == 0) {
+            throw std::invalid_argument("LAPS catalog base delay must be non-zero");
+        }
+        _paths[pid] = {true, false, base_vals[pid], base_vals[pid], 0};
+    }
+}
+
+bool UecMpLaps::pathIsSelectable(uint16_t pid) const {
+    return pid < _no_of_paths && _paths[pid].valid && !_paths[pid].probe_pending;
+}
+
+bool UecMpLaps::hasSelectablePath() const {
+    for (uint16_t pid = 0; pid < _no_of_paths; ++pid) {
+        if (pathIsSelectable(pid)) return true;
+    }
+    return false;
+}
+
+void UecMpLaps::observeLapsDelay(uint32_t path_id, simtime_picosec delay,
+                                 simtime_picosec now) {
+    observe(path_id, delay, now);
+}
+
+void UecMpLaps::observeLapsProbe(uint32_t path_id, simtime_picosec delay,
+                                 simtime_picosec now) {
+    observe(path_id, delay, now);
+}
+
+uint32_t UecMpLaps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
+    const auto entropy = nextLapsEntropy();
+    if (!entropy.has_value()) {
+        throw std::logic_error("LAPS data selection requested while every PID is probe-pending");
+    }
+    return *entropy;
+}
+
+optional<uint16_t> UecMpLaps::nextLapsPid() {
+    double common_exponent = -std::numeric_limits<double>::infinity();
+    bool has_selectable_path = false;
+    for (const LapsPathState& state : _paths) {
+        if (!state.valid || state.probe_pending) continue;
+        has_selectable_path = true;
+        common_exponent = std::max(common_exponent,
+                                   -_beta * softmaxDelayInPaperUnits(state.real_val));
+    }
+    if (!has_selectable_path) {
+        return {};
+    }
+
+    vector<double> weights(_no_of_paths, 0.0);
+    double total_weight = 0.0;
+    for (uint32_t path_id = 0; path_id != _no_of_paths; ++path_id) {
+        const LapsPathState& state = _paths[path_id];
+        if (!state.valid || state.probe_pending) continue;
+        weights[path_id] = std::exp(-_beta * softmaxDelayInPaperUnits(state.real_val) -
+                                    common_exponent);
+        total_weight += weights[path_id];
+    }
+
+    const double draw = static_cast<double>(random()) /
+                        (static_cast<double>(RAND_MAX) + 1.0) * total_weight;
+    double cumulative_weight = 0.0;
+    for (uint32_t path_id = 0; path_id != _no_of_paths; ++path_id) {
+        cumulative_weight += weights[path_id];
+        if (draw < cumulative_weight) {
+            return static_cast<uint16_t>(path_id);
+        }
+    }
+    for (uint16_t pid = _no_of_paths; pid != 0; --pid) {
+        if (pathIsSelectable(pid - 1)) return pid - 1;
+    }
+    return {};
+}
+
+optional<uint32_t> UecMpLaps::nextLapsEntropy() {
+    const auto pid = nextLapsPid();
+    return pid.has_value() ? optional<uint32_t>(entropyForPath(*pid)) : optional<uint32_t>{};
+}
+
+optional<uint16_t> UecMpLaps::nextLapsProbePid(simtime_picosec now) {
+    for (uint32_t offset = 0; offset != _no_of_paths; ++offset) {
+        const uint32_t path_id = (_next_stale_probe + offset) & (_no_of_paths - 1);
+        LapsPathState& state = _paths[path_id];
+        if (!isProbeDue(state, now)) {
+            continue;
+        }
+
+        _next_stale_probe = (path_id + 1) & (_no_of_paths - 1);
+        state.updated_at = now;
+        state.real_val = state.real_val > std::numeric_limits<simtime_picosec>::max() / 2
+                             ? std::numeric_limits<simtime_picosec>::max()
+                             : 2 * state.real_val;
+        state.probe_pending = true;
+        return static_cast<uint16_t>(path_id);
+    }
+    return {};
+}
+
+optional<simtime_picosec> UecMpLaps::nextLapsDeadline(simtime_picosec now) const {
+    optional<simtime_picosec> earliest;
+    for (const LapsPathState& state : _paths) {
+        const auto candidate = deadline(state);
+        if (candidate.has_value() && (!earliest.has_value() || *candidate < *earliest)) {
+            earliest = candidate;
+        }
+    }
+    return earliest;
+}
+
+optional<uint32_t> UecMpLaps::nextLapsProbeEntropy(simtime_picosec now) {
+    const auto pid = nextLapsProbePid(now);
+    return pid.has_value() ? optional<uint32_t>(entropyForPath(*pid)) : optional<uint32_t>{};
+}
+
+UecMpLapsSignal UecMpLaps::lapsSignal(simtime_picosec now) const {
+    UecMpLapsSignal signal;
+    simtime_picosec max_base_latency = 0;
+    simtime_picosec min_real_latency = std::numeric_limits<simtime_picosec>::max();
+    for (const LapsPathState& state : _paths) {
+        if (!state.valid || state.probe_pending) {
+            continue;
+        }
+        ++signal.sampled_paths;
+        max_base_latency = std::max(max_base_latency, state.base_val);
+        min_real_latency = std::min(min_real_latency, state.real_val);
+    }
+    signal.target_delay = max_base_latency;
+    signal.min_delay = min_real_latency == std::numeric_limits<simtime_picosec>::max()
+                           ? 0
+                           : min_real_latency;
+    // A PID undergoing active probing is invalid: it has zero spray weight and
+    // is excluded from Algorithm 2 until a probe ACK refreshes its PIT entry.
+    // The remaining valid candidate paths still provide the flow's congestion
+    // signal; freezing rate control until every probe returns is not LAPS.
+    signal.calibrated = signal.sampled_paths != 0;
+    if (!signal.calibrated) {
+        return signal;
+    }
+
+    signal.all_paths_high = true;
+    for (const LapsPathState& state : _paths) {
+        if ((!state.valid || state.probe_pending) || state.real_val <= signal.target_delay) {
+            if (!state.valid || state.probe_pending) {
+                continue;
+            }
+            signal.all_paths_high = false;
+            break;
+        }
+    }
+    return signal;
+}
 
 
 UecMpOblivious::UecMpOblivious(uint16_t no_of_paths,
@@ -164,6 +402,7 @@ UecMpReps::UecMpReps(uint16_t no_of_paths, bool debug, bool is_trimming_enabled)
 }
 
 void UecMpReps::processEv(uint32_t path_id, PathFeedback feedback) {
+    _last_admission = {};
 
     if ((feedback == PATH_TIMEOUT) && !circular_buffer_reps->isFrozenMode() && circular_buffer_reps->explore_counter == 0) {
         if (_is_trimming_enabled) { // If we have trimming enabled
@@ -182,31 +421,151 @@ void UecMpReps::processEv(uint32_t path_id, PathFeedback feedback) {
     }
 
     if ((feedback == PATH_GOOD) && !circular_buffer_reps->isFrozenMode()) {
-        circular_buffer_reps->add(path_id);
+        const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
+        const bool overwrites_circular_slot = circular_buffer_reps->isFull();
+        const auto admission = circular_buffer_reps->add(path_id);
+        _last_admission = {admission.slot, admission.generation, path_id, admission.written};
+        if (_token_observer) {
+            _token_observer({overwrites_circular_slot ? UecMpTokenEvent::OVERWRITE_GOOD_ACK
+                                                      : UecMpTokenEvent::ENQUEUE_GOOD_ACK,
+                             UecMpSelection::NO_TOKEN,
+                             path_id,
+                             fresh_before,
+                             circular_buffer_reps->getNumberFreshEntropies(),
+                             _feedback_event_seq,
+                             admission.slot,
+                             admission.generation,
+                             admission.written});
+        }
     } else if (circular_buffer_reps->isFrozenMode() && (feedback == PATH_GOOD)) {
-        circular_buffer_reps->add(path_id);
+        const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
+        const bool overwrites_circular_slot = circular_buffer_reps->isFull();
+        const auto admission = circular_buffer_reps->add(path_id);
+        _last_admission = {admission.slot, admission.generation, path_id, admission.written};
+        if (_token_observer) {
+            _token_observer({overwrites_circular_slot ? UecMpTokenEvent::OVERWRITE_GOOD_ACK
+                                                      : UecMpTokenEvent::ENQUEUE_GOOD_ACK,
+                             UecMpSelection::NO_TOKEN,
+                             path_id,
+                             fresh_before,
+                             circular_buffer_reps->getNumberFreshEntropies(),
+                             _feedback_event_seq,
+                             admission.slot,
+                             admission.generation,
+                             admission.written});
+        }
     }
 }
 
 uint32_t UecMpReps::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) {
     if (circular_buffer_reps->explore_counter > 0) {
         circular_buffer_reps->explore_counter--;
-        return rand() % _no_of_paths;
+        _crt_path = rand() % _no_of_paths;
+        _last_selection = {_crt_path, UecMpSelection::RANDOM_EMPTY, UecMpSelection::NO_TOKEN};
+        if (_token_observer) {
+            _token_observer({UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                             UecMpSelection::NO_TOKEN,
+                             _crt_path,
+                             circular_buffer_reps->getNumberFreshEntropies(),
+                             circular_buffer_reps->getNumberFreshEntropies()});
+        }
+        return _crt_path;
     }
 
     if (circular_buffer_reps->isFrozenMode()) {
         if (circular_buffer_reps->isEmpty()) {
-            return rand() % _no_of_paths;
+            _crt_path = rand() % _no_of_paths;
+            _last_selection = {_crt_path, UecMpSelection::RANDOM_EMPTY, UecMpSelection::NO_TOKEN};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 0,
+                                 0});
+            }
+            return _crt_path;
         } else {
-            return circular_buffer_reps->remove_frozen();
+            const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
+            const auto selection = circular_buffer_reps->remove_frozen_with_slot();
+            _crt_path = selection.value;
+            _last_selection = {_crt_path, UecMpSelection::RECYCLED, UecMpSelection::NO_TOKEN,
+                               selection.slot, selection.generation};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 fresh_before,
+                                 circular_buffer_reps->getNumberFreshEntropies(),
+                                 UecMpTokenEvent::NO_EVENT,
+                                 selection.slot,
+                                 selection.generation,
+                                 false});
+            }
+            return _crt_path;
         }
     } else {
         if (circular_buffer_reps->isEmpty() || circular_buffer_reps->getNumberFreshEntropies() == 0) {
-            return _crt_path = rand() % _no_of_paths;
+            _crt_path = rand() % _no_of_paths;
+            _last_selection = {_crt_path, UecMpSelection::RANDOM_EMPTY, UecMpSelection::NO_TOKEN};
+            if (_token_observer) {
+                const uint32_t fresh = circular_buffer_reps->getNumberFreshEntropies();
+                _token_observer({UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 fresh,
+                                 fresh});
+            }
+            return _crt_path;
         } else {
-            return circular_buffer_reps->remove_earliest_fresh();
+            const uint32_t fresh_before = circular_buffer_reps->getNumberFreshEntropies();
+            const auto selection = circular_buffer_reps->remove_earliest_fresh_with_slot();
+            _crt_path = selection.value;
+            _last_selection = {_crt_path, UecMpSelection::RECYCLED, UecMpSelection::NO_TOKEN,
+                               selection.slot, selection.generation};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 fresh_before,
+                                 circular_buffer_reps->getNumberFreshEntropies(),
+                                 UecMpTokenEvent::NO_EVENT,
+                                 selection.slot,
+                                 selection.generation,
+                                 false});
+            }
+            return _crt_path;
         }
     }
+}
+
+vector<UecMpCacheSlot> UecMpReps::cacheSlots() const {
+    const auto snapshots = circular_buffer_reps->cacheSlots();
+    vector<UecMpCacheSlot> slots;
+    slots.reserve(snapshots.size());
+    for (const auto& snapshot : snapshots) {
+        slots.push_back({snapshot.slot,
+                         snapshot.generation,
+                         static_cast<uint32_t>(snapshot.value),
+                         snapshot.valid,
+                         snapshot.ack_validated});
+    }
+    return slots;
+}
+
+bool UecMpReps::invalidateCacheSlot(uint16_t slot, uint64_t generation) {
+    return circular_buffer_reps->invalidateCacheSlot(slot, generation);
+}
+
+bool UecMpReps::reserveCacheSlot(uint16_t slot, uint64_t generation) {
+    return circular_buffer_reps->reserveCacheSlot(slot, generation);
+}
+
+void UecMpReps::clearReservedCacheSlots() {
+    circular_buffer_reps->clearReservedCacheSlots();
+}
+
+bool UecMpReps::isFrozen() const {
+    return circular_buffer_reps->isFrozenMode();
 }
 
 
@@ -223,10 +582,31 @@ UecMpRepsLegacy::UecMpRepsLegacy(uint16_t no_of_paths, bool debug)
 }
 
 void UecMpRepsLegacy::processEv(uint32_t path_id, PathFeedback feedback) {
+    if (feedback == PATH_GOOD_HIGH_RESIDUAL) {
+        uint32_t queue_depth = _next_tokens.size();
+        if (_token_observer) {
+            _token_observer({UecMpTokenEvent::REJECT_HIGH_RESIDUAL,
+                             UecMpSelection::NO_TOKEN,
+                             path_id,
+                             queue_depth,
+                             queue_depth,
+                             _feedback_event_seq});
+        }
+        return;
+    }
     if (feedback == PATH_GOOD){
-        _next_pathid.push_back(path_id);
+        uint32_t queue_depth_before = _next_tokens.size();
+        _next_tokens.push_back({path_id, _next_token_id++});
         if (_debug){
-            cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Add " << path_id << " " << _next_pathid.size() << endl;
+            cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Add " << path_id << " " << _next_tokens.size() << endl;
+        }
+        if (_token_observer) {
+            _token_observer({UecMpTokenEvent::ENQUEUE_GOOD_ACK,
+                             _next_tokens.back().id,
+                             path_id,
+                             queue_depth_before,
+                             (uint32_t)_next_tokens.size(),
+                             _feedback_event_seq});
         }
     }
 }
@@ -241,20 +621,50 @@ uint32_t UecMpRepsLegacy::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pk
         if (_debug) 
             cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS FirstWindow " << _crt_path << endl;
 
+        _last_selection = {_crt_path, UecMpSelection::FIRST_WINDOW, UecMpSelection::NO_TOKEN};
+        if (_token_observer) {
+            uint32_t queue_depth = _next_tokens.size();
+            _token_observer({UecMpTokenEvent::SELECT_FIRST_WINDOW,
+                             UecMpSelection::NO_TOKEN,
+                             _crt_path,
+                             queue_depth,
+                             queue_depth});
+        }
+
     } else {
-        if (_next_pathid.empty()) {
+        if (_next_tokens.empty()) {
             assert(_no_of_paths > 0);
 		    _crt_path = random() % _no_of_paths;
 
             if (_debug) 
                 cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Steady " << _crt_path << endl;
 
+            _last_selection = {_crt_path, UecMpSelection::RANDOM_EMPTY, UecMpSelection::NO_TOKEN};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::SELECT_RANDOM_EMPTY,
+                                 UecMpSelection::NO_TOKEN,
+                                 _crt_path,
+                                 0,
+                                 0});
+            }
+
         } else {
-            _crt_path = _next_pathid.front();
-            _next_pathid.pop_front();
+            uint32_t queue_depth_before = _next_tokens.size();
+            Token token = _next_tokens.front();
+            _crt_path = token.entropy;
+            _next_tokens.pop_front();
 
             if (_debug) 
-                cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Recycle " << _crt_path << " " << _next_pathid.size() << endl;
+                cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " REPS Recycle " << _crt_path << " " << _next_tokens.size() << endl;
+
+            _last_selection = {_crt_path, UecMpSelection::RECYCLED, token.id};
+            if (_token_observer) {
+                _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
+                                 token.id,
+                                 _crt_path,
+                                 queue_depth_before,
+                                 (uint32_t)_next_tokens.size()});
+            }
 
         }
     }
@@ -262,14 +672,25 @@ uint32_t UecMpRepsLegacy::nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pk
 }
 
 optional<uint32_t> UecMpRepsLegacy::nextEntropyRecycle() {
-    if (_next_pathid.empty()) {
+    if (_next_tokens.empty()) {
         return {};
     } else {
-        _crt_path = _next_pathid.front();
-        _next_pathid.pop_front();
+        uint32_t queue_depth_before = _next_tokens.size();
+        Token token = _next_tokens.front();
+        _crt_path = token.entropy;
+        _next_tokens.pop_front();
 
         if (_debug) 
-            cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " MIXED Recycle " << _crt_path << " " << _next_pathid.size() << endl;
+            cout << timeAsUs(EventList::getTheEventList().now()) << " " << _debug_tag << " MIXED Recycle " << _crt_path << " " << _next_tokens.size() << endl;
+
+        _last_selection = {_crt_path, UecMpSelection::RECYCLED, token.id};
+        if (_token_observer) {
+            _token_observer({UecMpTokenEvent::DEQUEUE_RECYCLE,
+                             token.id,
+                             _crt_path,
+                             queue_depth_before,
+                             (uint32_t)_next_tokens.size()});
+        }
         return { _crt_path };
     }
 }

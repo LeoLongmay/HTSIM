@@ -58,19 +58,36 @@ LosslessInputQueue::LosslessInputQueue(EventList& eventlist,BaseQueue* peer, Swi
     peer->setRemoteEndpoint(this);
 }
 
+void LosslessInputQueue::configurePfc(mem_b high, mem_b low) {
+    if (low <= 0 || high <= low) {
+        throw std::invalid_argument("invalid PFC thresholds");
+    }
+
+    _high_threshold = high;
+    _low_threshold = low;
+}
+
+void LosslessInputQueue::refreshPauseState() {
+    const bool should_pause = static_cast<uint64_t>(_queuesize) > _high_threshold;
+    if (should_pause && _state_recv != PAUSED) {
+        _state_recv = PAUSED;
+        sendPause(1000);
+    }
+    if (!should_pause && static_cast<uint64_t>(_queuesize) < _low_threshold &&
+        _state_recv == PAUSED) {
+        _state_recv = READY;
+        sendPause(0);
+    }
+}
 
 void
-LosslessInputQueue::receivePacket(Packet& pkt) 
+LosslessInputQueue::receivePacket(Packet& pkt)
 {
     /* normal packet, enqueue it */
     _queuesize += pkt.size();
 
-    //send PAUSE notifications if that is the case!
     assert(_queuesize > 0);
-    if ((uint64_t)_queuesize > _high_threshold && _state_recv!=PAUSED){
-        _state_recv = PAUSED;
-        sendPause(1000);
-    }
+    refreshPauseState();
 
     //if (_state_recv==PAUSED)
     //cout << timeAsMs(eventlist().now()) << " queue " << _name << " switch (" << _switch->_name << ") "<< " recv when paused pkt " << pkt.type() << " sz " << _queuesize << endl;        
@@ -95,12 +112,8 @@ LosslessInputQueue::receivePacket(Packet& pkt)
 void LosslessInputQueue::completedService(Packet& pkt){
     _queuesize -= pkt.size();
 
-    //unblock if that is the case
     assert(_queuesize >= 0);
-    if ((uint64_t)_queuesize < _low_threshold && _state_recv == PAUSED) {
-        _state_recv = READY;
-        sendPause(0);
-    }
+    refreshPauseState();
 }
 
 void LosslessInputQueue::sendPause(unsigned int wait){

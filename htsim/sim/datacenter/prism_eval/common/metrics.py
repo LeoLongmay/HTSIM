@@ -1,6 +1,7 @@
 """Metric parsers for prism_eval. Reads decoded-ASCII htsim logs (produced by
 run_lib.sh): flow events (FCT) and UEC_SINK RATE (goodput). Stdlib only."""
 import collections
+import re
 import statistics
 
 def parse_flow_events(path):
@@ -55,6 +56,33 @@ def fct_stats(flow_path):
         "p99_s": _percentile(fcts, 99),
         "max_s": fcts[-1] if fcts else float("nan"),
     }
+
+def cct_inflation(flow_path, size_bytes, link_gbps=100.0, base_rtt_s=14e-6):
+    """Collective Completion Time and its inflation over a zero-queue lower bound (MSwift,
+    Gerstein et al. 2026). CCT = worst-case FCT across the collective's COMPLETED flows
+    (fct_stats max_s). Zero-queue lower bound LB = base_rtt_s + size_bytes*8/(link_gbps*1e9).
+    Returns (cct_s, inflation_pct) where inflation_pct = (cct_s - LB)/LB*100; (nan, nan) if no
+    flow completed."""
+    cct = fct_stats(flow_path)["max_s"]
+    if cct != cct:                              # nan -> nothing completed
+        return (float("nan"), float("nan"))
+    lb = base_rtt_s + size_bytes * 8.0 / (link_gbps * 1e9)
+    return (cct, (cct - lb) / lb * 100.0)
+
+def collective_makespan(flow_path):
+    """Collective completion time = makespan = max(finish) - min(start) over the COMPLETED flows of a
+    single-job collective (first message out -> last message in), in seconds. For a multi-step
+    collective this -- not the slowest single-flow FCT -- is the collective time. Returns
+    (makespan_s, completion_rate); (nan, cr) if no flow completed. A cr < 1 makespan is a lower bound
+    (the collective did not finish)."""
+    starts, finishes = parse_flow_events(flow_path)
+    done = [k for k in finishes if k in starts]
+    total = len(starts)
+    cr = (len(done) / total) if total else float("nan")
+    if not done:
+        return (float("nan"), cr)
+    makespan = max(finishes[k][0] for k in done) - min(starts[k] for k in done)
+    return (makespan, cr)
 
 def aggregate_goodput_gbps(flow_path):
     """Window-free aggregate goodput (Gbps) for a finite workload: total bytes of COMPLETED
@@ -177,3 +205,58 @@ def goodput_gbps(sink_path, window_s=(0.5e-3, 1.5e-3)):
                 per_t[float(p[0])] += float(p[12])
     tail = [v / 1e9 for t, v in per_t.items() if window_s[0] <= t <= window_s[1]]
     return statistics.mean(tail) if tail else 0.0
+
+def sink_rate_series(sink_path):
+    """Per-connection goodput time-series from a decoded UEC_SINK RATE log.
+    Line: <t> Type UEC_SINK ID <id> Ev RATE CAck <c> ReorderBuffer <r> Rate <bits/s>
+    (Rate at token index 12.) In an incast each sender->dest connection owns its sink
+    object, so the ID distinguishes senders. Returns
+      {sink_id(int): [(t_s(float), rate_gbps(float)), ...]} sorted by t within each id."""
+    series = collections.defaultdict(list)
+    with open(sink_path) as fh:
+        for ln in fh:
+            p = ln.split()
+            if len(p) >= 13 and "UEC_SINK" in p:
+                t = float(p[0])
+                sid = int(p[p.index("ID") + 1])
+                series[sid].append((t, float(p[12]) / 1e9))
+    for sid in series:
+        series[sid].sort(key=lambda r: r[0])
+    return dict(series)
+
+def find_dest_downqueue_id(idmap_path, dest):
+    """Object id of the last-hop ToR->host downlink queue for `dest`, from an idmap.
+    idmap lines are '<id> <name>'; the downlink queue is named 'LS<leaf>->DST<dest>(0)'
+    (e.g. 'LS0->DST0(0)'). Returns the int id, or None if absent."""
+    pat = re.compile(r"^LS\d+->DST%d\(0\)$" % int(dest))
+    with open(idmap_path) as fh:
+        for ln in fh:
+            parts = ln.split(None, 1)
+            if len(parts) != 2:
+                continue
+            oid, name = parts[0], parts[1].strip()
+            if pat.match(name):
+                return int(oid)
+    return None
+
+def tor_downqueue_delay_series(q_path, idmap_path, dest, link_gbps=100.0):
+    """Last-hop switch queuing-delay time-series at `dest`'s ToR downlink. Locates the
+    'LS*->DST<dest>(0)' queue via the idmap, reads its QUEUE_APPROX RANGE samples, and
+    converts MaxQ bytes to delay: us = MaxQ*8/(link_gbps*1e9)*1e6.
+    Line: <t> Type QUEUE_APPROX ID <id> Ev RANGE LastQ <b> MinQ <b> MaxQ <b>.
+    Returns [(t_s, qdelay_us), ...] sorted by t; [] if the queue id is not found."""
+    qid = find_dest_downqueue_id(idmap_path, dest)
+    if qid is None:
+        return []
+    bytes_to_us = 8.0 / (link_gbps * 1e9) * 1e6
+    out = []
+    with open(q_path) as fh:
+        for ln in fh:
+            p = ln.split()
+            if "QUEUE_APPROX" not in p or "RANGE" not in p:
+                continue
+            if int(p[p.index("ID") + 1]) != qid:
+                continue
+            out.append((float(p[0]), int(p[p.index("MaxQ") + 1]) * bytes_to_us))
+    out.sort(key=lambda r: r[0])
+    return out

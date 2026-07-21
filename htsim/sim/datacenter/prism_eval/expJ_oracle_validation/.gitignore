@@ -1,0 +1,7 @@
+__pycache__/
+data/mplconfig/
+data/raw/
+data/m2m.cm
+data/oracle_*.flow.txt
+data/oracle_*.idmap
+data/oracle_*.stdout

@@ -102,6 +102,14 @@ public:
     virtual Route* getNextHop(Packet& pkt, BaseQueue* ingress_port);
     virtual uint32_t getType() {return _type;}
 
+    // Validation-only ECMP lookup. This reads the already-populated FIB using the
+    // same hash as packet forwarding and never creates or reorders routes.
+    BaseQueue* oracleEcmpEgress(uint32_t destination, uint32_t flow_id, uint32_t path_id);
+
+    // Populate the FIB exactly as packet forwarding would on a first lookup.
+    // This deliberately does not select a route or mutate per-packet state.
+    void materializeRoutes(uint32_t destination, uint32_t flow_id);
+
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);
     uint32_t adaptive_route_p2c(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
@@ -123,6 +131,8 @@ public:
 
     static void set_strategy(routing_strategy s) { assert (_strategy==NIX); _strategy = s; }
     static void set_ar_fraction(uint16_t f) { assert(f>=1);_ar_fraction = f;} 
+    // Motivation-only override: keep entropy-to-ECMP mapping independent of run RNG.
+    static void setMotivationEcmpHashSeed(uint32_t seed);
 
     static routing_strategy _strategy;
     static uint16_t _ar_fraction;
@@ -132,6 +142,8 @@ public:
     static double _speculative_threshold_fraction;
     static uint16_t _trim_size;
     static bool _disable_trim;
+    static bool _motivation_ecmp_hash_seed_set;
+    static uint32_t _motivation_ecmp_hash_seed;
 private:
     switch_type _type;
     Pipe* _pipe;

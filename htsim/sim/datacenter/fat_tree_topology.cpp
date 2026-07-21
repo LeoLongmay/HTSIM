@@ -1,5 +1,6 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 #include "fat_tree_topology.h"
+#include <cmath>
 #include <vector>
 #include "string.h"
 #include <sstream>
@@ -95,6 +96,7 @@ FatTreeTopologyCfg::FatTreeTopologyCfg(queue_type q, queue_type snd):
                         _radix_up{0,0},
                         _queue_down{0,0,0},
                         _queue_up{0,0},
+                        _shared_buffer_size(0),
                         _hosts_per_pod(0),
                         _enable_ecn(false),
                         _enable_ecn_on_tor_downlink(false),
@@ -415,6 +417,59 @@ void FatTreeTopologyCfg::set_linkspeeds(linkspeed_bps linkspeed) {
     if (_downlink_speeds[TOR_TIER] == 0) { _downlink_speeds[TOR_TIER] = linkspeed;}
     if (_downlink_speeds[AGG_TIER] == 0) { _downlink_speeds[AGG_TIER] = linkspeed;}
     if (_downlink_speeds[CORE_TIER] == 0) { _downlink_speeds[CORE_TIER] = linkspeed;}
+}
+
+linkspeed_bps FatTreeTopologyCfg::degraded_link_normal_rate() const {
+    if (_tiers == 2)
+        return _downlink_speeds[AGG_TIER];
+    if (_tiers == 3)
+        return _downlink_speeds[CORE_TIER];
+    throw std::logic_error("degraded links require a two- or three-tier fat tree");
+}
+
+uint32_t FatTreeTopologyCfg::max_degraded_links() const {
+    if (_tiers == 2)
+        return NAGG;
+    if (_tiers == 3) {
+        const uint32_t links_per_agg = _radix_up[AGG_TIER] / _bundlesize[CORE_TIER];
+        return (NAGG - 1) * _agg_switches_per_pod + links_per_agg;
+    }
+    throw std::logic_error("degraded links require a two- or three-tier fat tree");
+}
+
+void FatTreeTopologyCfg::validate_degraded_link_scaling() const {
+    if (_num_failed_links == 0)
+        return;
+
+    const auto require_positive_scaled_value = [this](long double value,
+                                                       const char* description) {
+        const long double scaled = value * _failed_link_ratio;
+        if (value <= 0 || !std::isfinite(scaled)) {
+            throw std::invalid_argument(
+                string("degraded scaling would produce invalid ") + description);
+        }
+        if (scaled < 1) {
+            throw std::invalid_argument(
+                string("degraded scaling would produce zero ") + description);
+        }
+    };
+
+    require_positive_scaled_value(degraded_link_normal_rate(), "link rate");
+    if (_tiers == 2) {
+        require_positive_scaled_value(_queue_down[AGG_TIER], "downlink queue size");
+        require_positive_scaled_value(_queue_up[TOR_TIER], "uplink queue size");
+    } else {
+        require_positive_scaled_value(_queue_down[CORE_TIER], "downlink queue size");
+    }
+
+    if (_enable_ecn) {
+        if (_ecn_low < 0 || _ecn_high < _ecn_low)
+            throw std::invalid_argument("degraded scaling has invalid ECN thresholds");
+        if (_ecn_low > 0)
+            require_positive_scaled_value(_ecn_low, "ECN low threshold");
+        if (_ecn_high > 0)
+            require_positive_scaled_value(_ecn_high, "ECN high threshold");
+    }
 }
 
 void FatTreeTopologyCfg::set_queue_sizes(mem_b queuesize) {
@@ -834,6 +889,22 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
         simtime_picosec switch_latency = (_cfg->_switch_latencies[CORE_TIER] > 0) ? _cfg->_switch_latencies[CORE_TIER] : _cfg->_switch_latency;
         switches_c[j] = new FatTreeSwitch(*_eventlist, "Switch_Core_"+ntoa(j), FatTreeSwitch::CORE,j,switch_latency,this);
     }
+
+    if (_cfg->_qt == LOSSLESS_INPUT) {
+        const mem_b shared_buffer_size = _cfg->_shared_buffer_size;
+        for (uint32_t j = 0; j < _cfg->NTOR; ++j) {
+            shared_buffer_pools_lp.push_back(make_unique<SharedBufferPool>(
+                shared_buffer_size, shared_buffer_size, shared_buffer_size - 1));
+        }
+        for (uint32_t j = 0; j < _cfg->NAGG; ++j) {
+            shared_buffer_pools_up.push_back(make_unique<SharedBufferPool>(
+                shared_buffer_size, shared_buffer_size, shared_buffer_size - 1));
+        }
+        for (uint32_t j = 0; j < _cfg->NCORE; ++j) {
+            shared_buffer_pools_c.push_back(make_unique<SharedBufferPool>(
+                shared_buffer_size, shared_buffer_size, shared_buffer_size - 1));
+        }
+    }
       
     // links from lower layer pod switch to server
     for (uint32_t tor = 0; tor < _cfg->NTOR; tor++) {
@@ -850,6 +921,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
             
                 queues_nlp_ns[tor][srv][b] = alloc_queue(queueLogger, _cfg->_queue_down[TOR_TIER], DOWNLINK, TOR_TIER, true);
                 queues_nlp_ns[tor][srv][b]->setName("LS" + ntoa(tor) + "->DST" +ntoa(srv) + "(" + ntoa(b) + ")");
+                if (_cfg->_qt == LOSSLESS_INPUT)
+                    static_cast<LosslessOutputQueue*>(queues_nlp_ns[tor][srv][b])->setSharedBuffer(*shared_buffer_pools_lp[tor]);
                 //if (logfile) logfile->writeName(*(queues_nlp_ns[tor][srv]));
                 simtime_picosec hop_latency = (_cfg->_hop_latency == 0) ? _cfg->_link_latencies[TOR_TIER] : _cfg->_hop_latency;
                 pipes_nlp_ns[tor][srv][b] = new Pipe(hop_latency, *_eventlist);
@@ -913,12 +986,14 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
 
                 if (_cfg->_tiers == 2 && (agg - agg_min) < _cfg->_num_failed_links){
                     queues_nup_nlp[agg][tor][b] = alloc_queue(queueLogger, _cfg->_downlink_speeds[AGG_TIER],_cfg->_queue_down[AGG_TIER], DOWNLINK, AGG_TIER,false,true);
-                    cout << "Failure: US" + ntoa(agg) + "->LS_" + ntoa(tor) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[AGG_TIER] * _cfg->_failed_link_ratio) << endl;
+                    cout << "Degraded: US" + ntoa(agg) + "->LS_" + ntoa(tor) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[AGG_TIER] * _cfg->_failed_link_ratio) << endl;
                 }
                 else
                     queues_nup_nlp[agg][tor][b] = alloc_queue((QueueLogger*)queueLogger, (const mem_b)_cfg->_queue_down[AGG_TIER], DOWNLINK, AGG_TIER);
 
                 queues_nup_nlp[agg][tor][b]->setName("US" + ntoa(agg) + "->LS_" + ntoa(tor) + "(" + ntoa(b) + ")");
+                if (_cfg->_qt == LOSSLESS_INPUT)
+                    static_cast<LosslessOutputQueue*>(queues_nup_nlp[agg][tor][b])->setSharedBuffer(*shared_buffer_pools_up[agg]);
                 //if (logfile) logfile->writeName(*(queues_nup_nlp[agg][tor]));
             
                 simtime_picosec hop_latency = (_cfg->_hop_latency == 0) ? _cfg->_link_latencies[AGG_TIER] : _cfg->_hop_latency;
@@ -935,12 +1010,14 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
 
                 if (_cfg->_tiers == 2 && (agg - agg_min) < _cfg->_num_failed_links){
                     queues_nlp_nup[tor][agg][b] = alloc_queue(queueLogger, _cfg->_downlink_speeds[AGG_TIER], _cfg->_queue_up[TOR_TIER], UPLINK, TOR_TIER, true, true);
-                    cout << "Failure: LS" + ntoa(tor) + "->US" + ntoa(agg) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[AGG_TIER] * _cfg->_failed_link_ratio) << endl;
+                    cout << "Degraded: LS" + ntoa(tor) + "->US" + ntoa(agg) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[AGG_TIER] * _cfg->_failed_link_ratio) << endl;
                 }
                 else 
                     queues_nlp_nup[tor][agg][b] = alloc_queue(queueLogger, _cfg->_queue_up[TOR_TIER], UPLINK, TOR_TIER, true);
 
                 queues_nlp_nup[tor][agg][b]->setName("LS" + ntoa(tor) + "->US" + ntoa(agg) + "(" + ntoa(b) + ")");
+                if (_cfg->_qt == LOSSLESS_INPUT)
+                    static_cast<LosslessOutputQueue*>(queues_nlp_nup[tor][agg][b])->setSharedBuffer(*shared_buffer_pools_lp[tor]);
                 //cout << queues_nlp_nup[tor][agg][b]->str() << endl;
                 //if (logfile) logfile->writeName(*(queues_nlp_nup[tor][agg]));
 
@@ -995,6 +1072,8 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
                     assert(queues_nup_nc[agg][core][b] == NULL);
                     queues_nup_nc[agg][core][b] = alloc_queue(queueLogger, _cfg->_queue_up[AGG_TIER], UPLINK, AGG_TIER);
                     queues_nup_nc[agg][core][b]->setName("US" + ntoa(agg) + "->CS" + ntoa(core) + "(" + ntoa(b) + ")");
+                    if (_cfg->_qt == LOSSLESS_INPUT)
+                        static_cast<LosslessOutputQueue*>(queues_nup_nc[agg][core][b])->setSharedBuffer(*shared_buffer_pools_up[agg]);
                     //cout << queues_nup_nc[agg][core][b]->str() << endl;
                     //if (logfile) logfile->writeName(*(queues_nup_nc[agg][core]));
         
@@ -1012,12 +1091,14 @@ FatTreeTopology::FatTreeTopology(const FatTreeTopologyCfg* cfg,
         
                     if ((l+agg*_cfg->_agg_switches_per_pod)<_cfg->_num_failed_links){
                         queues_nc_nup[core][agg][b] = alloc_queue(queueLogger, _cfg->_downlink_speeds[CORE_TIER], _cfg->_queue_down[CORE_TIER], DOWNLINK, CORE_TIER, false,true);
-                        cout << "Adding link failure for agg_sw " << ntoa(agg) << " l " << ntoa(l) << " b " << ntoa(b) << endl;
+                        cout << "Degraded: CS" + ntoa(core) + "->US" + ntoa(agg) + "(" + ntoa(b) + ") linkspeed set to " << speedAsGbps(_cfg->_downlink_speeds[CORE_TIER] * _cfg->_failed_link_ratio) << endl;
                     } else {
                         queues_nc_nup[core][agg][b] = alloc_queue(queueLogger, _cfg->_queue_down[CORE_TIER], DOWNLINK, CORE_TIER);
                     }
         
                     queues_nc_nup[core][agg][b]->setName("CS" + ntoa(core) + "->US" + ntoa(agg) + "(" + ntoa(b) + ")");
+                    if (_cfg->_qt == LOSSLESS_INPUT)
+                        static_cast<LosslessOutputQueue*>(queues_nc_nup[core][agg][b])->setSharedBuffer(*shared_buffer_pools_c[core]);
 
                     assert(switches_up[agg]->addPort(queues_nup_nc[agg][core][b]) < 64);
                     assert(switches_c[core]->addPort(queues_nc_nup[core][agg][b]) < 64);
@@ -1506,6 +1587,76 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
         cout << "pathcount " << paths->size() << endl;
         return paths;
     }
+}
+
+bool FatTreeTopology::resolve_ecmp_path(uint32_t src, uint32_t dest, uint32_t flow_id,
+                                        uint32_t entropy,
+                                        vector<const BaseQueue*>& queues) {
+    queues.clear();
+    uint32_t source_tor = _cfg->HOST_POD_SWITCH(src);
+    uint32_t destination_tor = _cfg->HOST_POD_SWITCH(dest);
+
+    BaseQueue* source_queue = queues_ns_nlp[src][source_tor][0];
+    if (!source_queue)
+        return false;
+    queues.push_back(source_queue);
+
+    FatTreeSwitch* current = dynamic_cast<FatTreeSwitch*>(switches_lp[source_tor]);
+    if (!current)
+        return false;
+
+    // A three-tier path visits at most TOR->AGG->CORE->AGG->TOR, followed by
+    // the destination host queue. The bound also guards malformed FIB cycles.
+    for (uint32_t hop = 0; hop < 8; hop++) {
+        BaseQueue* egress = current->oracleEcmpEgress(dest, flow_id, entropy);
+        if (!egress)
+            return false;
+        queues.push_back(egress);
+
+        if (current->getType() == FatTreeSwitch::TOR && current->getID() == destination_tor)
+            return true;
+
+        current = dynamic_cast<FatTreeSwitch*>(egress->getRemoteEndpoint());
+        if (!current)
+            return false;
+    }
+    return false;
+}
+
+bool FatTreeTopology::resolve_or_materialize_ecmp_path(
+    uint32_t src, uint32_t dest, uint32_t flow_id, uint32_t entropy,
+    vector<const BaseQueue*>& queues) {
+    queues.clear();
+    const uint32_t source_tor = _cfg->HOST_POD_SWITCH(src);
+    const uint32_t destination_tor = _cfg->HOST_POD_SWITCH(dest);
+
+    BaseQueue* source_queue = queues_ns_nlp[src][source_tor][0];
+    if (!source_queue)
+        return false;
+    queues.push_back(source_queue);
+
+    FatTreeSwitch* current = dynamic_cast<FatTreeSwitch*>(switches_lp[source_tor]);
+    if (!current)
+        return false;
+
+    // Use the same FIB construction and the same ECMP lookup as forwarding at
+    // every switch.  The bound also protects against malformed FIB cycles.
+    for (uint32_t hop = 0; hop < 8; ++hop) {
+        current->materializeRoutes(dest, flow_id);
+        BaseQueue* egress = current->oracleEcmpEgress(dest, flow_id, entropy);
+        if (!egress)
+            return false;
+        queues.push_back(egress);
+
+        if (current->getType() == FatTreeSwitch::TOR &&
+            current->getID() == destination_tor)
+            return true;
+
+        current = dynamic_cast<FatTreeSwitch*>(egress->getRemoteEndpoint());
+        if (!current)
+            return false;
+    }
+    return false;
 }
 
 void FatTreeTopology::count_queue(Queue* queue){

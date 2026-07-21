@@ -3,7 +3,9 @@
 #define UEC_H
 
 #include <memory>
+#include <functional>
 #include <list>
+#include <map>
 #include <set>
 #include <optional>
 #include <string>
@@ -17,7 +19,14 @@
 #include "modular_vector.h"
 #include "pciemodel.h"
 #include "oversubscribed_cc.h"
+#include "laps_rate.h"
+#include "laps_path_catalog.h"
+#include "laps_recovery.h"
+#include "laps_route_audit.h"
 #include "uec_mp.h"
+#include "motivation_epoch.h"
+#include "prism_coordination.h"
+#include "prism_path_signal.h"
 #include "atlahs_event.h"
 #include "atlahs_htsim_api.h"
 
@@ -31,6 +40,8 @@ class UecPullPacer;
 class UecSink;
 class UecSrc;
 class UecLogger;
+class MotivationTraceWriter;
+class BaseQueue;
 
 
 // UecNIC aggregates UecSrcs that are on the same NIC.  It round
@@ -70,6 +81,8 @@ public:
     list<UecSrc*> _active_srcs;
 
 private:
+    friend class UecSrc;
+
     void sendControlPktNow();
     uint32_t sendOnFreePortNow(simtime_picosec endtime, const Route* rt);
     list<struct CtrlPacket> _control;
@@ -104,6 +117,11 @@ private:
 
 class UecSrc : public EventSource, public TriggerTarget, public UecTransportConnection {
 public:
+    static void configureMotivationTrace(const std::string& prefix, const std::string& run_id,
+                                         const std::string& scenario, uint32_t seed,
+                                         int64_t flow_filter);
+    static MotivationTraceWriter& motivationTrace();
+    static void validateMotivationTraceRuntimeConfig(bool legacy_reps, uint32_t planes);
     struct Stats {
         /* all must be non-negative, but we'll make them signed so we
            can do maths with them without concern about underflow */
@@ -133,6 +151,7 @@ public:
            UecNIC& nic, 
            uint32_t no_of_ports, 
            bool rts = false);
+    ~UecSrc() override;
     void delFromSendTimes(simtime_picosec time, UecDataPacket::seq_t seq_no);
     /**
      * Initialize global NSCC parameters.
@@ -158,6 +177,51 @@ public:
     void doNextEvent();
     uint32_t dst() { return _dstaddr; }
     void setDst(uint32_t dst) { _dstaddr = dst; }
+    bool isLaps() const;
+    using LapsPathResolver = std::function<bool(
+        uint32_t, uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
+    void lapsSetPathResolver(LapsPathResolver resolver);
+    void lapsSetPathCatalog(uint32_t plane, std::shared_ptr<const LapsPathCatalog> catalog) {
+        if (isLaps()) {
+            if (plane >= _laps_path_catalogs.size())
+                _laps_path_catalogs.resize(plane + 1);
+            _laps_path_catalogs[plane] = std::move(catalog);
+            // PIDs are shared across per-NIC-plane catalogs.  Plane zero
+            // supplies immutable PIT baselines; packets remain plane-pinned.
+            if (plane == 0) {
+                auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+                if (!laps) throw std::logic_error("LAPS has no LAPS multipath state");
+                std::vector<simtime_picosec> base_vals;
+                base_vals.reserve(_laps_path_catalogs[plane]->size());
+                for (uint16_t pid = 0; pid < _laps_path_catalogs[plane]->size(); ++pid)
+                    base_vals.push_back(_laps_path_catalogs[plane]->entry(pid).base_val);
+                laps->configurePaths(std::move(base_vals));
+            }
+        }
+    }
+    void lapsSetRouteAudit(std::shared_ptr<LapsRouteAudit> audit) {
+        _laps_route_audit = std::move(audit);
+        if (_laps_route_audit && isLaps()) {
+            for (const auto& catalog : _laps_path_catalogs)
+                if (catalog) _laps_route_audit->registerCatalog(*catalog);
+        }
+    }
+    std::shared_ptr<LapsRouteAudit> lapsRouteAudit() const { return _laps_route_audit; }
+    const Route& lapsForwardRoute(uint16_t pid) const;
+    const Route& lapsForwardRoute(uint16_t pid, const Route& nic_port_route) const;
+    bool lapsResolvePath(uint32_t entropy, uint32_t send_port,
+                         LapsPathKey& path) const;
+    bool lapsResolvePath(uint32_t entropy, const Route& send_route,
+                         LapsPathKey& path) const;
+    using PrismOraclePathResolver = std::function<bool(
+        uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
+    void prismSetOraclePathResolver(PrismOraclePathResolver resolver,
+                                    uint32_t path_entropy_size);
+    using MotivationPathResolver = std::function<bool(
+        uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
+    void motivationSetPathResolver(MotivationPathResolver resolver,
+                                   uint32_t path_entropy_size);
+    bool motivationResolvePath(uint32_t entropy);
 
     // Functions from UecTransportConnection
     virtual void continueConnection() override;
@@ -216,7 +280,7 @@ public:
     static bool _sender_based_cc;
     static bool _receiver_based_cc;
 
-    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT};
+    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT, LAPS};
     static Sender_CC _sender_cc_algo;
 
     static bool _disable_quick_adapt;
@@ -227,7 +291,7 @@ public:
 
     virtual const string& nodename() { return _nodename; }
     virtual void setName(const string& name) override { _name=name; _mp->set_debug_tag(name); }
-    inline void setFlowId(flowid_t flow_id) { _flow.set_flowid(flow_id); }
+    void setFlowId(flowid_t flow_id);
     void setFlowsize(uint64_t flow_size_in_bytes);
     mem_b flowsize() { return _flow_size; }
     inline PacketFlow* flow() { return &_flow; }
@@ -241,17 +305,28 @@ public:
     bool debug() const { return _debug_src; }
 
    private:
+    static MotivationTraceWriter _motivation_trace_writer;
     unique_ptr<UecMultipath> _mp;
+    PrismResidualCoordinator _prism_coordinator;
+    MotivationEpochObserver _motivation_epoch_observer;
+    MotivationAckSelectionState _motivation_ack_selection_state;
+    optional<MotivationEpochResult> _motivation_pending_epoch;
     UecNIC& _nic;
     uint32_t _no_of_ports;
     vector <UecSrcPort*> _ports;
     struct sendRecord {
         // need a constructor to be able to put this in a map
-        sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime)
-            : path_id(ppath), pkt_size(psize), send_time(stime){};
+        sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime,
+                   UecMpSelection pselection)
+            : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection){};
         uint32_t path_id;
         mem_b pkt_size;
         simtime_picosec send_time;
+        UecMpSelection selection;
+    };
+    struct RtxPathSelection {
+        uint32_t entropy;
+        UecMpSelection selection;
     };
     UecLogger* _logger;
     TrafficLogger* _pktlogger;
@@ -274,7 +349,33 @@ public:
     mem_b sendRtxPacket(const Route& route);
     void sendRTS();
     void sendProbe();
-    void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size);
+    void sendLapsProbe();
+    void scheduleLapsProbe();
+    void cancelLapsProbe();
+    void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
+                          UecMpSelection selection);
+    RtxPathSelection selectRtxPath(UecDataPacket::seq_t seqno);
+    void configureMotivationTokenObserver();
+    struct MotivationResolvedPath {
+        uint64_t physical_path_id = MotivationEpochObserver::NO_PHYSICAL_PATH;
+        std::vector<const BaseQueue*> queues;
+    };
+    static std::map<std::string, uint64_t> _motivation_physical_path_ids;
+    static std::map<std::string, uint64_t> _motivation_queue_ids;
+    MotivationPathResolver _motivation_path_resolver;
+    uint32_t _motivation_path_entropy_size = 0;
+    std::vector<MotivationResolvedPath> _motivation_paths;
+    std::vector<bool> _motivation_path_attempted;
+    LapsPathResolver _laps_path_resolver;
+    std::vector<std::shared_ptr<const LapsPathCatalog>> _laps_path_catalogs;
+    std::shared_ptr<LapsRouteAudit> _laps_route_audit;
+    uint64_t motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
+                              simtime_picosec qdelay, bool genuine,
+                              const UecMpSelection& selection,
+                              uint64_t newly_acked_bytes,
+                              uint64_t new_data_bytes_sent_total,
+                              uint64_t cwnd_bytes);
+    void motivationLogPendingEpoch();
     void queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size);
     bool validateSendTs(UecBasePacket::seq_t acked_psn, bool rtx_echo);
     void recalculateRTO();
@@ -309,6 +410,17 @@ public:
     void quick_adapt(bool trimmed);
     void updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void prismUpdateSignals(simtime_picosec c_cc, simtime_picosec c_spray);
+    void prismEpochLog(simtime_picosec c_cc, simtime_picosec c_spray, int region, bool cut);
+    simtime_picosec prismEngageThresh() const;
+    simtime_picosec prismDisengageThresh() const;
+    bool prismResolveOraclePaths();
+    bool prismOracleSnapshot(simtime_picosec& floor, simtime_picosec& ceiling);
+    void prismOracleObserveAck();
+    void prismOracleResetEpoch();
+    void prismOracleLog(simtime_picosec est_raw_cc, simtime_picosec est_raw_spray,
+                        simtime_picosec est_smoothed_cc, simtime_picosec est_smoothed_spray,
+                        int est_region, simtime_picosec t_spray);
     void updateCwndOnAck_STRACK(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_MNSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_SWIFT(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
@@ -377,6 +489,28 @@ public:
     // PRISM params. T_cc IS _target_Qdelay (reused, not a separate knob).
     static simtime_picosec _prism_T_spray;  // tolerated spread; 0 = follow _target_Qdelay
     static double          _prism_kappa;    // epoch length = kappa * base_rtt; default 1.0
+    static double          _prism_smooth_beta;       // A1: EWMA weight for the floor/spread signals (1.0 = off = original PRISM)
+    static double          _prism_hysteresis;        // A2: region dead-band fraction (0.0 = off = sharp thresholds)
+    static simtime_picosec _prism_engage_spread;
+    static simtime_picosec _prism_disengage_spread;
+    static double          _prism_engage_beta;
+    static double          _prism_engage_mult;
+    static double          _prism_disengage_ratio;
+    static uint32_t        _prism_n_min;     // minimum genuine ACK samples needed to close an epoch
+    static bool            _prism_path_median_signal;
+    static bool            _prism_path_median_spread;
+    static bool            _prism_hold_as_increase;
+    static double          _laps_beta;           // Softmax inverse-temperature; default 1.0
+    static simtime_picosec _laps_probe_interval; // microseconds on CLI; default 50us
+    // Motivation-only REPS admission gate. Disabled unless explicitly requested.
+    static bool            _motivation_residual_recycle;
+    static simtime_picosec _motivation_residual_threshold;
+    static PrismCoordinationMode _prism_coordination_mode;
+    static bool            _prism_oracle_validation;
+    static std::string     _prism_oracle_log_path;
+    static std::string     _prism_oracle_run_id;
+    static std::string     _prism_oracle_scenario;
+    static uint32_t        _prism_oracle_seed;
     // STrack (coupled-SOTA baseline) params. CC core reuses NSCC's _gamma/_eta/_target_Qdelay.
     static double _strack_beta;   // starvation-bump scale (Table 1 beta; dimensionless, default 5.0)
     static double _strack_h;      // per-hop target scale; default 0 (fixed target, see spec §3) (arg-parse symmetry in Task 3; not consumed while h=0)
@@ -462,15 +596,16 @@ private:
     EventList::Handle _rto_timer_handle;
 
 
-    //used to drive ACK clock
+    // Cumulative receiver-reported bytes; also used to drive the ACK clock.
     uint64_t _recvd_bytes;
 
     // Smarttrack sender based CC variables.
     simtime_picosec _base_rtt;
     mem_b _base_bdp;
     mem_b _achieved_bytes = 0;
-    //used to trigger SmartTrack fulfill
+    // Windowed bytes used to trigger SmartTrack fulfill; reset after adjustments.
     mem_b _received_bytes = 0;
+    uint64_t _motivation_new_data_bytes_sent_total = 0;
     uint32_t _fi_count = 0;
     bool _trigger_qa = false;
     simtime_picosec _qa_endtime = 0;
@@ -484,11 +619,41 @@ private:
     simtime_picosec _prism_epoch_min     = 0;
     simtime_picosec _prism_epoch_max     = 0;
     uint32_t        _prism_epoch_samples = 0;
+    uint64_t        _prism_epoch_id      = 0;
     int             _prism_region        = 0;  // 0 = INCREASE (cold-start ramp)
     simtime_picosec _prism_ccc           = 0;  // last epoch's C_cc (increase headroom + log)
     simtime_picosec _prism_cspray        = 0;  // last epoch's C_spray (log)
     bool            _prism_genuine_sample = false;  // set in processAck: true iff this ACK gave a
                                                     // genuine raw_rtt-base sample (not avg fallback)
+    uint32_t        _prism_genuine_sample_path = UINT32_MAX;
+    prism::PathMedianEpoch _prism_path_epoch;
+    simtime_picosec _prism_floor_s       = 0;
+    simtime_picosec _prism_spread_s      = 0;
+    simtime_picosec _prism_spread_long   = 0;
+    bool            _prism_engaged       = false;
+    bool            _prism_engaged_init  = false;
+    std::set<uint32_t> _prism_epoch_sampled_paths;  // validation-only entropy IDs
+    PrismOraclePathResolver _prism_oracle_path_resolver;
+    std::vector<std::vector<const BaseQueue*>> _prism_oracle_paths;
+    std::vector<int32_t> _prism_oracle_entropy_to_path;
+    uint32_t        _prism_oracle_path_entropy_size = 0;
+    uint32_t        _prism_oracle_ccc = 0;       // ACK-time epoch-envelope oracle
+    uint32_t        _prism_oracle_cspray = 0;
+    uint8_t         _prism_oracle_region = 0;
+    bool            _prism_oracle_initialized = false;
+    uint32_t        _prism_boundary_oracle_ccc = 0;
+    uint32_t        _prism_boundary_oracle_cspray = 0;
+    uint8_t         _prism_boundary_oracle_region = 0;
+    bool            _prism_boundary_oracle_initialized = false;
+    simtime_picosec _prism_oracle_epoch_min = 0;
+    simtime_picosec _prism_oracle_epoch_max = 0;
+    simtime_picosec _prism_oracle_floor_min = 0;
+    simtime_picosec _prism_oracle_floor_max = 0;
+    long double     _prism_oracle_floor_sum = 0;
+    long double     _prism_oracle_spread_sum = 0;
+    uint32_t        _prism_oracle_ack_snapshots = 0;
+    uint32_t        _prism_oracle_resolution_failures = 0;
+    bool            _prism_epoch_sample_deferred = false;
 
     // MNSCC median-window state. Ring buffer of recent per-ACK delays; the median of the last
     // min(H, _mnscc_wcount) entries drives NSCC. H = _mnscc_h>0 ? _mnscc_h : nyquist_h(cwnd_pkts).
@@ -532,6 +697,13 @@ private:
     simtime_picosec _probe_send_time = 0; 
     EventList::Handle _probe_timer_handle; 
     /******** END Probe parameters *********/
+
+    /******** LAPS probe parameters *********/
+    simtime_picosec _laps_probe_timer_when = 0;
+    UecDataPacket::seq_t _laps_probe_seqno = 0;
+    std::set<UecDataPacket::seq_t> _laps_probe_outstanding;
+    EventList::Handle _laps_probe_timer_handle;
+    /******** END LAPS probe parameters *********/
 
 
     // Connectivity
@@ -599,7 +771,9 @@ class UecSink : public DataReceiver {
     UecBasePacket::seq_t sackBitmapBase(UecBasePacket::seq_t epsn);
     UecBasePacket::seq_t sackBitmapBaseIdeal();
     uint64_t buildSackBitmap(UecBasePacket::seq_t ref_epsn);
-    UecAckPacket* sack(uint32_t path_id, UecBasePacket::seq_t seqno, UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo);
+    UecAckPacket* sack(uint32_t path_id, UecBasePacket::seq_t seqno,
+                       UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo,
+                       const UecDataPacket* received_data = nullptr);
 
     UecNackPacket* nack(uint32_t path_id, UecBasePacket::seq_t seqno, bool last_hop, bool ecn_echo);
 
@@ -624,6 +798,23 @@ class UecSink : public DataReceiver {
     }
     UecBasePacket::seq_t oooMaxDistance() const { return _ooo_distance_max; }
     void connectPort(uint32_t port_num, UecSrc& src, const Route& routeback);
+    void lapsSetPathCatalog(const UecSrc& source, uint32_t plane,
+                            std::shared_ptr<const LapsPathCatalog> catalog) {
+        if (!source.isLaps())
+            return;
+        if (plane >= _laps_path_catalogs.size())
+            _laps_path_catalogs.resize(plane + 1);
+        _laps_path_catalogs[plane] = std::move(catalog);
+    }
+    void lapsSetRouteAudit(const UecSrc& source, std::shared_ptr<LapsRouteAudit> audit) {
+        if (!source.isLaps()) return;
+        _laps_route_audit = std::move(audit);
+        if (_laps_route_audit) {
+            for (const auto& catalog : _laps_path_catalogs)
+                if (catalog) _laps_route_audit->registerCatalog(*catalog);
+        }
+    }
+    const Route& lapsReverseRoute(uint16_t pid) const;
     const Route* getPortRoute(uint32_t port_num) const {return _ports[port_num]->route();}
     UecSinkPort* getPort(uint32_t port_num) {return _ports[port_num];}
     void setSrc(uint32_t s) { _srcaddr = s; }
@@ -740,6 +931,8 @@ class UecSink : public DataReceiver {
 
     uint16_t _entropy;
     std::vector<uint32_t> _paths;
+    std::vector<std::shared_ptr<const LapsPathCatalog>> _laps_path_catalogs;
+    std::shared_ptr<LapsRouteAudit> _laps_route_audit;
 
     //variables for PCIe model
     PCIeModel* _pcie;

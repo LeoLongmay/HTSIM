@@ -136,7 +136,7 @@ for suffix, n, show_ylabel in (("figD1", 4, True), ("figD2", 32, False)):
         plt.axvspan(500, 1500, color="grey", alpha=0.12)
         plt.xlabel("time (us)")
         if show_ylabel:                          # figD2 omits it (identical y-axis to figD1)
-            plt.ylabel("queueing delay (us)")
+            plt.ylabel("Queueing delay (us)")
         plt.ylim(0, 26); plt.xlim(0, 2000); plt.xticks([0, 500, 1000, 1500, 2000]); plt.grid(alpha=0.3)
         plt.tight_layout()
         plt.savefig(f"{HERE}/{suffix}_reps_floor_emerges.png", dpi=140, bbox_inches="tight", pad_inches=0.05)

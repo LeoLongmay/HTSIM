@@ -2,15 +2,41 @@
 #define CIRCULARBUFFERREPS_H
 
 #include <iostream>
+#include <set>
 #include <stdexcept>
+#include <vector>
 #include "stdint.h"
 
 template <typename T> class CircularBufferREPS {
+  public:
+    struct SlotSnapshot {
+        uint16_t slot = UINT16_MAX;
+        uint64_t generation = 0;
+        T value = T();
+        bool valid = false;
+        bool ack_validated = false;
+    };
+
+    struct Admission {
+        uint16_t slot = UINT16_MAX;
+        uint64_t generation = 0;
+        T value = T();
+        bool written = false;
+    };
+
+    struct Selection {
+        uint16_t slot = UINT16_MAX;
+        uint64_t generation = 0;
+        T value = T();
+    };
+
   private:
     struct Element {
         T value;
         bool isValid;
         int usable_lifetime = 0;
+        uint64_t generation = 0;
+        bool ack_validated = false;
 
         Element() : value(T()), isValid(false) {}
     };
@@ -26,13 +52,17 @@ template <typename T> class CircularBufferREPS {
 
     bool frozen_mode = false;
     bool circle_mode = true;
+    std::set<uint16_t> reserved_cache_slots;
+    std::set<uint16_t> protected_cache_slots;
 
   public:
     CircularBufferREPS(uint16_t bufferSize = 8); // Default size is 8
     ~CircularBufferREPS();
-    void add(T element);
+    Admission add(T element);
     T remove_earliest_fresh();
+    Selection remove_earliest_fresh_with_slot();
     T remove_frozen();
+    Selection remove_frozen_with_slot();
     bool is_valid_frozen();
     uint16_t getSize() const;
     uint16_t getNumberFreshEntropies() const;
@@ -42,12 +72,16 @@ template <typename T> class CircularBufferREPS {
     void print();
     void resetBuffer();
     uint16_t numValid() const;
+    std::vector<SlotSnapshot> cacheSlots() const;
+    bool invalidateCacheSlot(uint16_t slot, uint64_t generation);
+    bool reserveCacheSlot(uint16_t slot, uint64_t generation);
+    void clearReservedCacheSlots();
     void setFrozenMode(bool mode) {
         if (repsUseFreezing) {
             frozen_mode = mode;
         }
     };
-    bool isFrozenMode() { return frozen_mode; };
+    bool isFrozenMode() const { return frozen_mode; };
     static void setUseFreezing(bool enable_freezing_mode) { repsUseFreezing = enable_freezing_mode; };
     static void setBufferSize(uint16_t buff_size) { repsBufferSize = buff_size; };
     static void setUsableLifetime(uint16_t max_life) {

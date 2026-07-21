@@ -104,10 +104,46 @@ more often does not change *which* region PRISM picks (it still HOLDs on the sam
   high** (5.6→6.6 µs), pushing the freed-up epochs into DECREASE (21.9→29.5%, *more* cutting) →
   worse under-growth, dominating. **Sharpened lesson:** a persistence signal must keep `C_cc`
   *instantaneous* and smooth *only* the spread; smoothing the floor makes PRISM cut on stale queue.
-  That cleaner design is untried and, being per-path, is O(paths) regardless — so we **kept PRISM
-  O(1) and removed the prototype.** The f0 symmetric penalty therefore stands as an
+  That cleaner design — smooth only the spread — was at the time judged per-path/O(paths), so we
+  **kept PRISM O(1) and removed the prototype** (a judgment later corrected: the pure version was built
+  O(1) and tested — see the spread-persistence bullet below). The f0 symmetric penalty therefore stands as an
   honestly-characterized cost of PRISM's O(1) decomposition, not a defect we patched over.
   (Prototype controller code reverted; the eval lives on only as this summary + `../NARRATIVE.md`.)
+- **Fix direction tried — an O(1) spread/floor ratio gate — and REFUTED (honest-null, reverted).** A
+  read-only epoch-log screen looked promising: *within HOLD epochs*, the f8-win spread/floor ratio
+  `C_spray/C_cc` has median **16.5×** vs the f0/incast-cost **3.4–3.9×** — apparently separable, so a
+  ratio threshold ought to drop the transient-driven HOLDs while keeping the structural ones. Unlike
+  the per-path EWMA above this stays **O(1)** (no per-path state): we tightened the HOLD-entry test
+  to `spread_high ⟺ C_spray ≥ max(T_spray, ρ·C_cc)` (combined-AND, flag-gated `-prism_spread_ratio`,
+  ρ=0 = OFF = byte-identical). A 5-seed f0+f8 sweep over ρ∈{0,3,5,8}: ρ=0 reproduced PRISM-default
+  **exactly** (f0 868.6/945, f8 504.2/1518 — regression confirmed), but **no ρ recovered f0** —
+  goodput 868.6→868.1→861.2→858.5 (flat-to-slightly-worse, all within ±14 seed noise), avg-FCT flat
+  944–945 — while the f8 win held at ρ≤5 (507.6 / 502.3 vs 504.2) and eroded at ρ=8 (486.7).
+  **Why the screen over-predicted:** the flip-% was *observational* on current-controller logs; once
+  the gate actually flips HOLD→INCREASE the closed-loop window trajectory changes, and the re-grown
+  window at f0 just re-hits the same draining transient/shared bottleneck — loosening HOLD *entry*
+  does not convert into throughput. This is **consistent with the root cause**: the f0 deficit is
+  under-growth bounded by the floor and the transient itself, not by *which* epochs enter HOLD.
+  Prototype reverted (O(1) preserved); design/plan retained as `docs/superpowers/{specs,plans}/
+  2026-06-20-prism-ratio-gate-*`.
+- **Fix direction tried — the pure O(1) spread-persistence gate — and REFUTED (fourth honest-null,
+  reverted).** This is the cleaner design the EWMA bullet pointed to, done **O(1)**: since the current
+  `C_spray` is already a scalar (`epoch_max−epoch_min`, not per-path), we smoothed **only** that scalar
+  into a slow per-flow EWMA `S_slow`, kept `C_cc` instantaneous (avoiding the EWMA backfire), and gated
+  HOLD on persistence — `persistent ⟺ c_spray ≥ δ·S_slow` (flag `-prism_spread_persist`, δ=0 = OFF =
+  byte-identical; β = baseline weight). **This corrects the "O(paths) regardless" claim above — the
+  pure spread-only version is O(1)** (one per-flow scalar). A 5-seed f0+f8 sweep over δ∈{0,0.5,1.0} ×
+  β∈{1/16,1/64}: δ=0 reproduced PRISM exactly, but **no (δ,β) recovered f0** — δ=0.5 was *byte-identical*
+  to default (the scalar `C_spray` rarely dips below half its slow baseline, so the gate barely fires —
+  the scalar range is a weaker persistence proxy than per-path), δ=1.0 gave +0.8…+2.5 Gbps (within ±15
+  seed noise), avg-FCT flat 945–946; f8 held within seed noise; the null is robust across both β. It
+  confirms the ratio-gate finding — **releasing f0 HOLDs does not recover f0 throughput** — from a
+  second independent O(1) angle. Prototype reverted; design/plan retained as
+  `docs/superpowers/{specs,plans}/2026-06-20-prism-spread-persistence-*`.
+  So the symmetric cost now has **four** refuted fixes on record — `T_spray`/`kappa` (knobs), the
+  per-path EWMA (backfired −18%), the O(1) ratio gate, and this O(1) persistence gate (both do-no-harm
+  nulls) — and the only formally-untried variant (faithful per-path persistence) is O(paths), disallowed
+  by PRISM's O(1) tenet. The f0 cost is an intrinsic property of the O(1) decomposition, not a tunable defect.
 
 ## Honest caveats
 - The proximate cause (under-growth: cut counts, region split, cwnd) and the f8-persistent /

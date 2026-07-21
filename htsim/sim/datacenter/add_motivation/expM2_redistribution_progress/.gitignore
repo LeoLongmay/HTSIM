@@ -1,0 +1,12 @@
+# Keep source, locked configuration, and final figures. All generated M2 data
+# is transient and can be regenerated through repro_controlled.sh.
+!README.md
+!configs/
+!configs/*.csv
+data/
+!figs/
+!figs/*.png
+!figs/*.pdf
+!figs/calibration/
+!figs/calibration/*.png
+!figs/calibration/*.pdf

@@ -132,7 +132,7 @@ def render_main_perf(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, f
             f"{token}{f}:g={aggs[lab][f]['goodput'][0]:.1f},avgfct={aggs[lab][f]['avg_fct'][0]:.0f}us,"
             f"cr={aggs[lab][f]['cr'][0]:.2f}" for f in failed if aggs[lab].get(f)))
 
-def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f", goodput_tbps=False):
+def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, seeds, stem_prefix, xlabel, token="f", goodput_tbps=False, output_suffix=""):
     """Same data as render_main_perf, but emits THREE standalone figures (one metric each):
     `{stem_prefix}_goodput` (Gbps), `{stem_prefix}_avg_fct` (ms), `{stem_prefix}_p99_fct` (ms).
     aggregate() stores FCT in microseconds, so the two FCT panels scale by 1e-3 -> milliseconds."""
@@ -154,19 +154,47 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
                         color=plot_style.COLORS[ck], label=disp)
         ax.set_ylabel(ylabel)
         ax.set_xlabel(xlabel)
-        if key == "goodput":
-            ax.yaxis.set_label_coords(-0.2, 0.45)
+        if (tag_prefix == "expA" or tag_prefix == "expAload") and key == "goodput":
+            if tag_prefix == "expA":
+                ax.yaxis.set_label_coords(-0.2, 0.45)
+            elif tag_prefix == "expAload":
+                ax.yaxis.set_label_coords(-0.22, 0.45)
             ax.xaxis.label.set_x(0.45)
+        if (tag_prefix == "expD1" or tag_prefix == "expD3load") and key == "goodput":
+            ax.yaxis.set_label_coords(-0.1, 0.45)
+            ax.xaxis.label.set_x(0.45)
+        if tag_prefix == "expBa4os":
+            if key == "goodput":
+                ax.yaxis.set_label_coords(-0.23, 0.45)
+                ax.xaxis.label.set_x(0.45)
+            if key == "p99_fct":
+                ax.xaxis.label.set_x(0.45)
+        if tag_prefix == "expEp128":
+            if key == "avg_fct":
+                ax.xaxis.label.set_x(0.45)
+            if key == "goodput":
+                ax.yaxis.set_label_coords(-0.23, 0.45)
+                ax.xaxis.label.set_x(0.45)
+        if tag_prefix == "expEp1024":
+            if key == "avg_fct":
+                ax.xaxis.label.set_x(0.45)
+            if key == "goodput":
+                ax.yaxis.set_label_coords(-0.16, 0.45)
+                ax.xaxis.label.set_x(0.45)
+        if tag_prefix == "expD2_4os":
+            if key == 'goodput':
+                ax.yaxis.set_label_coords(-0.2, 0.45)
+                ax.xaxis.label.set_x(0.45)
         ax.set_xticks(failed)
         ax.grid(alpha=0.3)
         # ax.legend(fontsize=9)
-        incomplete = [(lab, f, aggs[lab][f]["cr"][0]) for (lab, _d, _c) in baselines
-                      for f in failed if aggs[lab].get(f) and aggs[lab][f]["cr"][0] < 0.999]
-        if incomplete:
-            note = "completion<1: " + ", ".join(f"{lab}@f{f}={cr:.2f}" for lab, f, cr in incomplete)
-            fig.text(0.5, 0.005, note, ha="center", fontsize=7, color="firebrick")
+        # incomplete = [(lab, f, aggs[lab][f]["cr"][0]) for (lab, _d, _c) in baselines
+        #               for f in failed if aggs[lab].get(f) and aggs[lab][f]["cr"][0] < 0.999]
+        # if incomplete:
+        #     note = "completion<1: " + ", ".join(f"{lab}@f{f}={cr:.2f}" for lab, f, cr in incomplete)
+        #     fig.text(0.5, 0.005, note, ha="center", fontsize=7, color="firebrick")
         plt.tight_layout()
-        plot_style.save(fig, f"{stem_prefix}_{suffix}", figs_dir)
+        plot_style.save(fig, f"{stem_prefix}_{suffix}{output_suffix}", figs_dir)
         plt.close(fig)
     for (lab, disp, _c) in baselines:
         print(f"[{stem_prefix}] {disp}: " + " ".join(
@@ -187,7 +215,7 @@ def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None):
                for (lab, disp, ck) in baselines]
     if row_counts:
         n = len(row_counts)
-        fig = plt.figure(figsize=(2.6 * max(row_counts), 0.42 * n))   # short -> rows close; tight-crop trims
+        fig = plt.figure(figsize=(2.7 * max(row_counts), 0.42 * n))   # short -> rows close; tight-crop trims
         ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
         i = 0
         for r, cnt in enumerate(row_counts):
@@ -348,6 +376,89 @@ def render_mechanism_split(data_dir, figs_dir, tag_prefix, stem_prefix, mech_fai
     if os.path.exists(strack_pr):
         print(f"[{stem_prefix}] DISTINCTNESS (per-ACK cwnd-decreases @{lbl}): "
               f"STrack={strack_dec}  REPS+NSCC={reps_dec}")
+
+def render_decomposition(data_dir, figs_dir, tag_prefix, cells, fig_stem,
+                         seed=13, bin_w_ms=0.02, xlim_ms=None, ylim_us=None):
+    """PRISM's two decomposed signals as time series, one panel per cell.
+    `cells` = [(failed, panel_label), ...]. Reads {tag_prefix}_prism_f{failed}_s{seed}.epoch.csv
+    and plots, per panel: faint raw + bold 20us-binned C_cc (floor->CC) and C_spray (spread->spray),
+    a target line at ~1 RTT (base_rtt), and a mean-C_spray annotation (us)."""
+    import matplotlib.pyplot as plt
+    plot_style.apply_style(13)
+    n = len(cells)
+    fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 4.0), sharey=True)
+    if n == 1:
+        axes = [axes]
+    for ax, (failed, label) in zip(axes, cells):
+        path = os.path.join(data_dir, f"{tag_prefix}_prism_f{failed}_s{seed}.epoch.csv")
+        ep = metrics.parse_prism_epoch(path) if os.path.exists(path) else []
+        if not ep:
+            ax.set_title(f"{label}\n(no data)", fontsize=11); ax.set_xlabel("time (ms)"); continue
+        te = [r["time_ns"] / 1e6 for r in ep]        # ms
+        cc = [r["c_cc_ns"] / 1000.0 for r in ep]      # us
+        sp = [r["c_spray_ns"] / 1000.0 for r in ep]   # us
+        base_us = ep[0]["base_rtt_ns"] / 1000.0       # ~14 us
+        ax.plot(te, cc, color=plot_style.COLORS["ccc"], lw=0.6, alpha=0.20)
+        ax.plot(te, sp, color=plot_style.COLORS["spray"], lw=0.6, alpha=0.20)
+        bx, bcc = _bin_series(te, cc, bin_w_ms)
+        ax.plot(bx, bcc, color=plot_style.COLORS["ccc"], lw=2.2, label="C_cc (floor -> CC)")
+        sx, bsp = _bin_series(te, sp, bin_w_ms)
+        ax.plot(sx, bsp, color=plot_style.COLORS["spray"], lw=2.2, label="C_spray (spread -> spray)")
+        ax.axhline(base_us, color=plot_style.COLORS["target"], ls="--", lw=1.3,
+                   label=f"target (~1 RTT, {base_us:.0f}us)")
+        ax.text(0.97, 0.95, f"mean C_spray: {sum(sp)/len(sp):.0f} us",
+                transform=ax.transAxes, ha="right", va="top", fontsize=9,
+                bbox=dict(boxstyle="round", fc="white", alpha=0.7))
+        ax.set_title(label, fontsize=11); ax.set_xlabel("time (ms)"); ax.grid(alpha=0.3)
+        if xlim_ms:
+            ax.set_xlim(0, xlim_ms)
+    axes[0].set_ylabel("Queuing delay (us)")
+    axes[0].legend(fontsize=8, loc="upper left")
+    if ylim_us is not None:
+        axes[0].set_ylim(0, ylim_us)
+    plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
+
+def render_decomposition_merged(figs_dir, fig_stem, panels, ylim_us=None, bin_w_ms=0.02):
+    """Merged PRISM decomposition: overlay scales per panel (solid vs dashed), 20us-binned only
+    (no faint raw). `panels` = [(panel_title, [(data_dir, tag_prefix, failed, seed, ls, label, cc_color, spray_color), ...])].
+    Per-series colors (cc_color for C_cc, spray_color for C_spray); linestyle also distinguishes scale."""
+    import matplotlib.pyplot as plt
+    plot_style.apply_style(22)
+    n = len(panels)
+    fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 4.0), sharey=True)
+    if n == 1:
+        axes = [axes]
+    for ax, (title, series) in zip(axes, panels):
+        base_us = None
+        for (data_dir, tag_prefix, failed, seed, ls, slabel, cc_color, spray_color) in series:
+            path = os.path.join(data_dir, f"{tag_prefix}_prism_f{failed}_s{seed}.epoch.csv")
+            ep = metrics.parse_prism_epoch(path) if os.path.exists(path) else []
+            if not ep:
+                continue
+            te = [r["time_ns"] / 1e6 for r in ep]
+            cc = [r["c_cc_ns"] / 1000.0 for r in ep]
+            sp = [r["c_spray_ns"] / 1000.0 for r in ep]
+            base_us = ep[0]["base_rtt_ns"] / 1000.0
+            bx, bcc = _bin_series(te, cc, bin_w_ms)
+            ax.plot(bx, bcc, color=cc_color, lw=2.2, ls=ls, label=r"$C_{cc}$" + f" {slabel}")
+            sx, bsp = _bin_series(te, sp, bin_w_ms)
+            ax.plot(sx, bsp, color=spray_color, lw=2.2, ls=ls, label=r"$C_{spray}$" + f" {slabel}")
+        if base_us is not None:
+            # darker, thicker target line; no label -> excluded from legend (explained in text)
+            ax.axhline(base_us, color="#444444", ls="--", lw=2.6, zorder=1)
+        # ax.set_title(title, fontsize=11);
+        ax.set_xlabel("time (ms)"); ax.grid(alpha=0.3)
+        if ylim_us is not None:
+            ax.set_ylim(0, ylim_us)
+    axes[0].set_ylabel("Queuing delay (us)")
+    axes[0].yaxis.set_label_coords(-0.13, 0.45)
+    _handles, _labels = axes[0].get_legend_handles_labels()   # figure itself carries NO legend
+    _legfig = plt.figure(figsize=(10, 1.0))
+    _legfig.legend(_handles, _labels, loc="center", ncol=len(_labels), frameon=False, fontsize=16)
+    for _ext in ("png", "pdf"):
+        _legfig.savefig(os.path.join(figs_dir, f"{fig_stem}_legend.{_ext}"), bbox_inches="tight", pad_inches=0.05)
+    plt.close(_legfig)
+    plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
 
 def render_mechanism(data_dir, figs_dir, tag_prefix, fig_stem, mech_failed, target_us=6.0, base_ns=13945, mech_label=None):
     """Mechanism @ mech_failed: (a) REPS+NSCC avg/floor vs PRISM floor C_cc vs target;

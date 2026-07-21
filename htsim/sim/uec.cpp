@@ -1,17 +1,24 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 #include "uec.h"
 #include <math.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstdint>
 #include <fstream>
+#include <iomanip>
+#include <limits>
+#include <map>
 #include <sstream>
+#include <stdexcept>
 #include "circular_buffer.h"
 #include "data_collector.h"
+#include "queue.h"
 #include "uec_logger.h"
 #include "pciemodel.h"
 #include "prism_decompose.h"  // PRISM decomposition logic (used by updateCwndOnAck_PRISM)
 #include "strack_cc.h"               // STrack decision tree (used by updateCwndOnAck_STRACK)
 #include "mnscc_median.h"            // MNSCC median framework (used by updateCwndOnAck_MNSCC)
+#include "motivation_trace.h"
 #include "swift_cc.h"                // Swift CC pure logic (used by updateCwndOnAck_SWIFT)
 
 using namespace std;
@@ -34,6 +41,57 @@ void tokenize(const std::string& str, char delim, std::vector<std::string>& out)
         out.push_back(s);
     }
 }
+
+const char* motivationSelectionSource(UecMpSelection::Source source) {
+    switch (source) {
+    case UecMpSelection::RECYCLED: return "recycled";
+    case UecMpSelection::FIRST_WINDOW: return "first_window";
+    case UecMpSelection::RANDOM_EMPTY: return "random_empty";
+    case UecMpSelection::UNKNOWN: return "unknown";
+    }
+    return "unknown";
+}
+
+const char* motivationRegionName(prism::Region region) {
+    switch (region) {
+    case prism::INCREASE: return "increase";
+    case prism::HOLD: return "hold";
+    case prism::DECREASE: return "decrease";
+    }
+    return "unknown";
+}
+
+const char* motivationCoordinationActionName(PrismCoordinationAction action) {
+    switch (action) {
+    case PrismCoordinationAction::RETAIN: return "retain";
+    case PrismCoordinationAction::INVALIDATE: return "invalidate";
+    case PrismCoordinationAction::PENDING: return "pending";
+    case PrismCoordinationAction::RESERVE: return "reserve";
+    case PrismCoordinationAction::ROUND_COMPLETE_PROGRESS: return "round_complete_progress";
+    case PrismCoordinationAction::ROUND_COMPLETE_HANDOFF: return "round_complete_handoff";
+    case PrismCoordinationAction::ROUND_COMPLETE_RETRY: return "round_complete_retry";
+    case PrismCoordinationAction::ROUND_COMPLETE_CLEAN: return "round_complete_clean";
+    }
+    return "unknown";
+}
+
+string motivationCsvField(const string& value) {
+    if (value.find_first_of(",\"\r\n") == string::npos) {
+        return value;
+    }
+
+    string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (char character : value) {
+        if (character == '"') {
+            escaped.push_back('"');
+        }
+        escaped.push_back(character);
+    }
+    escaped.push_back('"');
+    return escaped;
+}
 }  // namespace
 
 // Static stuff
@@ -42,6 +100,9 @@ flowid_t UecSrc::_debug_flowid = UINT32_MAX;
 // to all paths.
 int UecSrc::_global_node_count = 0;
 bool UecSrc::_shown = false;
+MotivationTraceWriter UecSrc::_motivation_trace_writer;
+map<string, uint64_t> UecSrc::_motivation_physical_path_ids;
+map<string, uint64_t> UecSrc::_motivation_queue_ids;
 mem_b UecSrc::_configured_maxwnd = 0;
 
 /* _min_rto can be tuned using setMinRTO. Don't change it here.  */
@@ -73,6 +134,10 @@ bool UecSink::_oversubscribed_cc = false; // can only be enabled when receiver_b
 
 UecSrc::Sender_CC UecSrc::_sender_cc_algo = UecSrc::NSCC;
 
+bool UecSrc::_motivation_residual_recycle = false;
+simtime_picosec UecSrc::_motivation_residual_threshold = timeFromUs(10u);
+PrismCoordinationMode UecSrc::_prism_coordination_mode = PrismCoordinationMode::DISABLED;
+
 /* 
     The following variable values are not default values, there are initializer values. The actual
     default values are set in initNsccParams/initRcccParams.
@@ -99,6 +164,24 @@ simtime_picosec UecSrc::_adjust_period_threshold = timeFromUs(12u);
 simtime_picosec UecSrc::_target_Qdelay = timeFromUs(6u);
 simtime_picosec UecSrc::_prism_T_spray = 0;   // 0 sentinel: follow _target_Qdelay
 double UecSrc::_prism_kappa = 1.0;
+double          UecSrc::_prism_smooth_beta      = 1.0;
+double          UecSrc::_prism_hysteresis       = 0.0;
+simtime_picosec UecSrc::_prism_engage_spread    = 0;
+simtime_picosec UecSrc::_prism_disengage_spread = 0;
+double          UecSrc::_prism_engage_beta      = 0.1;
+double          UecSrc::_prism_engage_mult      = 0.0;
+double          UecSrc::_prism_disengage_ratio  = 0.7;
+uint32_t        UecSrc::_prism_n_min            = 3;
+bool            UecSrc::_prism_path_median_signal = false;
+bool            UecSrc::_prism_path_median_spread = false;
+bool            UecSrc::_prism_hold_as_increase = false;
+double          UecSrc::_laps_beta              = 1.0;
+simtime_picosec UecSrc::_laps_probe_interval    = timeFromUs(50u);
+bool            UecSrc::_prism_oracle_validation = false;
+std::string     UecSrc::_prism_oracle_log_path = "";
+std::string     UecSrc::_prism_oracle_run_id = "";
+std::string     UecSrc::_prism_oracle_scenario = "";
+uint32_t        UecSrc::_prism_oracle_seed = 0;
 uint32_t UecSrc::_mnscc_h = 0;
 double          UecSrc::_swift_ai = 1.0;
 double          UecSrc::_swift_beta = 0.8;
@@ -128,6 +211,36 @@ int UecSrc::probe_retry_time = 5;
 float UecSrc::loss_retx_factor = 1.5;
 int UecSrc::min_retx_config = 5;
 /* End SLEEK parameters */
+
+void UecSrc::configureMotivationTrace(const std::string& prefix, const std::string& run_id,
+                                      const std::string& scenario, uint32_t seed,
+                                      int64_t flow_filter) {
+    _motivation_physical_path_ids.clear();
+    _motivation_queue_ids.clear();
+    _motivation_trace_writer.configure(prefix, run_id, scenario, seed, flow_filter);
+}
+
+MotivationTraceWriter& UecSrc::motivationTrace() {
+    return _motivation_trace_writer;
+}
+
+void UecSrc::validateMotivationTraceRuntimeConfig(bool reps_traceable, uint32_t planes) {
+    if (!_motivation_trace_writer.enabled()) {
+        return;
+    }
+    if (reps_traceable && planes == 1 && _sender_based_cc && !_receiver_based_cc) {
+        return;
+    }
+    throw std::invalid_argument(
+        "Motivation tracing path metadata supports only REPS runs: require "
+        "-load_balancing_algo reps, reps_legacy, or reps_actual, -planes 1, "
+        "sender-side CC active, and receiver-side CC inactive.");
+}
+
+void UecSrc::setFlowId(flowid_t flow_id) {
+    _flow.set_flowid(flow_id);
+    configureMotivationTokenObserver();
+}
 
 void UecSrc::initNsccParams(simtime_picosec network_rtt,
                             linkspeed_bps linkspeed,
@@ -430,13 +543,26 @@ void UecNIC::sendControlPktNow() {
 
     _control_size -= p->size();
     // At the NIC, only control packets or data packets with a payload size of zero are permitted to be transmitted at a higher priority.
-    assert(p->route() == NULL || (p->type() == UECDATA && p->size() == UecBasePacket::ACKSIZE));
-    const Route* route;
-    if (cp.src)
-        route = cp.src->getPortRoute(port_to_use);
-    else
-        route = cp.sink->getPortRoute(port_to_use);
-    p->set_route(*route);
+    assert(p->route() == NULL || p->lapsPinnedRoute() ||
+           (p->type() == UECDATA && p->size() == UecBasePacket::ACKSIZE));
+    if (p->lapsPinnedRoute()) {
+        assert(p->route() != nullptr);
+    } else if (cp.src && cp.src->isLaps() && p->lapsPidValid()) {
+        const Route* nic_route = cp.src->getPortRoute(port_to_use);
+        p->set_route(cp.src->lapsForwardRoute(p->lapsPid(), *nic_route));
+        p->setLapsPinnedRoute(true);
+    } else {
+        const Route* route = cp.src ? cp.src->getPortRoute(port_to_use)
+                                    : cp.sink->getPortRoute(port_to_use);
+        p->set_route(*route);
+    }
+    if (cp.src && cp.src->isLaps() && p->lapsPidValid()) {
+        if (const auto audit = cp.src->lapsRouteAudit()) {
+            assert(p->type() == UECDATA);
+            audit->recordForward(cp.src->flowId(), static_cast<UecDataPacket*>(p)->epsn(),
+                                 p->lapsPid(), *p->route());
+        }
+    }
     p->sendOn();
 }
 
@@ -529,6 +655,10 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                bool rts)
         : EventSource(eventList, "uecSrc"), 
           _mp(move(mp)),
+          _prism_coordinator(_prism_coordination_mode, _target_Qdelay,
+                             _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay),
+          _motivation_epoch_observer(_prism_kappa, _prism_n_min, _prism_smooth_beta,
+                                     _prism_hysteresis),
           _nic(nic), 
           _msg_tracker(),
           _last_event_time(),
@@ -555,6 +685,10 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
     _probe_timer_when = 0;
     _probe_seqno = 0; 
     _probe_send_time = 0; 
+    _laps_probe_timer_handle = eventlist().nullHandle();
+    _laps_probe_timer_when = 0;
+    _laps_probe_seqno = 0;
+    _laps_probe_outstanding.clear();
 
     _flow_logger = NULL;
 
@@ -638,6 +772,10 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 updateCwndOnAck = &UecSrc::updateCwndOnAck_MSWIFT;
                 updateCwndOnNack = &UecSrc::updateCwndOnNack_SWIFT;
                 break;
+            case LAPS:
+                updateCwndOnAck = &UecSrc::updateCwndOnAck_NSCC;
+                updateCwndOnNack = &UecSrc::updateCwndOnNack_NSCC;
+                break;
             default:
                 cout << "Unknown CC algo specified " << _sender_cc_algo << endl;
                 assert(0);
@@ -653,6 +791,281 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
 
     _nscc_overall_stats = {};
     _nscc_fulfill_stats = {};
+    configureMotivationTokenObserver();
+}
+
+UecSrc::~UecSrc() {
+    cancelLapsProbe();
+}
+
+bool UecSrc::isLaps() const {
+    return _sender_cc_algo == LAPS && dynamic_cast<const UecMpLaps*>(_mp.get()) != nullptr;
+}
+
+const Route& UecSrc::lapsForwardRoute(uint16_t pid) const {
+    if (!isLaps() || _laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
+        throw logic_error("LAPS has no plane-0 path catalog");
+    }
+    return *_laps_path_catalogs[0]->entry(pid).forward;
+}
+
+const Route& UecSrc::lapsForwardRoute(uint16_t pid, const Route& nic_port_route) const {
+    if (!isLaps()) {
+        throw logic_error("only LAPS can request a pinned catalog route");
+    }
+    for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
+        if (_ports[plane]->route() == &nic_port_route) {
+            if (plane >= _laps_path_catalogs.size() || !_laps_path_catalogs[plane]) {
+                throw logic_error("LAPS NIC plane has no path catalog");
+            }
+            return *_laps_path_catalogs[plane]->entry(pid).forward;
+        }
+    }
+    throw logic_error("LAPS route is not bound to a NIC plane");
+}
+
+void UecSrc::lapsSetPathResolver(LapsPathResolver resolver) {
+    if (isLaps()) {
+        _laps_path_resolver = std::move(resolver);
+    }
+}
+
+bool UecSrc::lapsResolvePath(uint32_t entropy, uint32_t send_port,
+                              LapsPathKey& path) const {
+    if (!isLaps() || send_port >= _ports.size()) {
+        return false;
+    }
+
+    if (send_port < _laps_path_catalogs.size() && _laps_path_catalogs[send_port]) {
+        const auto& catalog = *_laps_path_catalogs[send_port];
+        const uint16_t pid = static_cast<uint16_t>(entropy & (catalog.size() - 1));
+        if (catalog.entry(pid).forward->size() == 0)
+            return false;
+        path = LapsPathKey{pid};
+        return true;
+    }
+
+    if (!_laps_path_resolver) {
+        return false;
+    }
+
+    vector<const BaseQueue*> queues;
+    if (!_laps_path_resolver(flowId(), entropy, send_port, queues) || queues.empty()) {
+        return false;
+    }
+
+    for (const BaseQueue* queue : queues) {
+        if (queue == nullptr) {
+            return false;
+        }
+    }
+    // Resolver fallback only supports test scaffolding. Production LAPS uses
+    // the catalog branch above.
+    path = LapsPathKey{static_cast<uint16_t>(entropy)};
+    return true;
+}
+
+bool UecSrc::lapsResolvePath(uint32_t entropy, const Route& send_route,
+                              LapsPathKey& path) const {
+    for (uint32_t port = 0; port < _ports.size(); ++port) {
+        if (_ports[port]->route() == &send_route) {
+            return lapsResolvePath(entropy, port, path);
+        }
+    }
+    // A paired LAPS send without a configured source port cannot be
+    // mapped to a physical plane, so do not silently fall back to entropy.
+    return false;
+}
+
+void UecSrc::configureMotivationTokenObserver() {
+    if (!_motivation_trace_writer.enabledFor(flowId())) {
+        _mp->setTokenObserver({});
+        return;
+    }
+
+    _mp->setTokenObserver([this](const UecMpTokenEvent& event) {
+        if (!_motivation_trace_writer.enabledFor(flowId())) {
+            return;
+        }
+        _motivation_trace_writer.logToken(_motivation_trace_writer.nextEventSeq(), flowId(),
+                                          eventlist().now(), event);
+    });
+}
+
+void UecSrc::motivationSetPathResolver(MotivationPathResolver resolver,
+                                       uint32_t path_entropy_size) {
+    if (!_motivation_trace_writer.enabledFor(flowId())) {
+        return;
+    }
+    _motivation_path_resolver = std::move(resolver);
+    _motivation_path_entropy_size = path_entropy_size;
+    _motivation_paths.clear();
+    _motivation_paths.resize(path_entropy_size);
+    _motivation_path_attempted.assign(path_entropy_size, false);
+}
+
+bool UecSrc::motivationResolvePath(uint32_t entropy) {
+    if (!_motivation_trace_writer.enabledFor(flowId()) ||
+        entropy >= _motivation_path_entropy_size) {
+        return false;
+    }
+
+    if (_motivation_path_attempted[entropy]) {
+        const MotivationResolvedPath& cached = _motivation_paths[entropy];
+        return cached.physical_path_id != MotivationEpochObserver::NO_PHYSICAL_PATH &&
+               !cached.queues.empty();
+    }
+    _motivation_path_attempted[entropy] = true;
+
+    vector<const BaseQueue*> queues;
+    bool resolved = _motivation_path_resolver &&
+                    _motivation_path_resolver(flowId(), entropy, queues) &&
+                    !queues.empty();
+    for (const BaseQueue* queue : queues) {
+        if (queue == nullptr) {
+            resolved = false;
+            break;
+        }
+    }
+
+    if (!resolved) {
+        _motivation_trace_writer.logPath({
+            flowId(), entropy, MotivationEpochObserver::NO_PHYSICAL_PATH,
+            "resolution_failed", "", -1.0, false, ""});
+        return false;
+    }
+
+    ostringstream path_key;
+    ostringstream fingerprint;
+    ostringstream ordered_queue_ids;
+    linkspeed_bps bottleneck = numeric_limits<linkspeed_bps>::max();
+    bool contains_reduced_link = false;
+    for (size_t index = 0; index < queues.size(); ++index) {
+        const BaseQueue& queue = *queues[index];
+        const string& queue_name = queue.queueName();
+        path_key << queue_name.size() << ':' << queue_name;
+        if (index != 0) {
+            fingerprint << '|';
+            ordered_queue_ids << '|';
+        }
+        fingerprint << queue_name;
+
+        auto queue_id = _motivation_queue_ids.emplace(
+            queue_name, static_cast<uint64_t>(_motivation_queue_ids.size()));
+        ordered_queue_ids << queue_id.first->second;
+        if (queue_id.second) {
+            _motivation_trace_writer.logLink({
+                queue_id.first->second, motivationCsvField(queue_name),
+                speedAsGbps(queue.bitrate()),
+                queue.bitrate() < _network_linkspeed});
+        }
+
+        bottleneck = min(bottleneck, queue.bitrate());
+        contains_reduced_link =
+            contains_reduced_link || queue.bitrate() < _network_linkspeed;
+    }
+
+    auto physical_path = _motivation_physical_path_ids.emplace(
+        path_key.str(), static_cast<uint64_t>(_motivation_physical_path_ids.size()));
+    MotivationResolvedPath& cached = _motivation_paths[entropy];
+    cached.physical_path_id = physical_path.first->second;
+    cached.queues = std::move(queues);
+
+    _motivation_trace_writer.logPath({
+        flowId(), entropy, cached.physical_path_id, "resolved",
+        motivationCsvField(fingerprint.str()), speedAsGbps(bottleneck),
+        contains_reduced_link, ordered_queue_ids.str()});
+    return true;
+}
+
+uint64_t UecSrc::motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
+                                  simtime_picosec qdelay, bool genuine,
+                                  const UecMpSelection& selection,
+                                  uint64_t newly_acked_bytes,
+                                  uint64_t new_data_bytes_sent_total,
+                                  uint64_t cwnd_bytes) {
+    if (!_motivation_trace_writer.enabledFor(flowId())) {
+        return UecMpTokenEvent::NO_EVENT;
+    }
+
+    motivationResolvePath(pkt.ev());
+
+    const uint64_t epoch_id = _motivation_epoch_observer.currentEpochId();
+    uint64_t physical_path_id = MotivationEpochObserver::NO_PHYSICAL_PATH;
+    uint64_t forward_path_backlog = numeric_limits<uint64_t>::max();
+    if (pkt.ev() < _motivation_paths.size()) {
+        const MotivationResolvedPath& path = _motivation_paths[pkt.ev()];
+        if (path.physical_path_id != MotivationEpochObserver::NO_PHYSICAL_PATH &&
+            !path.queues.empty()) {
+            physical_path_id = path.physical_path_id;
+            forward_path_backlog = 0;
+            for (const BaseQueue* queue : path.queues) {
+                forward_path_backlog += queue->backlogDrainTime();
+            }
+        }
+    }
+    const simtime_picosec target_spray =
+        _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
+    _motivation_pending_epoch = _motivation_epoch_observer.observe(
+        eventlist().now(), qdelay, genuine, pkt.ev(), physical_path_id, _base_rtt,
+        _target_Qdelay, target_spray);
+
+    const uint64_t event_seq = _motivation_trace_writer.nextEventSeq();
+    _motivation_trace_writer.logAck({
+        event_seq,
+        eventlist().now(),
+        flowId(),
+        epoch_id,
+        pkt.acked_psn(),
+        pkt.ev(),
+        physical_path_id,
+        raw_rtt,
+        _base_rtt,
+        static_cast<int64_t>(qdelay),
+        pkt.ecn_echo(),
+        genuine,
+        pkt.rtx_echo(),
+        forward_path_backlog,
+        motivationSelectionSource(selection.source),
+        selection.token_id,
+        newly_acked_bytes,
+        new_data_bytes_sent_total,
+        cwnd_bytes});
+    return event_seq;
+}
+
+void UecSrc::motivationLogPendingEpoch() {
+    if (!_motivation_pending_epoch) {
+        return;
+    }
+    if (!_motivation_trace_writer.enabledFor(flowId())) {
+        _motivation_pending_epoch.reset();
+        return;
+    }
+
+    const MotivationEpochResult& epoch = *_motivation_pending_epoch;
+    const bool prism_active = _sender_based_cc && _sender_cc_algo == PRISM;
+    _motivation_trace_writer.logEpoch({
+        _motivation_trace_writer.nextEventSeq(),
+        flowId(),
+        epoch.epoch_id,
+        epoch.start_ps,
+        epoch.end_ps,
+        epoch.sample_count,
+        epoch.raw_floor_ps,
+        epoch.raw_spread_ps,
+        epoch.smooth_floor_ps,
+        epoch.smooth_spread_ps,
+        motivationRegionName(epoch.observed_region),
+        prism_active ? motivationRegionName(static_cast<prism::Region>(_prism_region))
+                     : "not_applicable",
+        prism_active && _prism_engaged,
+        epoch.entropy_coverage,
+        epoch.physical_path_coverage,
+        _motivation_new_data_bytes_sent_total,
+        _recvd_bytes,
+        static_cast<uint64_t>(_cwnd)});
+    _motivation_pending_epoch.reset();
 }
 
 void UecSrc::delFromSendTimes(simtime_picosec time, UecDataPacket::seq_t seq_no) {
@@ -1003,6 +1416,9 @@ bool UecSrc::checkFinished(UecDataPacket::seq_t cum_ack) {
              << " rtx_queue " << _rtx_queue.size()
              << " done_sending " << _done_sending << endl;
 
+    if (_done_sending) {
+        cancelLapsProbe();
+    }
     return _done_sending;
 }
 
@@ -1066,13 +1482,22 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     auto i = _tx_bitmap.find(acked_psn);
     auto rtx_time = _rtx_times.find(acked_psn);
     uint32_t ooo = pkt.ooo();
+    const bool valid_normal_send_attempt =
+        !pkt.is_probe_ack() && i != _tx_bitmap.end() &&
+        validateSendTs(acked_psn, pkt.rtx_echo());
+    const std::optional<UecMpSelection> validated_normal_selection =
+        valid_normal_send_attempt ? std::optional<UecMpSelection>(i->second.selection)
+                                  : std::nullopt;
+    const UecMpSelection ack_selection =
+        _motivation_ack_selection_state.consumeAckSelection(
+            pkt.is_probe_ack(), acked_psn,
+            validated_normal_selection ? &*validated_normal_selection : nullptr);
 
-    mem_b pkt_size;
     simtime_picosec delay;
     simtime_picosec raw_rtt = 0;
     simtime_picosec send_time = 0;
 
-    if (i != _tx_bitmap.end() && validateSendTs(acked_psn, pkt.rtx_echo()) && (!pkt.is_probe_ack()) ) {
+    if (valid_normal_send_attempt) {
     //a timestamp is valid if 
     //1. the received ack is new packet and no retransmission at local record;
     //or 2. the received ack is a retransmitted packet and local record shows this packet only gets retransmitted once. 
@@ -1087,7 +1512,6 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         }
         //auto seqno = i->first;
         send_time = i->second.send_time;
-        pkt_size = i->second.pkt_size;
         raw_rtt = eventlist().now() - send_time;
 
         // PRISM: read-only per-path RTT log, gated by env var PRISM_PATHRTT.
@@ -1116,15 +1540,18 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             update_delay(raw_rtt, true, pkt.ecn_echo());
             delay = raw_rtt - _base_rtt;
             _prism_genuine_sample = true;   // genuine per-path RTT sample (PRISM accumulates only these)
+            _prism_genuine_sample_path = i->second.path_id;
             // bounded by distinct ev's (<= path count); cleared at the epoch boundary (may be briefly stale across a quick_adapt window).
             if (_sender_cc_algo == PRISM && _prism_loss_decomp && !pkt.ecn_echo())
                 _prism_loss_evs_good.insert(pkt.ev());   // a genuinely clean (non-ECN) path this epoch
         } else {
             delay = get_avg_delay();
             _prism_genuine_sample = false;  // smoothed fallback, not a per-path sample
+            _prism_genuine_sample_path = UINT32_MAX;
         }
     } else {
         _prism_genuine_sample = false;      // no send record (probe / late ACK): fallback, not a sample
+        _prism_genuine_sample_path = UINT32_MAX;
         // this can happen when the ACK arrives later than a cumulative ACK covering the NACKed
         // packet.
         if (UecSrc::_debug)
@@ -1147,11 +1574,40 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             }else{
                 delay = get_avg_delay();
             }
-            pkt_size = 0;
         }else{
-            pkt_size = _mtu;
             delay = get_avg_delay();
         }
+    }
+
+    {
+        static std::ofstream* prism_hold_trace = [](){
+            const char* p = getenv("PRISM_HOLD_TRACE");
+            return (p && *p) ? new std::ofstream(p) : nullptr;
+        }();
+        if (prism_hold_trace) {
+            (*prism_hold_trace) << (uint64_t)timeAsNs(eventlist().now()) << ',' << flowId() << ','
+                                << (_prism_genuine_sample ? 1 : 0) << ','
+                                << (uint64_t)timeAsNs(_prism_genuine_sample ? delay : 0) << ','
+                                << (uint64_t)timeAsNs(_base_rtt) << ','
+                                << (pkt.ecn_echo() ? 1 : 0) << ','
+                                << newly_recvd_bytes << ',' << _cwnd << '\n';
+            prism_hold_trace->flush();
+        }
+    }
+
+    const bool valid_laps_probe_ack = pkt.is_probe_ack() &&
+        _laps_probe_outstanding.find(pkt.acked_psn()) != _laps_probe_outstanding.end();
+    const bool usable_laps_measurement = isLaps() &&
+        pkt.lapsDelayValid() && (valid_normal_send_attempt || valid_laps_probe_ack);
+    if (usable_laps_measurement) {
+        const simtime_picosec now = eventlist().now();
+        if (pkt.is_probe_ack()) {
+            _laps_probe_outstanding.erase(pkt.acked_psn());
+            _mp->observeLapsProbe(pkt.ev(), pkt.lapsOneWayDelay(), now);
+        } else {
+            _mp->observeLapsDelay(pkt.ev(), pkt.lapsOneWayDelay(), now);
+        }
+        scheduleLapsProbe();
     }
 
     handleCumulativeAck(cum_ack);
@@ -1185,7 +1641,128 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     //assert(_in_flight >= 0);
 
 
-    _mp->processEv(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
+    const bool outcome_recycle =
+        _prism_coordination_mode == PrismCoordinationMode::OUTCOME_RECYCLE;
+    const simtime_picosec outcome_threshold =
+        _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
+    const simtime_picosec outcome_residual =
+        (_prism_genuine_sample && _prism_epoch_samples > 0 && delay >= _prism_epoch_min)
+            ? delay - _prism_epoch_min
+            : 0;
+    const bool outcome_harmful = pkt.ecn_echo() ||
+        (_prism_genuine_sample && outcome_residual >= outcome_threshold);
+    if (_prism_coordination_mode == PrismCoordinationMode::FULL_PRISM) {
+        _prism_coordinator.observeFullHandoffAck(
+            eventlist().now(), _base_rtt, outcome_residual, pkt.ecn_echo(),
+            _prism_genuine_sample, newly_recvd_bytes);
+    }
+    if (outcome_recycle && _base_rtt > 0) {
+        _prism_coordinator.setOutcomeBaseRtt(_base_rtt);
+    }
+    if (outcome_recycle) {
+        _prism_coordinator.observeClassifiedAck(eventlist().now(), outcome_residual,
+                                                pkt.ecn_echo(), _prism_genuine_sample,
+                                                newly_recvd_bytes);
+        if (ack_selection.source == UecMpSelection::RECYCLED) {
+            const bool tracked_replacement = _prism_coordinator.isOutcomeReplacement(
+                ack_selection.cache_slot, ack_selection.cache_generation);
+            if (_motivation_trace_writer.enabledFor(flowId())) {
+                const char* reason = !_prism_genuine_sample ? "non_genuine"
+                    : pkt.ecn_echo() ? "ecn_marked"
+                    : outcome_residual >= outcome_threshold ? "high_residual"
+                    : "low_residual";
+                _motivation_trace_writer.logOutcomeStage({
+                    _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                    _prism_epoch_id, ack_selection.cache_slot, ack_selection.cache_generation,
+                    "recycled_ack", outcome_residual, pkt.ecn_echo(),
+                    _prism_genuine_sample, reason});
+                if (tracked_replacement) {
+                    _motivation_trace_writer.logOutcomeStage({
+                        _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                        _prism_epoch_id, ack_selection.cache_slot, ack_selection.cache_generation,
+                        "replacement_reused", outcome_residual, pkt.ecn_echo(),
+                        _prism_genuine_sample, reason});
+                }
+            }
+            _prism_coordinator.observeReplacementReuse(
+                ack_selection.cache_slot, ack_selection.cache_generation, outcome_residual,
+                pkt.ecn_echo(), _prism_genuine_sample, eventlist().now());
+            if (tracked_replacement && _prism_coordinator.outcomeReplacementsValidated()) {
+                _mp->clearReservedCacheSlots();
+            }
+        }
+    }
+
+    const uint64_t ack_event_seq =
+        motivationLogAck(pkt, raw_rtt, delay, _prism_genuine_sample, ack_selection,
+                         newly_recvd_bytes, _motivation_new_data_bytes_sent_total,
+                         static_cast<uint64_t>(_cwnd));
+    const bool reject_high_residual =
+        (_motivation_residual_recycle || outcome_recycle) &&
+        _sender_cc_algo == PRISM &&
+        _prism_region == prism::HOLD &&
+        _prism_genuine_sample &&
+        !pkt.ecn_echo() &&
+        _prism_epoch_samples > 0 &&
+        delay >= _prism_epoch_min &&
+        delay - _prism_epoch_min >=
+            (outcome_recycle ? outcome_threshold : _motivation_residual_threshold);
+    if (outcome_recycle && outcome_harmful && !pkt.ecn_echo() &&
+        ack_selection.source == UecMpSelection::RECYCLED &&
+        ack_selection.cache_slot != UINT16_MAX) {
+        _prism_coordinator.observeConsumedHighResidual(
+            _prism_epoch_id, ack_selection.cache_slot, ack_selection.cache_generation,
+            ack_selection.entropy, outcome_residual);
+    }
+    if (_prism_coordination_mode != PrismCoordinationMode::DISABLED &&
+        pkt.ecn_echo() && _prism_genuine_sample) {
+        for (const UecMpCacheSlot& slot : _mp->cacheSlots()) {
+            if (ack_selection.cache_slot == slot.slot &&
+                ack_selection.cache_generation == slot.generation) {
+                _prism_coordinator.observeAck(_prism_epoch_id, slot.slot, slot.generation,
+                                              delay, true, true);
+            }
+        }
+    }
+    _mp->setFeedbackTraceContext(ack_event_seq);
+    _mp->processEv(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN :
+                   (reject_high_residual ? UecMultipath::PATH_GOOD_HIGH_RESIDUAL
+                                         : UecMultipath::PATH_GOOD));
+    if (_prism_coordination_mode != PrismCoordinationMode::DISABLED &&
+        !pkt.ecn_echo()) {
+        const UecMpAdmission admission = _mp->lastAdmission();
+        if (_prism_genuine_sample && admission.written) {
+            _prism_coordinator.observeAck(_prism_epoch_id, admission.cache_slot,
+                                          admission.cache_generation, delay, false, true);
+            if (outcome_recycle && !outcome_harmful) {
+                const bool replacement_admitted = _prism_coordinator.observeReplacementAdmission(
+                    admission.cache_slot, admission.cache_generation);
+                if (replacement_admitted && _motivation_trace_writer.enabledFor(flowId())) {
+                    _motivation_trace_writer.logOutcomeStage({
+                        _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                        _prism_epoch_id, admission.cache_slot, admission.cache_generation,
+                        "replacement_admitted", outcome_residual, pkt.ecn_echo(),
+                        _prism_genuine_sample, "low_residual"});
+                }
+            }
+        }
+    }
+    if (outcome_recycle) {
+        if (const std::optional<PrismOutcome> outcome = _prism_coordinator.takeOutcome();
+            outcome && _motivation_trace_writer.enabledFor(flowId())) {
+            _motivation_trace_writer.logOutcome({
+                _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                outcome->round_id, outcome->window_ps,
+                outcome->pre.start_ps, outcome->pre.end_ps,
+                outcome->pre.classified_bytes, outcome->pre.harmful_bytes, outcome->pre.exposure,
+                outcome->post1.start_ps, outcome->post1.end_ps,
+                outcome->post1.classified_bytes, outcome->post1.harmful_bytes,
+                outcome->post1.exposure, outcome->post2.start_ps, outcome->post2.end_ps,
+                outcome->post2.classified_bytes,
+                outcome->post2.harmful_bytes, outcome->post2.exposure,
+            });
+        }
+    }
 
     if(_flow.flow_id() == _debug_flowid ){
         cout <<  timeAsUs(eventlist().now()) << " flowid " << _flow.flow_id() << " track_avg_rtt " << timeAsUs(get_avg_delay())
@@ -1207,6 +1784,7 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         else */
         (this->*updateCwndOnAck)(pkt.ecn_echo(), delay, newly_recvd_bytes);
     }
+    motivationLogPendingEpoch();
 
     if (_debug_src) {
         cout << "At " << timeAsUs(eventlist().now()) << " " << _flow.str() << " " << _nodename << " processAck: " << cum_ack << " flow " << _flow.str() << " cwnd " << _cwnd << " flightsize " << _in_flight << " delay " << timeAsUs(delay) << " newlyrecvd " << newly_recvd_bytes << " skip " << pkt.ecn_echo() << " raw rtt " << raw_rtt << endl;
@@ -1508,21 +2086,393 @@ void UecSrc::updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_
 
 // PRISM: epoch-based floor-driven control. Reuses NSCC's increase/decrease formulas, driven
 // by the (C_cc, C_spray) decomposition instead of avg_delay/ECN. See prism_decompose.h.
-static constexpr uint32_t PRISM_MIN_SAMPLES = 3;  // don't decide on a near-empty epoch
+
+static const char* prismRegionName(int region) {
+    switch (region) {
+    case prism::INCREASE: return "Increase";
+    case prism::HOLD: return "Hold";
+    case prism::DECREASE: return "Decrease";
+    default: return "Unknown";
+    }
+}
+
+// C: resolve engagement thresholds. Relative form (engage_mult>0) derives both from T_cc so they
+// auto-scale with the network RTT and are topology-independent: engage = mult*T_cc, disengage = ratio*engage.
+// Absolute fallback keeps back-compat (engage_spread/disengage_spread); both 0 => gating off.
+simtime_picosec UecSrc::prismEngageThresh() const {
+    return _prism_engage_mult > 0.0 ? (simtime_picosec)(_prism_engage_mult * _target_Qdelay)
+                                    : _prism_engage_spread;
+}
+
+simtime_picosec UecSrc::prismDisengageThresh() const {
+    return _prism_engage_mult > 0.0
+        ? (simtime_picosec)(_prism_disengage_ratio * prismEngageThresh())
+        : _prism_disengage_spread;
+}
+
+// Smooth the epoch extrema and update the slow spread signal used by Prism v2 engagement.
+void UecSrc::prismUpdateSignals(simtime_picosec c_cc, simtime_picosec c_spray) {
+    double b = _prism_smooth_beta;
+    if (_prism_floor_s == 0 && _prism_spread_s == 0) {
+        _prism_floor_s = c_cc;
+        _prism_spread_s = c_spray;
+    } else {
+        _prism_floor_s = (simtime_picosec)(b * c_cc + (1.0 - b) * _prism_floor_s);
+        _prism_spread_s = (simtime_picosec)(b * c_spray + (1.0 - b) * _prism_spread_s);
+    }
+    double bl = _prism_engage_beta;
+    _prism_spread_long = (simtime_picosec)(bl * _prism_spread_s
+                                           + (1.0 - bl) * _prism_spread_long);
+}
+
+// PRISM: read-only per-epoch log, gated by env var PRISM_EPOCH. One CSV row per epoch:
+//   time_ns,flow_id,base_rtt_ns,c_cc_ns,c_spray_ns,region,cwnd_bytes,epoch_samples,
+//   cut,engaged,floor_s_ns,spread_s_ns
+void UecSrc::prismEpochLog(simtime_picosec c_cc, simtime_picosec c_spray, int region, bool cut) {
+    static std::ofstream* prism_epoch_log = [](){
+        const char* p = getenv("PRISM_EPOCH");
+        return (p && *p) ? new std::ofstream(p) : nullptr;
+    }();
+    if (!prism_epoch_log) return;
+    (*prism_epoch_log)
+        << (uint64_t)timeAsNs(eventlist().now()) << ',' << flowId() << ','
+        << (uint64_t)timeAsNs(_base_rtt) << ','
+        << (uint64_t)timeAsNs(c_cc) << ',' << (uint64_t)timeAsNs(c_spray) << ','
+        << region << ',' << (uint64_t)_cwnd << ',' << _prism_epoch_samples << ','
+        << (cut ? 1 : 0) << ',' << (_prism_engaged ? 1 : 0) << ','
+        << (uint64_t)timeAsNs(_prism_floor_s) << ','
+        << (uint64_t)timeAsNs(_prism_spread_s) << '\n';
+    prism_epoch_log->flush();
+}
+
+void UecSrc::prismSetOraclePathResolver(PrismOraclePathResolver resolver,
+                                        uint32_t path_entropy_size) {
+    if (!_prism_oracle_validation)
+        return;
+    _prism_oracle_path_resolver = std::move(resolver);
+    _prism_oracle_path_entropy_size = path_entropy_size;
+    _prism_oracle_paths.clear();
+    _prism_oracle_entropy_to_path.clear();
+}
+
+bool UecSrc::prismResolveOraclePaths() {
+    if (!_prism_oracle_paths.empty())
+        return true;
+    if (!_prism_oracle_path_resolver || _prism_oracle_path_entropy_size == 0)
+        return false;
+
+    vector<vector<const BaseQueue*>> unique_paths;
+    vector<int32_t> entropy_to_path(_prism_oracle_path_entropy_size, -1);
+    std::map<std::string, uint32_t> path_index;
+    for (uint32_t entropy = 0; entropy < _prism_oracle_path_entropy_size; entropy++) {
+        vector<const BaseQueue*> queues;
+        if (!_prism_oracle_path_resolver(flowId(), entropy, queues) || queues.empty())
+            return false;
+
+        std::ostringstream key;
+        for (const BaseQueue* queue : queues)
+            key << queue << ';';
+        auto inserted = path_index.emplace(key.str(), unique_paths.size());
+        if (inserted.second)
+            unique_paths.push_back(std::move(queues));
+        entropy_to_path[entropy] = inserted.first->second;
+    }
+
+    _prism_oracle_paths = std::move(unique_paths);
+    _prism_oracle_entropy_to_path = std::move(entropy_to_path);
+    return !_prism_oracle_paths.empty();
+}
+
+bool UecSrc::prismOracleSnapshot(simtime_picosec& floor, simtime_picosec& ceiling) {
+    if (!prismResolveOraclePaths())
+        return false;
+
+    floor = std::numeric_limits<simtime_picosec>::max();
+    ceiling = 0;
+    for (const auto& path : _prism_oracle_paths) {
+        simtime_picosec qdelay = 0;
+        for (const BaseQueue* queue : path)
+            qdelay += queue->backlogDrainTime();
+        floor = std::min(floor, qdelay);
+        ceiling = std::max(ceiling, qdelay);
+    }
+    return floor != std::numeric_limits<simtime_picosec>::max();
+}
+
+void UecSrc::prismOracleObserveAck() {
+    if (!_prism_oracle_validation)
+        return;
+
+    simtime_picosec floor = 0, ceiling = 0;
+    if (!prismOracleSnapshot(floor, ceiling)) {
+        _prism_oracle_resolution_failures++;
+        return;
+    }
+
+    if (_prism_oracle_ack_snapshots == 0) {
+        _prism_oracle_epoch_min = floor;
+        _prism_oracle_epoch_max = ceiling;
+        _prism_oracle_floor_min = floor;
+        _prism_oracle_floor_max = floor;
+    } else {
+        _prism_oracle_epoch_min = std::min(_prism_oracle_epoch_min, floor);
+        _prism_oracle_epoch_max = std::max(_prism_oracle_epoch_max, ceiling);
+        _prism_oracle_floor_min = std::min(_prism_oracle_floor_min, floor);
+        _prism_oracle_floor_max = std::max(_prism_oracle_floor_max, floor);
+    }
+    _prism_oracle_floor_sum += floor;
+    _prism_oracle_spread_sum += ceiling - floor;
+    _prism_oracle_ack_snapshots++;
+}
+
+void UecSrc::prismOracleResetEpoch() {
+    _prism_oracle_epoch_min = 0;
+    _prism_oracle_epoch_max = 0;
+    _prism_oracle_floor_min = 0;
+    _prism_oracle_floor_max = 0;
+    _prism_oracle_floor_sum = 0;
+    _prism_oracle_spread_sum = 0;
+    _prism_oracle_ack_snapshots = 0;
+    _prism_oracle_resolution_failures = 0;
+}
+
+void UecSrc::prismOracleLog(simtime_picosec est_raw_cc, simtime_picosec est_raw_spray,
+                            simtime_picosec est_smoothed_cc, simtime_picosec est_smoothed_spray,
+                            int est_region, simtime_picosec t_spray) {
+    if (!_prism_oracle_validation)
+        return;
+
+    static std::ofstream* oracle_log = [](){
+        const char* env_path = getenv("PRISM_ORACLE_VALIDATION");
+        std::string path = UecSrc::_prism_oracle_log_path;
+        if (path.empty() && env_path && *env_path)
+            path = env_path;
+        if (path.empty())
+            return (std::ofstream*)nullptr;
+        std::ofstream* out = new std::ofstream(path);
+        (*out) << "run_id,seed,scenario,flow_id,epoch_id,epoch_start_ns,epoch_end_ns,"
+               << "kappa,n_min,t_cc_us,t_spray_us,num_ack_samples,num_oracle_ack_snapshots,"
+               << "num_distinct_sampled_entropies,num_eligible_entropies,entropy_coverage_ratio,"
+               << "num_distinct_sampled_paths,num_eligible_paths,path_coverage_ratio,"
+               << "oracle_resolution_failures,epoch_sample_deferred,row_status,"
+               << "est_raw_cc_us,est_raw_spray_us,est_smoothed_cc_us,est_smoothed_spray_us,"
+               << "oracle_raw_cc_us,oracle_raw_spray_us,oracle_smoothed_cc_us,"
+               << "oracle_smoothed_spray_us,boundary_oracle_raw_cc_us,"
+               << "boundary_oracle_raw_spray_us,boundary_oracle_smoothed_cc_us,"
+               << "boundary_oracle_smoothed_spray_us,oracle_mean_instant_cc_us,"
+               << "oracle_mean_instant_spray_us,oracle_floor_temporal_range_us,"
+               << "est_state,oracle_state,boundary_oracle_state,state_match,boundary_state_match,"
+               << "abs_error_cc_us,abs_error_spray_us,boundary_abs_error_cc_us,"
+               << "boundary_abs_error_spray_us\n";
+        return out;
+    }();
+    if (!oracle_log)
+        return;
+
+    simtime_picosec boundary_floor = 0, boundary_ceiling = 0;
+    bool boundary_ok = prismOracleSnapshot(boundary_floor, boundary_ceiling);
+    bool oracle_ok = _prism_oracle_ack_snapshots > 0;
+
+    simtime_picosec oracle_raw_cc = oracle_ok ? _prism_oracle_epoch_min : 0;
+    simtime_picosec oracle_raw_spray = oracle_ok
+        ? _prism_oracle_epoch_max - _prism_oracle_epoch_min : 0;
+    double b = _prism_smooth_beta;
+    if (oracle_ok && !_prism_oracle_initialized) {
+        _prism_oracle_ccc = (uint32_t)oracle_raw_cc;
+        _prism_oracle_cspray = (uint32_t)oracle_raw_spray;
+        _prism_oracle_initialized = true;
+    } else if (oracle_ok) {
+        _prism_oracle_ccc = (uint32_t)(b * oracle_raw_cc + (1.0 - b) * _prism_oracle_ccc);
+        _prism_oracle_cspray = (uint32_t)(b * oracle_raw_spray + (1.0 - b) * _prism_oracle_cspray);
+    }
+
+    simtime_picosec boundary_raw_cc = boundary_ok ? boundary_floor : 0;
+    simtime_picosec boundary_raw_spray = boundary_ok ? boundary_ceiling - boundary_floor : 0;
+    if (boundary_ok && !_prism_boundary_oracle_initialized) {
+        _prism_boundary_oracle_ccc = (uint32_t)boundary_raw_cc;
+        _prism_boundary_oracle_cspray = (uint32_t)boundary_raw_spray;
+        _prism_boundary_oracle_initialized = true;
+    } else if (boundary_ok) {
+        _prism_boundary_oracle_ccc = (uint32_t)(b * boundary_raw_cc
+            + (1.0 - b) * _prism_boundary_oracle_ccc);
+        _prism_boundary_oracle_cspray = (uint32_t)(b * boundary_raw_spray
+            + (1.0 - b) * _prism_boundary_oracle_cspray);
+    }
+
+    int oracle_region = oracle_ok && _prism_hysteresis > 0.0
+        ? prism::decide_region_hyst(_prism_oracle_ccc, _prism_oracle_cspray, _target_Qdelay, t_spray,
+                                    _prism_hysteresis, (prism::Region)_prism_oracle_region)
+        : (oracle_ok ? prism::decide_region(_prism_oracle_ccc, _prism_oracle_cspray,
+                                             _target_Qdelay, t_spray) : prism::INCREASE);
+    if (oracle_ok)
+        _prism_oracle_region = oracle_region;
+
+    int boundary_region = boundary_ok && _prism_hysteresis > 0.0
+        ? prism::decide_region_hyst(_prism_boundary_oracle_ccc, _prism_boundary_oracle_cspray,
+                                    _target_Qdelay, t_spray, _prism_hysteresis,
+                                    (prism::Region)_prism_boundary_oracle_region)
+        : (boundary_ok ? prism::decide_region(_prism_boundary_oracle_ccc,
+                                               _prism_boundary_oracle_cspray,
+                                               _target_Qdelay, t_spray) : prism::INCREASE);
+    if (boundary_ok)
+        _prism_boundary_oracle_region = boundary_region;
+
+    std::set<uint32_t> sampled_physical_paths;
+    uint32_t sampled_entropies = 0;
+    for (uint32_t entropy : _prism_epoch_sampled_paths) {
+        if (entropy >= _prism_oracle_entropy_to_path.size())
+            continue;
+        int32_t path = _prism_oracle_entropy_to_path[entropy];
+        if (path >= 0) {
+            sampled_entropies++;
+            sampled_physical_paths.insert((uint32_t)path);
+        }
+    }
+    uint32_t eligible_entropies = _prism_oracle_path_entropy_size;
+    uint32_t eligible_paths = _prism_oracle_paths.size();
+    double entropy_coverage = eligible_entropies
+        ? (double)sampled_entropies / eligible_entropies : std::numeric_limits<double>::quiet_NaN();
+    double path_coverage = eligible_paths
+        ? (double)sampled_physical_paths.size() / eligible_paths
+        : std::numeric_limits<double>::quiet_NaN();
+
+    simtime_picosec err_cc = est_smoothed_cc > (simtime_picosec)_prism_oracle_ccc
+        ? est_smoothed_cc - _prism_oracle_ccc : _prism_oracle_ccc - est_smoothed_cc;
+    simtime_picosec err_spray = est_smoothed_spray > (simtime_picosec)_prism_oracle_cspray
+        ? est_smoothed_spray - _prism_oracle_cspray : _prism_oracle_cspray - est_smoothed_spray;
+    simtime_picosec boundary_err_cc = est_smoothed_cc > (simtime_picosec)_prism_boundary_oracle_ccc
+        ? est_smoothed_cc - _prism_boundary_oracle_ccc
+        : _prism_boundary_oracle_ccc - est_smoothed_cc;
+    simtime_picosec boundary_err_spray = est_smoothed_spray > (simtime_picosec)_prism_boundary_oracle_cspray
+        ? est_smoothed_spray - _prism_boundary_oracle_cspray
+        : _prism_boundary_oracle_cspray - est_smoothed_spray;
+    double nan = std::numeric_limits<double>::quiet_NaN();
+    double mean_instant_cc_us = oracle_ok
+        ? timeAsUs((simtime_picosec)(_prism_oracle_floor_sum / _prism_oracle_ack_snapshots)) : nan;
+    double mean_instant_spray_us = oracle_ok
+        ? timeAsUs((simtime_picosec)(_prism_oracle_spread_sum / _prism_oracle_ack_snapshots)) : nan;
+    double temporal_floor_range_us = oracle_ok
+        ? timeAsUs(_prism_oracle_floor_max - _prism_oracle_floor_min) : nan;
+    const char* row_status = !oracle_ok || !boundary_ok
+        ? "path_resolution_failed"
+        : (_prism_oracle_ack_snapshots == _prism_epoch_samples
+            ? "ok" : "partial_path_resolution");
+
+    // Validation only: oracle values must never affect Prism control.
+    (*oracle_log) << (_prism_oracle_run_id.empty() ? "run" : _prism_oracle_run_id) << ','
+                  << _prism_oracle_seed << ','
+                  << (_prism_oracle_scenario.empty() ? "scenario" : _prism_oracle_scenario) << ','
+                  << flowId() << ',' << _prism_epoch_id << ','
+                  << (uint64_t)timeAsNs(_prism_epoch_start) << ','
+                  << (uint64_t)timeAsNs(eventlist().now()) << ','
+                  << std::setprecision(8) << _prism_kappa << ','
+                  << _prism_n_min << ','
+                  << timeAsUs(_target_Qdelay) << ','
+                  << timeAsUs(t_spray) << ','
+                  << _prism_epoch_samples << ','
+                  << _prism_oracle_ack_snapshots << ','
+                  << sampled_entropies << ','
+                  << eligible_entropies << ','
+                  << std::setprecision(6) << entropy_coverage << ','
+                  << sampled_physical_paths.size() << ','
+                  << eligible_paths << ','
+                  << path_coverage << ','
+                  << _prism_oracle_resolution_failures << ','
+                  << (_prism_epoch_sample_deferred ? 1 : 0) << ','
+                  << row_status << ','
+                  << timeAsUs(est_raw_cc) << ','
+                  << timeAsUs(est_raw_spray) << ','
+                  << timeAsUs(est_smoothed_cc) << ','
+                  << timeAsUs(est_smoothed_spray) << ','
+                  << (oracle_ok ? timeAsUs(oracle_raw_cc) : nan) << ','
+                  << (oracle_ok ? timeAsUs(oracle_raw_spray) : nan) << ','
+                  << (oracle_ok ? timeAsUs((simtime_picosec)_prism_oracle_ccc) : nan) << ','
+                  << (oracle_ok ? timeAsUs((simtime_picosec)_prism_oracle_cspray) : nan) << ','
+                  << (boundary_ok ? timeAsUs(boundary_raw_cc) : nan) << ','
+                  << (boundary_ok ? timeAsUs(boundary_raw_spray) : nan) << ','
+                  << (boundary_ok ? timeAsUs((simtime_picosec)_prism_boundary_oracle_ccc) : nan) << ','
+                  << (boundary_ok ? timeAsUs((simtime_picosec)_prism_boundary_oracle_cspray) : nan) << ','
+                  << mean_instant_cc_us << ','
+                  << mean_instant_spray_us << ','
+                  << temporal_floor_range_us << ','
+                  << prismRegionName(est_region) << ','
+                  << (oracle_ok ? prismRegionName(oracle_region) : "Unavailable") << ','
+                  << (boundary_ok ? prismRegionName(boundary_region) : "Unavailable") << ','
+                  << (oracle_ok && est_region == oracle_region ? 1 : 0) << ','
+                  << (boundary_ok && est_region == boundary_region ? 1 : 0) << ','
+                  << (oracle_ok ? timeAsUs(err_cc) : nan) << ','
+                  << (oracle_ok ? timeAsUs(err_spray) : nan) << ','
+                  << (boundary_ok ? timeAsUs(boundary_err_cc) : nan) << ','
+                  << (boundary_ok ? timeAsUs(boundary_err_spray) : nan) << '\n';
+    oracle_log->flush();
+    prismOracleResetEpoch();
+}
 
 void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
-    if (quick_adapt(false, skip, delay))   // reuse NSCC loss/quick adaptation
-        return;
+    const bool outcome_recycle =
+        _prism_coordination_mode == PrismCoordinationMode::OUTCOME_RECYCLE;
+    if (!_prism_engaged_init) {
+        _prism_engaged = (prismEngageThresh() == 0);
+        _prism_engaged_init = true;
+    }
 
     simtime_picosec q = (delay > 0) ? delay : 0;
 
-    // (a) accumulate epoch min/max of q -- ONLY genuine per-path samples (raw_rtt-base). ACKs
-    //     whose delay is the get_avg_delay() fallback (RTS / no-send-record) are skipped: a
-    //     smoothed value is not a per-path sample and would pollute the floor/spread. Among
-    //     genuine samples we DO include ECN-marked (skip==true) ones: the min picks the
-    //     least-congested path (unaffected by high samples), and the max must include congested
-    //     paths or C_spray would under-count reroutable congestion. The epoch only DECIDES once
-    //     it has >= PRISM_MIN_SAMPLES genuine samples (boundary check below); otherwise it extends.
+    // While disengaged, Prism v2 only observes the signal; NSCC owns the control action.
+    if (!_prism_engaged) {
+        if (_prism_genuine_sample) {
+            if (_prism_epoch_samples == 0) {
+                _prism_epoch_start = eventlist().now();
+                _prism_epoch_min = q;
+                _prism_epoch_max = q;
+            } else {
+                _prism_epoch_min = min(_prism_epoch_min, q);
+                _prism_epoch_max = max(_prism_epoch_max, q);
+            }
+            _prism_epoch_samples++;
+            if (_prism_oracle_validation && _prism_genuine_sample_path != UINT32_MAX) {
+                _prism_epoch_sampled_paths.insert(_prism_genuine_sample_path);
+                prismOracleObserveAck();
+            }
+        }
+
+        bool epoch_time_ready = eventlist().now() - _prism_epoch_start
+            >= (simtime_picosec)(_prism_kappa * _base_rtt);
+        if (epoch_time_ready && _prism_epoch_samples < _prism_n_min)
+            _prism_epoch_sample_deferred = true;
+        if (epoch_time_ready && _prism_epoch_samples >= _prism_n_min) {
+            simtime_picosec c_cc = _prism_epoch_min;
+            simtime_picosec c_spray = _prism_epoch_max - _prism_epoch_min;
+            prismUpdateSignals(c_cc, c_spray);
+            simtime_picosec eng_th = prismEngageThresh();
+            if (eng_th > 0 && _prism_spread_long >= eng_th) {
+                _prism_engaged = true;
+                _prism_region = prism::INCREASE;
+            }
+            simtime_picosec t_spray = _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
+            int observed_region = prism::decide_region(_prism_floor_s, _prism_spread_s,
+                                                       _target_Qdelay, t_spray);
+            if (_prism_coordination_mode != PrismCoordinationMode::DISABLED) {
+                _prism_coordinator.closeEpoch(
+                    {_prism_epoch_id, c_cc, c_spray, prism::INCREASE,
+                     _mp->isFrozen(), _mp->cacheSlots(), eventlist().now()});
+            }
+            prismOracleLog(c_cc, c_spray, _prism_floor_s, _prism_spread_s,
+                           observed_region, t_spray);
+            prismEpochLog(c_cc, c_spray, -1, false);
+            _prism_epoch_sampled_paths.clear();
+            _prism_epoch_samples = 0;
+            _prism_epoch_sample_deferred = false;
+            _prism_epoch_id++;
+        }
+        updateCwndOnAck_NSCC(skip, delay, newly_acked_bytes);
+        return;
+    }
+
+    if (quick_adapt(false, skip, delay))   // reuse NSCC loss/quick adaptation
+        return;
+
+    // (a) accumulate epoch min/max -- genuine per-path samples only.
     if (_prism_genuine_sample) {
         if (_prism_epoch_samples == 0) {
             _prism_epoch_start = eventlist().now();
@@ -1533,11 +2483,13 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
             _prism_epoch_max = max(_prism_epoch_max, q);
         }
         _prism_epoch_samples++;
+        if (_prism_oracle_validation && _prism_genuine_sample_path != UINT32_MAX) {
+            _prism_epoch_sampled_paths.insert(_prism_genuine_sample_path);
+            prismOracleObserveAck();
+        }
     }
 
-    // (b) in-epoch action: only the INCREASE region runs NSCC's per-ACK increase machinery,
-    //     fed the decided floor (< _target_Qdelay by construction; clamped defensively).
-    //     Cold start: _prism_ccc == 0 -> inc_delay 0 -> NSCC fast_increase ramps (intended).
+    // (b) in-epoch increase -- only INCREASE region, fed the smoothed floor (_prism_ccc).
     if (_prism_region == prism::INCREASE) {
         simtime_picosec inc_delay = _prism_ccc;
         if (_target_Qdelay > 0 && inc_delay > _target_Qdelay - 1)
@@ -1545,65 +2497,160 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
         proportional_increase(newly_acked_bytes, inc_delay);
     }
 
-    // (c) epoch boundary: decide region from the decomposition; floor-driven cut at the boundary
+    // (c) epoch boundary: smooth, update engagement, decide region, and commit.
     simtime_picosec t_spray = _prism_T_spray > 0 ? _prism_T_spray : _target_Qdelay;
     bool cut = false;
-    if (eventlist().now() - _prism_epoch_start >= (simtime_picosec)(_prism_kappa * _base_rtt)
-            && _prism_epoch_samples >= PRISM_MIN_SAMPLES) {
+    bool prism_epoch_time_ready = eventlist().now() - _prism_epoch_start
+        >= (simtime_picosec)(_prism_kappa * _base_rtt);
+    if (prism_epoch_time_ready && _prism_epoch_samples < _prism_n_min)
+        _prism_epoch_sample_deferred = true;
+    if (prism_epoch_time_ready && _prism_epoch_samples >= _prism_n_min) {
         simtime_picosec c_cc = _prism_epoch_min;
         simtime_picosec c_spray = _prism_epoch_max - _prism_epoch_min;
-        int region = prism::decide_region(c_cc, c_spray, _target_Qdelay, t_spray);
-        if (region == prism::DECREASE && c_cc > _target_Qdelay
+        if (_prism_path_median_signal) {
+            const auto path_signal = _prism_path_epoch.signal();
+            c_cc = path_signal.floor;
+            c_spray = path_signal.spread;
+        } else if (_prism_path_median_spread) {
+            c_spray = _prism_path_epoch.signal(2).spread;
+        }
+        prismUpdateSignals(c_cc, c_spray);
+        simtime_picosec f_cc = _prism_floor_s;
+        simtime_picosec f_spray = _prism_spread_s;
+        simtime_picosec eng_th = prismEngageThresh();
+        if (eng_th > 0 && _prism_spread_long <= prismDisengageThresh())
+            _prism_engaged = false;
+        int region = (_prism_hysteresis > 0.0)
+            ? prism::decide_region_hyst(f_cc, f_spray, _target_Qdelay, t_spray,
+                                        _prism_hysteresis, (prism::Region)_prism_region)
+            : prism::decide_region(f_cc, f_spray, _target_Qdelay, t_spray);
+        region = prism::apply_hold_override(static_cast<prism::Region>(region),
+                                            _prism_hold_as_increase);
+        PrismCoordinationResult coordination_result;
+        if (_prism_coordination_mode != PrismCoordinationMode::DISABLED) {
+            coordination_result = _prism_coordinator.closeEpoch(
+                {_prism_epoch_id, f_cc, f_spray, static_cast<prism::Region>(region),
+                 _mp->isFrozen(), _mp->cacheSlots(), eventlist().now()});
+        }
+        for (const PrismCoordinationSlotAction& slot_action :
+             coordination_result.slot_actions) {
+            if (slot_action.action == PrismCoordinationAction::INVALIDATE) {
+                const bool invalidated =
+                    _mp->invalidateCacheSlot(slot_action.slot, slot_action.generation);
+                if (outcome_recycle && invalidated) {
+                    const bool reserved =
+                        _mp->reserveCacheSlot(slot_action.slot, slot_action.generation);
+                    if (reserved && _motivation_trace_writer.enabledFor(flowId())) {
+                        _motivation_trace_writer.logOutcomeStage({
+                            _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                            _prism_epoch_id, slot_action.slot, slot_action.generation,
+                            "reserved", slot_action.residual_ps, false, true,
+                            slot_action.reason});
+                    }
+                    if (reserved) {
+                        _prism_coordinator.observeReplacementReservation(
+                            slot_action.slot, slot_action.generation);
+                    }
+                }
+            } else if (outcome_recycle &&
+                       slot_action.action == PrismCoordinationAction::RESERVE) {
+                const bool reserved =
+                    _mp->reserveCacheSlot(slot_action.slot, slot_action.generation);
+                if (reserved) {
+                    _prism_coordinator.observeReplacementReservation(
+                        slot_action.slot, slot_action.generation);
+                    if (_motivation_trace_writer.enabledFor(flowId())) {
+                        _motivation_trace_writer.logOutcomeStage({
+                            _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                            _prism_epoch_id, slot_action.slot, slot_action.generation,
+                            "reserved", slot_action.residual_ps, false, true,
+                            slot_action.reason});
+                    }
+                }
+            }
+            if (_motivation_trace_writer.enabledFor(flowId())) {
+                _motivation_trace_writer.logCoordination({
+                    _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                    _prism_epoch_id, coordination_result.round_id, slot_action.slot,
+                    slot_action.generation, f_cc, f_spray, coordination_result.spread_ref_ps,
+                    slot_action.residual_ps, motivationCoordinationActionName(slot_action.action),
+                    slot_action.reason, coordination_result.round_complete,
+                    false, false,
+                    static_cast<uint64_t>(_cwnd),
+                    motivationRegionName(static_cast<prism::Region>(region))});
+            }
+        }
+        const bool handoff_applied = coordination_result.handoff_requested &&
+            applyPrismNoProgressHandoff(_cwnd, _min_cwnd);
+        if (coordination_result.handoff_evidence.has_value() &&
+            _motivation_trace_writer.enabledFor(flowId())) {
+            const PrismFullHandoffEvidence& evidence = *coordination_result.handoff_evidence;
+            _motivation_trace_writer.logHandoff({
+                _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                evidence.first_round_id, evidence.second_round_id, evidence.base_rtt_ps,
+                evidence.pre.acked_bytes, evidence.pre.harmful_bytes,
+                evidence.post1.acked_bytes, evidence.post1.harmful_bytes,
+                evidence.post2.acked_bytes, evidence.post2.harmful_bytes,
+                evidence.handoff_requested, handoff_applied});
+        }
+        if (coordination_result.handoff_requested) {
+            cut = handoff_applied;
+            region = prism::DECREASE;
+        } else if (region == prism::DECREASE && f_cc > _target_Qdelay
                 && eventlist().now() - _last_dec_time > _base_rtt) {
             mem_b before = _cwnd;
-            _cwnd = (mem_b)(_cwnd * prism::md_factor(c_cc, _target_Qdelay, _gamma));
+            _cwnd = (mem_b)(_cwnd * prism::md_factor(f_cc, _target_Qdelay, _gamma));
             _cwnd = max(_cwnd, _min_cwnd);
             _last_dec_time = eventlist().now();
             cut = (_cwnd < before);
         }
+        if (_motivation_trace_writer.enabledFor(flowId())) {
+            for (PrismCoordinationAction action : coordination_result.actions) {
+                if (action != PrismCoordinationAction::ROUND_COMPLETE_PROGRESS &&
+                    action != PrismCoordinationAction::ROUND_COMPLETE_HANDOFF &&
+                    action != PrismCoordinationAction::ROUND_COMPLETE_RETRY &&
+                    action != PrismCoordinationAction::ROUND_COMPLETE_CLEAN) {
+                    continue;
+                }
+                _motivation_trace_writer.logCoordination({
+                    _motivation_trace_writer.nextEventSeq(), eventlist().now(), flowId(),
+                    _prism_epoch_id, coordination_result.round_id, UINT32_MAX, UINT64_MAX,
+                    f_cc, f_spray, coordination_result.spread_ref_ps, 0,
+                    motivationCoordinationActionName(action),
+                    action == PrismCoordinationAction::ROUND_COMPLETE_PROGRESS
+                        ? "spread_reduced"
+                        : "spread_not_reduced",
+                    true, coordination_result.progress,
+                    action == PrismCoordinationAction::ROUND_COMPLETE_HANDOFF && handoff_applied,
+                    static_cast<uint64_t>(_cwnd),
+                    motivationRegionName(static_cast<prism::Region>(region))});
+            }
+        }
         _prism_region = region;
-        _prism_ccc = c_cc;
-        _prism_cspray = c_spray;
+        if (outcome_recycle && _prism_region != prism::HOLD &&
+            !_prism_coordinator.outcomeTracking()) {
+            _mp->clearReservedCacheSlots();
+        }
+        _prism_ccc = f_cc;
+        _prism_cspray = f_spray;
         if (region != prism::INCREASE) {
-            // HOLD/DECREASE must not grow cwnd: drop any increase budget accumulated in the
-            // prior INCREASE epoch and clear NSCC's fast-increase state, so the gated
-            // fulfill_adjustment() below (which also adds _eta) does not creep cwnd upward.
             _inc_bytes = 0;
             _increase = false;
             _fi_count = 0;
         }
-        // PRISM: read-only per-epoch log, gated by env var PRISM_EPOCH. One CSV row per epoch:
-        //   time_ns,flow_id,base_rtt_ns,c_cc_ns,c_spray_ns,region,cwnd_bytes,epoch_samples,cut
-        {
-            static std::ofstream* prism_epoch_log = [](){
-                const char* p = getenv("PRISM_EPOCH");
-                return (p && *p) ? new std::ofstream(p) : nullptr;
-            }();
-            if (prism_epoch_log) {
-                (*prism_epoch_log)
-                    << (uint64_t)timeAsNs(eventlist().now()) << ','
-                    << flowId() << ','
-                    << (uint64_t)timeAsNs(_base_rtt) << ','
-                    << (uint64_t)timeAsNs(c_cc) << ','
-                    << (uint64_t)timeAsNs(c_spray) << ','
-                    << region << ','
-                    << (uint64_t)_cwnd << ','
-                    << _prism_epoch_samples << ','
-                    << (cut ? 1 : 0) << '\n';
-                prism_epoch_log->flush();
-            }
-        }
+        prismOracleLog(c_cc, c_spray, f_cc, f_spray, region, t_spray);
+        prismEpochLog(c_cc, c_spray, region, cut);
         if (_prism_loss_decomp) {
             _prism_loss_evs_good.clear();
             _prism_loss_evs_nacked.clear();
         }
-        _prism_epoch_samples = 0;  // next ACK starts a fresh epoch (sets min=max=q)
+        _prism_epoch_sampled_paths.clear();
+        _prism_epoch_samples = 0;
+        _prism_epoch_sample_deferred = false;
+        _prism_epoch_id++;
     }
 
-    // (d) reuse NSCC: apply accumulated _inc_bytes to _cwnd -- ONLY in the INCREASE region.
-    // fulfill_adjustment() also adds the periodic _eta term, so running it in HOLD/DECREASE
-    // would creep cwnd up regardless of the floor; gating it keeps HOLD holding and the
-    // floor-driven cut intact.
+    // (d) reuse NSCC fulfill -- only INCREASE region.
     set_cwnd_bounds();
     if (_prism_region == prism::INCREASE
             && (_received_bytes > _adjust_bytes_threshold
@@ -2092,6 +3139,7 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
         recalculateRTO();
     }
 
+    _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
     if (pkt.last_hop())
         _mp->processEv(ev, pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
     else
@@ -2124,7 +3172,7 @@ void UecSrc::doNextEvent() {
             _logger->logUec(*this, UecLogger::UEC_TIMEOUT);
 
         rtxTimerExpired();
-    } else if(_highest_sent == 0) {
+    } else if (_highest_sent == 0 && !hasStarted()) {
         if (_debug_src)
             cout << _flow.str() << " " << "Starting flow " << _name << endl;
         startConnection();
@@ -2138,6 +3186,17 @@ void UecSrc::doNextEvent() {
             sendProbe();
         }
     }
+
+    if (isLaps() && _laps_probe_timer_when != 0 &&
+        _laps_probe_timer_when == eventlist().now()) {
+        _laps_probe_timer_when = 0;
+        _laps_probe_timer_handle = eventlist().nullHandle();
+        if (!_done_sending) {
+            sendLapsProbe();
+            scheduleLapsProbe();
+        }
+    }
+
 }
 
 bool UecSrc::hasStarted() {
@@ -2167,7 +3226,6 @@ bool UecSrc::isActivelySending() {
     } else if (!_done_sending) {
         // 3.
         // Nothing to send, but the connection is not fully acked yet.
-        // Make sure there is still a timeout around
         assert(_rtx_timeout_pending);
         is_sending = false;
     } else {
@@ -2233,6 +3291,7 @@ void UecSrc::startConnection() {
 
     _rtx_backlog = 0;
     _send_blocked_on_nic = false;
+    scheduleLapsProbe();
 
     while (_send_blocked_on_nic == false && isSendPermitted()) {
         if (_debug_src) {
@@ -2435,6 +3494,13 @@ void UecSrc::sendIfPermitted() {
             return;
         }
     }
+    if (isLaps()) {
+        const auto* laps = dynamic_cast<const UecMpLaps*>(_mp.get());
+        if (laps == nullptr || !laps->hasSelectablePath()) {
+            scheduleLapsProbe();
+            return;
+        }
+    }
     if (_flow.flow_id() == _debug_flowid)
     {
         cout << timeAsUs(eventlist().now()) << " flowid " << _flow.flow_id() <<" sendIfPermitted requestSending _send_blocked_on_nic "<< _send_blocked_on_nic
@@ -2557,6 +3623,17 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     }
     assert(full_pkt_size <= _mtu);
 
+    optional<uint32_t> laps_entropy;
+    if (isLaps()) {
+        auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+        if (!laps) throw logic_error("LAPS has no LAPS multipath state");
+        laps_entropy = laps->nextLapsEntropy();
+        if (!laps_entropy.has_value()) {
+            scheduleLapsProbe();
+            return 0;
+        }
+    }
+
     // check we're allowed to send according to state machine
     if (_receiver_based_cc)
         assert(credit() > 0);
@@ -2572,11 +3649,33 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     }
     _pull_target = computePullTarget();
 
-    auto* p = UecDataPacket::newpkt(_flow, route, _highest_sent, full_pkt_size, ptype,
+    uint32_t ev = laps_entropy.has_value()
+                      ? *laps_entropy
+                      : _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    const UecMpSelection selection = _mp->lastSelection();
+    const Route* packet_route = &route;
+    uint16_t laps_pid = 0;
+    if (isLaps()) {
+        bool matched_plane = false;
+        for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
+            if (_ports[plane]->route() == &route) {
+                const auto& catalog = _laps_path_catalogs.at(plane);
+                if (!catalog) throw logic_error("LAPS NIC plane has no path catalog");
+                laps_pid = static_cast<uint16_t>(ev & (catalog->size() - 1));
+                packet_route = &lapsForwardRoute(laps_pid, route);
+                matched_plane = true;
+                break;
+            }
+        }
+        if (!matched_plane) throw logic_error("LAPS data route is not bound to a NIC plane");
+    }
+    auto* p = UecDataPacket::newpkt(_flow, *packet_route, _highest_sent, full_pkt_size, ptype,
                                      _pull_target, _dstaddr);
     p->set_src(_srcaddr);
-
-    uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    if (isLaps()) {
+        p->setLapsPid(laps_pid);
+        p->setLapsPinnedRoute(true);
+    }
     p->set_pathid(ev);
     p->set_hop_count(0);
     p->flow().logTraffic(*p, *this, TrafficLogger::PKT_CREATESEND);
@@ -2584,7 +3683,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     if (_backlog == 0 || (_receiver_based_cc && _credit <= 0) || ( _sender_based_cc &&  (_in_flight + full_pkt_size) >= _cwnd )) 
         p->set_ar(true);
     
-    createSendRecord(ev, _highest_sent, full_pkt_size);
+    createSendRecord(ev, _highest_sent, full_pkt_size, selection);
     if (_debug_src)
         cout << timeAsUs(eventlist().now()) << " " << _flow.str() << " sending pkt " << _highest_sent
              << " size " << full_pkt_size << " pull target " << _pull_target << " ack request " << p->ar()
@@ -2597,7 +3696,16 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
              << " ar " << p->ar()
              << endl;
     }
+    if (isLaps()) {
+        p->setLapsSendTime(eventlist().now());
+        if (_laps_route_audit) {
+            _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
+        }
+    }
     p->sendOn();
+    if (_motivation_trace_writer.enabledFor(flowId())) {
+        _motivation_new_data_bytes_sent_total += full_pkt_size;
+    }
     _highest_sent++;
     _stats.new_pkts_sent++;
     startRTO(eventlist().now());
@@ -2607,10 +3715,27 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     return full_pkt_size;
 }
 
+UecSrc::RtxPathSelection UecSrc::selectRtxPath(UecDataPacket::seq_t seqno) {
+    const uint32_t entropy = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd / _mss);
+    return {entropy, _mp->lastSelection()};
+}
+
 mem_b UecSrc::sendRtxPacket(const Route& route) {
     assert(!_rtx_queue.empty());
     auto seq_no = _rtx_queue.begin()->first;
     mem_b full_pkt_size = _rtx_queue.begin()->second;
+
+    optional<uint32_t> laps_entropy;
+    if (isLaps()) {
+        auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+        if (!laps) throw logic_error("LAPS has no LAPS multipath state");
+        laps_entropy = laps->nextLapsEntropy();
+        if (!laps_entropy.has_value()) {
+            scheduleLapsProbe();
+            return 0;
+        }
+    }
+
     spendCredit(full_pkt_size);
 
     _rtx_queue.erase(_rtx_queue.begin());
@@ -2619,16 +3744,36 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     _in_flight += full_pkt_size;
     _pull_target = computePullTarget();
     
-    auto* p = UecDataPacket::newpkt(_flow, route, seq_no, full_pkt_size, UecDataPacket::DATA_RTX,
-                                     _pull_target, _dstaddr);
+    const RtxPathSelection selection =
+        laps_entropy.has_value() ? RtxPathSelection{*laps_entropy, _mp->lastSelection()}
+                                 : selectRtxPath(seq_no);
+    const uint32_t ev = selection.entropy;
+    const Route* packet_route = &route;
+    uint16_t laps_pid = 0;
+    if (isLaps()) {
+        for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
+            if (_ports[plane]->route() == &route) {
+                const auto& catalog = _laps_path_catalogs.at(plane);
+                if (!catalog) throw logic_error("LAPS NIC plane has no path catalog");
+                laps_pid = static_cast<uint16_t>(ev & (catalog->size() - 1));
+                packet_route = &lapsForwardRoute(laps_pid, route);
+                break;
+            }
+        }
+        if (packet_route == &route) throw logic_error("LAPS RTX route is not bound to a NIC plane");
+    }
+    auto* p = UecDataPacket::newpkt(_flow, *packet_route, seq_no, full_pkt_size,
+                                     UecDataPacket::DATA_RTX, _pull_target, _dstaddr);
     p->set_src(_srcaddr);
-
-    uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    if (isLaps()) {
+        p->setLapsPid(laps_pid);
+        p->setLapsPinnedRoute(true);
+    }
     p->set_pathid(ev);
     p->set_hop_count(0);
     p->flow().logTraffic(*p, *this, TrafficLogger::PKT_CREATESEND);
 
-    createSendRecord(ev, seq_no, full_pkt_size);
+    createSendRecord(ev, seq_no, full_pkt_size, selection.selection);
 
     if (_debug_src)
         cout << timeAsUs(eventlist().now()) << " " << _flow.str() << " " << _nodename << " sending rtx pkt " << seq_no
@@ -2641,6 +3786,12 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
              << " in_flight " << _in_flight << " pull_target " << _pull_target << " pull " << _pull << endl;
     }
     p->set_ar(true);
+    if (isLaps()) {
+        p->setLapsSendTime(eventlist().now());
+        if (_laps_route_audit) {
+            _laps_route_audit->recordForward(flowId(), p->epsn(), laps_pid, *packet_route);
+        }
+    }
     p->sendOn();
     _stats.rtx_pkts_sent++;
     startRTO(eventlist().now());
@@ -2658,6 +3809,8 @@ void UecSrc::sendProbe() {
     p->set_src(_srcaddr);
     p->set_dst(_dstaddr);
     uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    const UecMpSelection selection = _mp->lastSelection();
+    _motivation_ack_selection_state.rememberProbe(_probe_seqno, selection);
     p->set_pathid(ev);
     p->set_hop_count(0);
     // p->sendOn();
@@ -2668,12 +3821,81 @@ void UecSrc::sendProbe() {
     _probe_timer_handle = eventlist().sourceIsPendingGetHandle(*this, _probe_timer_when);
 }
 
+void UecSrc::sendLapsProbe() {
+    auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+    if (!laps) throw logic_error("LAPS has no LAPS multipath state");
+    const optional<uint16_t> pid = laps->nextLapsProbePid(eventlist().now());
+    if (!pid.has_value()) {
+        return;
+    }
+
+    if (_laps_probe_seqno == 0) {
+        _laps_probe_seqno = std::numeric_limits<UecDataPacket::seq_t>::max();
+    } else {
+        --_laps_probe_seqno;
+    }
+    auto* p = UecDataPacket::newpkt(_flow, NULL, _laps_probe_seqno, _hdr_size,
+                                    UecBasePacket::DATA_PROBE, 0, _dstaddr);
+    p->set_src(_srcaddr);
+    p->set_dst(_dstaddr);
+    p->set_pathid(*pid);
+    if (_laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
+        throw logic_error("LAPS probe has no path catalog");
+    }
+    p->setLapsPid(*pid);
+    p->set_hop_count(0);
+    p->setLapsSendTime(eventlist().now());
+    _laps_probe_outstanding.insert(_laps_probe_seqno);
+    _motivation_ack_selection_state.rememberProbe(_laps_probe_seqno, {});
+    _nic.sendControlPacket(p, this, NULL);
+}
+
+void UecSrc::scheduleLapsProbe() {
+    if (!isLaps() || _done_sending) {
+        return;
+    }
+    const auto* laps = dynamic_cast<const UecMpLaps*>(_mp.get());
+    if (!laps) throw logic_error("LAPS has no LAPS multipath state");
+    const optional<simtime_picosec> deadline = laps->nextLapsDeadline(eventlist().now());
+    if (!deadline.has_value()) return;
+    if (_laps_probe_timer_when != 0 && _laps_probe_timer_when <= *deadline) return;
+    if (_laps_probe_timer_when != 0) {
+        eventlist().cancelPendingSourceByHandle(*this, _laps_probe_timer_handle);
+    }
+    _laps_probe_timer_when = *deadline;
+    _laps_probe_timer_handle =
+        eventlist().sourceIsPendingGetHandle(*this, _laps_probe_timer_when);
+    if (_laps_probe_timer_handle == eventlist().nullHandle()) {
+        _laps_probe_timer_when = 0;
+    }
+}
+
+void UecSrc::cancelLapsProbe() {
+    if (_laps_probe_timer_when != 0) {
+        eventlist().cancelPendingSourceByHandle(*this, _laps_probe_timer_handle);
+        _laps_probe_timer_when = 0;
+        _laps_probe_timer_handle = eventlist().nullHandle();
+    }
+    _laps_probe_outstanding.clear();
+}
+
 void UecSrc::sendRTS() {
     if (_last_rts > 0 && eventlist().now() - _last_rts < _network_rtt) {
         // Don't send more than one RTS per RTT, or we can create an
         // incast of RTS.  Once per RTT is enough to restart things if we lost
         // a whole window.
         return;
+    }
+
+    optional<uint32_t> laps_entropy;
+    if (isLaps()) {
+        auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+        if (!laps) throw logic_error("LAPS has no LAPS multipath state");
+        laps_entropy = laps->nextLapsEntropy();
+        if (!laps_entropy.has_value()) {
+            scheduleLapsProbe();
+            return;
+        }
     }
 
     if (_msg_tracker.has_value()) {
@@ -2688,10 +3910,13 @@ void UecSrc::sendRTS() {
         UecRtsPacket::newpkt(_flow, NULL, _highest_sent, _pull_target, _dstaddr);
     p->set_src(_srcaddr);
 
-    uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    uint32_t ev = laps_entropy.has_value()
+                      ? *laps_entropy
+                      : _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    const UecMpSelection selection = _mp->lastSelection();
     p->set_pathid(ev);
     p->set_hop_count(0);
-    createSendRecord(ev, _highest_sent, _hdr_size);
+    createSendRecord(ev, _highest_sent, _hdr_size, selection);
 
     // p->sendOn();
     _nic.sendControlPacket(p, this, NULL);
@@ -2702,14 +3927,15 @@ void UecSrc::sendRTS() {
     startRTO(eventlist().now());
 }
 
-void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno, mem_b full_pkt_size) {
+void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno,
+                              mem_b full_pkt_size, UecMpSelection selection) {
     if (_debug_src)
         cout << _flow.str() << " " << _nodename << " createSendRecord seqno: " << seqno << " size " << full_pkt_size
              << endl;
 
     assert(_tx_bitmap.find(seqno) == _tx_bitmap.end());
 
-    _tx_bitmap.emplace(seqno, sendRecord(path_id, full_pkt_size, eventlist().now()));
+    _tx_bitmap.emplace(seqno, sendRecord(path_id, full_pkt_size, eventlist().now(), selection));
     _send_times.emplace(eventlist().now(), seqno);
 
     if (_rtx_times.find(seqno) == _rtx_times.end()) {
@@ -2808,12 +4034,9 @@ void UecSrc::recalculateRTO() {
     // we're no longer waiting for the packet we set the timer for -
     // figure out what the timer should be now.
     cancelRTO();
-    if (_send_times.empty()) {
-        // nothing left that we're waiting for
-        return;
+    if (!_send_times.empty()) {
+        startRTO(_send_times.begin()->first);
     }
-    auto earliest_send_time = _send_times.begin()->first;
-    startRTO(earliest_send_time);
 }
 
 void UecSrc::rtxTimerExpired() {
@@ -2822,12 +4045,13 @@ void UecSrc::rtxTimerExpired() {
 
     auto first_entry = _send_times.begin();
     assert(first_entry != _send_times.end());
-    auto seqno = first_entry->second;
+    const auto seqno = first_entry->second;
 
     auto send_record = _tx_bitmap.find(seqno);
     assert(send_record != _tx_bitmap.end());
     mem_b pkt_size = send_record->second.pkt_size;
 
+    _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
     _mp->processEv(send_record->second.path_id, UecMultipath::PATH_TIMEOUT);
 
     // update flightsize?
@@ -3136,7 +4360,7 @@ void UecSink::processData(UecDataPacket& pkt) {
     bool force_ack = false;
     if (pkt.packet_type() == UecBasePacket::DATA_PROBE){
         UecAckPacket* ack_packet =
-            sack(pkt.path_id(), sackBitmapBase(pkt.epsn()), pkt.epsn(), (bool)(pkt.flags() & ECN_CE), pkt.retransmitted());
+            sack(pkt.path_id(), sackBitmapBase(pkt.epsn()), pkt.epsn(), (bool)(pkt.flags() & ECN_CE), pkt.retransmitted(), &pkt);
         ack_packet->set_probe_ack(true);
         _nic.sendControlPacket(ack_packet, NULL, this);   
         return;     
@@ -3212,7 +4436,7 @@ void UecSink::processData(UecDataPacket& pkt) {
         // this code is different from the proposed hardware implementation, as it keeps track of
         // the ACK state of OOO packets.
         UecAckPacket* ack_packet =
-            sack(pkt.path_id(), ecn ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted());
+            sack(pkt.path_id(), ecn ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted(), &pkt);
         _nic.sendControlPacket(ack_packet, NULL, this);
 
         _accepted_bytes = 0;  // careful about this one.
@@ -3280,9 +4504,9 @@ void UecSink::processData(UecDataPacket& pkt) {
              << _out_of_order_count << " ecn " << ecn << " shouldSack " << shouldSack()
              << " forceack " << force_ack << endl;
     }
-    if (ecn || shouldSack() || force_ack) {
+    if ((_src != nullptr && _src->isLaps()) || ecn || shouldSack() || force_ack) {
         UecAckPacket* ack_packet =
-            sack(pkt.path_id(), (ecn || pkt.ar()) ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted());
+            sack(pkt.path_id(), (ecn || pkt.ar()) ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted(), &pkt);
 
         if (_src->debug()) {
             cout << " UecSink " << _nodename << " src " << _src->nodename()
@@ -3328,7 +4552,7 @@ void UecSink::processTrimmed(const UecDataPacket& pkt) {
                  << " time " << timeAsNs(getSrc()->eventlist().now()) << " flow"
                  << _src->flow()->str() << endl;
 
-        UecAckPacket* ack_packet = sack(pkt.path_id(), sackBitmapBase(pkt.epsn()), pkt.epsn(), false, pkt.retransmitted());
+        UecAckPacket* ack_packet = sack(pkt.path_id(), sackBitmapBase(pkt.epsn()), pkt.epsn(), false, pkt.retransmitted(), &pkt);
         //ack_packet->sendOn();
         _nic.sendControlPacket(ack_packet, NULL, this);
         return;
@@ -3386,7 +4610,6 @@ void UecSink::processRts(const UecRtsPacket& pkt) {
     }
 
     bool ecn = (bool)(pkt.flags() & ECN_CE);
-    assert(!ecn); // not expecting ECN set on control packets
 
     if (pkt.epsn() < _expected_epsn || _epsn_rx_bitmap[pkt.epsn()]) {
         if (_src->debug())
@@ -3577,7 +4800,9 @@ uint64_t UecSink::buildSackBitmap(UecBasePacket::seq_t ref_epsn) {
     return bitmap;
 }
 
-UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno, UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo) {
+UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
+                            UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo,
+                            const UecDataPacket* received_data) {
     uint64_t bitmap = buildSackBitmap(seqno);
     UecAckPacket* pkt =
         UecAckPacket::newpkt(_flow, NULL, _expected_epsn, seqno, acked_psn, path_id, ce, _recvd_bytes,_rcv_cwnd_pen,_srcaddr);
@@ -3587,7 +4812,41 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno, UecBas
     pkt->set_rtx_echo(rtx_echo);
     pkt->set_probe_ack(false);
     pkt->set_hop_count(0);
+    if (_src != nullptr && _src->isLaps() && received_data != nullptr &&
+        received_data->lapsPidValid()) {
+        const uint16_t pid = received_data->lapsPid();
+        const Route* forward = received_data->route();
+        const Route* reverse = nullptr;
+        for (const auto& catalog : _laps_path_catalogs) {
+            if (catalog && catalog->entry(pid).forward == forward) {
+                reverse = catalog->entry(pid).reverse;
+                break;
+            }
+        }
+        if (reverse == nullptr) {
+            throw logic_error("LAPS ACK has no reverse catalog route");
+        }
+        pkt->setLapsPid(pid);
+        pkt->setLapsPinnedRoute(true);
+        pkt->setLapsRoute(*reverse);
+        if (_laps_route_audit) {
+            _laps_route_audit->recordReverse(_src->flowId(), acked_psn, pid, *reverse);
+        }
+    }
+    if (received_data != nullptr && received_data->lapsSendTimeValid()) {
+        const simtime_picosec now = _nic.eventlist().now();
+        if (now >= received_data->lapsSendTime()) {
+            pkt->setLapsOneWayDelay(now - received_data->lapsSendTime());
+        }
+    }
     return pkt;
+}
+
+const Route& UecSink::lapsReverseRoute(uint16_t pid) const {
+    if (_laps_path_catalogs.empty() || !_laps_path_catalogs[0]) {
+        throw logic_error("LAPS sink has no plane-0 path catalog");
+    }
+    return *_laps_path_catalogs[0]->entry(pid).reverse;
 }
 
 UecNackPacket* UecSink::nack(uint32_t path_id, UecBasePacket::seq_t seqno,bool last_hop, bool ecn_echo) {

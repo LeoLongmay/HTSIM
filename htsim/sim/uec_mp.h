@@ -2,8 +2,10 @@
 #ifndef UEC_MP_H
 #define UEC_MP_H
 
+#include <cstdint>
 #include <list>
 #include <deque>
+#include <functional>
 #include <map>
 #include <optional>
 #include <random>
@@ -13,9 +15,63 @@
 #include "eventlist.h"
 #include "buffer_reps.h"
 
+struct UecMpCacheSlot {
+    uint16_t slot = UINT16_MAX;
+    uint64_t generation = 0;
+    uint32_t entropy = 0;
+    bool valid = false;
+    bool ack_validated = false;
+};
+
+struct UecMpAdmission {
+    uint16_t cache_slot = UINT16_MAX;
+    uint64_t cache_generation = 0;
+    uint32_t entropy = 0;
+    bool written = false;
+};
+
+struct UecMpSelection {
+    enum Source : uint8_t { UNKNOWN, RECYCLED, FIRST_WINDOW, RANDOM_EMPTY };
+    static constexpr uint64_t NO_TOKEN = UINT64_MAX;
+    uint32_t entropy = 0;
+    Source source = UNKNOWN;
+    uint64_t token_id = NO_TOKEN;
+    uint16_t cache_slot = UINT16_MAX;
+    uint64_t cache_generation = 0;
+};
+
+struct UecMpTokenEvent {
+    enum Operation : uint8_t {
+        ENQUEUE_GOOD_ACK,
+        OVERWRITE_GOOD_ACK,
+        REJECT_HIGH_RESIDUAL,
+        DEQUEUE_RECYCLE,
+        SELECT_FIRST_WINDOW,
+        SELECT_RANDOM_EMPTY
+    };
+    static constexpr uint64_t NO_EVENT = UINT64_MAX;
+    Operation operation;
+    uint64_t token_id;
+    uint32_t entropy;
+    uint32_t queue_depth_before;
+    uint32_t queue_depth_after;
+    uint64_t related_ack_event_seq = NO_EVENT;
+    uint16_t cache_slot = UINT16_MAX;
+    uint64_t cache_generation = 0;
+    bool admission_written = false;
+};
+
+struct UecMpLapsSignal {
+    bool calibrated = false;
+    bool all_paths_high = false;
+    uint16_t sampled_paths = 0;
+    simtime_picosec target_delay = 0;
+    simtime_picosec min_delay = 0;
+};
+
 class UecMultipath {
 public:
-    enum PathFeedback {PATH_GOOD, PATH_ECN, PATH_NACK, PATH_TIMEOUT};
+    enum PathFeedback {PATH_GOOD, PATH_GOOD_HIGH_RESIDUAL, PATH_ECN, PATH_NACK, PATH_TIMEOUT};
     enum EvDefaults {UNKNOWN_EV};
     UecMultipath(bool debug): _debug(debug), _debug_tag("") {};
     virtual ~UecMultipath() {};
@@ -30,6 +86,20 @@ public:
      * @param uint64_t cur_cwnd_in_pkts The current congestion window in packets.
      */
     virtual uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) = 0;
+    using TokenObserver = std::function<void(const UecMpTokenEvent&)>;
+    virtual UecMpSelection lastSelection() const { return {}; }
+    virtual std::vector<UecMpCacheSlot> cacheSlots() const { return {}; }
+    virtual bool invalidateCacheSlot(uint16_t, uint64_t) { return false; }
+    virtual bool reserveCacheSlot(uint16_t, uint64_t) { return false; }
+    virtual void clearReservedCacheSlots() {}
+    virtual UecMpAdmission lastAdmission() const { return {}; }
+    virtual bool isFrozen() const { return false; }
+    virtual void setTokenObserver(TokenObserver) {}
+    virtual void setFeedbackTraceContext(uint64_t) {}
+    virtual void observeLapsDelay(uint32_t, simtime_picosec, simtime_picosec) {}
+    virtual void observeLapsProbe(uint32_t, simtime_picosec, simtime_picosec) {}
+    virtual optional<uint32_t> nextLapsProbeEntropy(simtime_picosec) { return {}; }
+    virtual UecMpLapsSignal lapsSignal(simtime_picosec) const { return {}; }
 protected:
     bool _debug;
     string _debug_tag;
@@ -46,6 +116,56 @@ private:
     uint16_t _path_xor;          // random value set each time we wrap the entropy values - XOR with
                                  // _current_ev_index
     uint16_t _current_ev_index;  // count through _no_of_paths and then wrap.  XOR with _path_xor to
+};
+
+class UecMpLaps : public UecMultipath {
+public:
+    UecMpLaps(uint16_t no_of_paths, bool debug, double beta);
+    static double softmaxDelayInPaperUnits(simtime_picosec delay);
+    void processEv(uint32_t path_id, PathFeedback feedback) override;
+    uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) override;
+    void observeLapsDelay(uint32_t path_id, simtime_picosec delay,
+                          simtime_picosec now) override;
+    void observeLapsProbe(uint32_t path_id, simtime_picosec delay,
+                          simtime_picosec now) override;
+    void configurePaths(std::vector<simtime_picosec> base_vals);
+    // Empty means every PID is awaiting an active-probe ACK and therefore has
+    // zero Softmax weight.  Callers must wait instead of sending data.
+    optional<uint16_t> nextLapsPid();
+    optional<uint32_t> nextLapsEntropy();
+    optional<uint16_t> nextLapsProbePid(simtime_picosec now);
+    optional<simtime_picosec> nextLapsDeadline(simtime_picosec now) const;
+    bool pathIsSelectable(uint16_t pid) const;
+    bool hasSelectablePath() const;
+    optional<uint32_t> nextLapsProbeEntropy(simtime_picosec now) override;
+    UecMpLapsSignal lapsSignal(simtime_picosec now) const override;
+private:
+    struct LapsPathState {
+        bool valid = false;
+        bool probe_pending = false;
+        simtime_picosec base_val = 0;
+        union {
+            simtime_picosec real_val = 0;
+            simtime_picosec real_latency;  // compatibility alias for focused route tests
+        };
+        union {
+            simtime_picosec updated_at = 0;
+            simtime_picosec last_update;  // compatibility alias for focused route tests
+        };
+    };
+
+    uint32_t pathIndex(uint32_t entropy) const;
+    uint32_t entropyForPath(uint32_t path_id) const;
+    optional<simtime_picosec> deadline(const LapsPathState& state) const;
+    bool isProbeDue(const LapsPathState& state, simtime_picosec now) const;
+    void observe(uint32_t path_id, simtime_picosec delay, simtime_picosec now);
+
+    uint16_t _no_of_paths;
+    uint16_t _path_random;
+    uint32_t _bootstrap_path;
+    uint32_t _next_stale_probe;
+    double _beta;
+    vector<LapsPathState> _paths;
 };
 
 class UecMpBitmap : public UecMultipath {
@@ -71,10 +191,18 @@ public:
     void processEv(uint32_t path_id, PathFeedback feedback) override;
     uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) override;
     optional<uint32_t> nextEntropyRecycle();
+    UecMpSelection lastSelection() const override { return _last_selection; }
+    void setTokenObserver(TokenObserver observer) override { _token_observer = observer; }
+    void setFeedbackTraceContext(uint64_t feedback_event_seq) override { _feedback_event_seq = feedback_event_seq; }
 private:
+    struct Token { uint32_t entropy; uint64_t id; };
     uint16_t _no_of_paths;
     uint32_t _crt_path;
-    list<uint32_t> _next_pathid;
+    list<Token> _next_tokens;
+    uint64_t _next_token_id = 0;
+    uint64_t _feedback_event_seq = UecMpTokenEvent::NO_EVENT;
+    UecMpSelection _last_selection;
+    TokenObserver _token_observer;
 };
 
 
@@ -83,12 +211,27 @@ public:
     UecMpReps(uint16_t no_of_paths, bool debug, bool is_trimming_enabled);
     void processEv(uint32_t path_id, PathFeedback feedback) override;
     uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) override;
+    UecMpSelection lastSelection() const override { return _last_selection; }
+    std::vector<UecMpCacheSlot> cacheSlots() const override;
+    bool invalidateCacheSlot(uint16_t slot, uint64_t generation) override;
+    bool reserveCacheSlot(uint16_t slot, uint64_t generation) override;
+    void clearReservedCacheSlots() override;
+    UecMpAdmission lastAdmission() const override { return _last_admission; }
+    bool isFrozen() const override;
+    void setTokenObserver(TokenObserver observer) override { _token_observer = observer; }
+    void setFeedbackTraceContext(uint64_t feedback_event_seq) override {
+        _feedback_event_seq = feedback_event_seq;
+    }
 private:
     uint16_t _no_of_paths;
     CircularBufferREPS<uint16_t> *circular_buffer_reps;
     uint32_t _crt_path;
     list<uint32_t> _next_pathid;
     bool _is_trimming_enabled = true;  // whether to trim the circular buffer
+    uint64_t _feedback_event_seq = UecMpTokenEvent::NO_EVENT;
+    UecMpSelection _last_selection;
+    UecMpAdmission _last_admission;
+    TokenObserver _token_observer;
 };
 
 class UecMpMixed : public UecMultipath {

@@ -1,0 +1,87 @@
+// -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
+#ifndef MOTIVATION_BACKGROUND_H
+#define MOTIVATION_BACKGROUND_H
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "config.h"
+#include "eventlist.h"
+#include "motivation_trace.h"
+#include "network.h"
+
+struct MotivationBackgroundSpec {
+    uint32_t background_id;
+    uint32_t src;
+    uint32_t dst;
+    uint32_t path_index;
+    linkspeed_bps rate;
+    simtime_picosec start_ps;
+    simtime_picosec stop_ps;
+};
+
+constexpr uint32_t kMotivationBackgroundPacketBytes = 1500;
+
+struct MotivationBackgroundDrainPolicy {
+    // No foreground connection has this background's source as src or dst.
+    bool source_endpoint_isolated;
+    // The selected topology mode constructs ECNQueue without any pause producer.
+    bool pause_free_ecn_path;
+};
+
+std::vector<MotivationBackgroundSpec> loadMotivationBackgroundConfig(
+    const std::string& path);
+std::string formatMotivationBackgroundRateGbps(double rate_gbps);
+std::string motivationBackgroundQueueFingerprint(const route_t& route);
+// Conservative time for one emitted packet to leave a class-checked route.
+simtime_picosec motivationBackgroundRouteDrainBound(
+    const route_t& route, const MotivationBackgroundSpec& spec,
+    const MotivationBackgroundDrainPolicy& policy);
+
+class MotivationBackgroundSink : public PacketSink {
+public:
+    MotivationBackgroundSink() = default;
+
+    void receivePacket(Packet& packet) override;
+    const std::string& nodename() override { return _nodename; }
+    // This counter includes all arrivals, including packets draining after stop_ps.
+    uint64_t deliveredBytes() const { return _delivered_bytes; }
+
+private:
+    std::string _nodename = "motivation_background_sink";
+    uint64_t _delivered_bytes = 0;
+};
+
+class MotivationBackgroundSource : public EventSource {
+public:
+    MotivationBackgroundSource(EventList& eventlist, const MotivationBackgroundSpec& spec,
+                               MotivationTraceWriter& trace_writer,
+                               std::string queue_fingerprint);
+
+    // The finish trace snapshots deliveries whose arrival time is strictly less than
+    // stop_ps. A packet arriving exactly at stop_ps drains afterward and is excluded.
+    void connect(route_t& route, MotivationBackgroundSink& sink);
+    void doNextEvent() override;
+
+    simtime_picosec period() const { return _period; }
+    uint64_t sentBytes() const { return _sent_bytes; }
+
+private:
+    void log(const char* operation, uint64_t delivered_bytes);
+    void sendPacket();
+
+    MotivationBackgroundSpec _spec;
+    MotivationTraceWriter& _trace_writer;
+    std::string _queue_fingerprint;
+    PacketFlow _flow;
+    route_t* _route = nullptr;
+    MotivationBackgroundSink* _sink = nullptr;
+    simtime_picosec _period;
+    uint64_t _sent_bytes = 0;
+    uint64_t _next_packet_id = 0;
+    bool _started = false;
+    bool _finished = false;
+};
+
+#endif

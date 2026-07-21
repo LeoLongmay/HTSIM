@@ -1,0 +1,7 @@
+cell_id,scenario,foreground_flows,degraded_links,degraded_capacity_gbps,seed
+coarse-f8-d8-c50,,8,8,50,101
+coarse-f8-d8-c75,,8,8,75,101
+coarse-f12-d8-c50,,12,8,50,101
+coarse-f12-d8-c75,,12,8,75,101
+coarse-f16-d8-c50,,16,8,50,101
+coarse-f16-d8-c75,,16,8,75,101
