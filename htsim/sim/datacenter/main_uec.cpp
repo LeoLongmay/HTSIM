@@ -29,6 +29,7 @@
 #include "motivation_trace.h"
 #include "uec_pdcses.h"
 #include "compositequeue.h"
+#include "queue_lossless_input.h"
 #include "topology.h"
 #include "connection_matrix.h"
 #include "pciemodel.h"
@@ -63,6 +64,23 @@ bool parse_degraded_count(const char* flag, const char* text, uint32_t& value) {
         cerr << "invalid " << flag << " value: " << text << endl;
         return false;
     }
+    return true;
+}
+
+bool parse_byte_value(const char* flag, const char* text, mem_b& value) {
+    if (text[0] == '\0' || std::isspace(static_cast<unsigned char>(text[0]))) {
+        cerr << "invalid " << flag << " value: " << text << endl;
+        return false;
+    }
+    char* end = nullptr;
+    errno = 0;
+    const unsigned long long parsed = strtoull(text, &end, 10);
+    if (end == text || *end != '\0' || errno == ERANGE ||
+        parsed > static_cast<unsigned long long>(std::numeric_limits<mem_b>::max())) {
+        cerr << "invalid " << flag << " value: " << text << endl;
+        return false;
+    }
+    value = static_cast<mem_b>(parsed);
     return true;
 }
 
@@ -109,6 +127,14 @@ uint32_t calculate_bdp_pkt(FatTreeTopologyCfg* t_cfg, linkspeed_bps host_linkspe
 int main(int argc, char **argv) {
     bool param_queuesize_set = false;
     uint32_t queuesize_pkt = 0;
+    bool param_queue_size_bytes_set = false;
+    mem_b queue_size_bytes = 0;
+    bool pfc_high_bytes_set = false;
+    bool pfc_low_bytes_set = false;
+    bool shared_buffer_bytes_set = false;
+    mem_b pfc_high_bytes = 0;
+    mem_b pfc_low_bytes = 0;
+    mem_b shared_buffer_bytes = 0;
     linkspeed_bps linkspeed = speedFromMbps((double)HOST_NIC);
     int packet_size = 4150;
     uint32_t path_entropy_size = 64;
@@ -537,6 +563,9 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[i+1], "ecn")) {
                 qt = ECN;
             }
+            else if (!strcmp(argv[i+1], "lossless_input")) {
+                qt = LOSSLESS_INPUT;
+            }
             else if (!strcmp(argv[i+1], "aeolus")){
                 qt = AEOLUS;
             }
@@ -612,6 +641,26 @@ int main(int argc, char **argv) {
             param_queuesize_set = true;
             queuesize_pkt = atoi(argv[i+1]);
             cout << "Setting queuesize to " << queuesize_pkt << " packets " << endl;
+            i++;
+        } else if (!strcmp(argv[i], "-queue_size_bytes")) {
+            if (i + 1 >= argc || !parse_byte_value("-queue_size_bytes", argv[i + 1], queue_size_bytes))
+                return 1;
+            param_queue_size_bytes_set = true;
+            i++;
+        } else if (!strcmp(argv[i], "-pfc_high_bytes")) {
+            if (i + 1 >= argc || !parse_byte_value("-pfc_high_bytes", argv[i + 1], pfc_high_bytes))
+                return 1;
+            pfc_high_bytes_set = true;
+            i++;
+        } else if (!strcmp(argv[i], "-pfc_low_bytes")) {
+            if (i + 1 >= argc || !parse_byte_value("-pfc_low_bytes", argv[i + 1], pfc_low_bytes))
+                return 1;
+            pfc_low_bytes_set = true;
+            i++;
+        } else if (!strcmp(argv[i], "-shared_buffer_bytes")) {
+            if (i + 1 >= argc || !parse_byte_value("-shared_buffer_bytes", argv[i + 1], shared_buffer_bytes))
+                return 1;
+            shared_buffer_bytes_set = true;
             i++;
         }
         else if (!strcmp(argv[i],"-sack_threshold")){
@@ -865,6 +914,34 @@ int main(int argc, char **argv) {
         cerr << "cannot mix -failed with degraded aliases" << endl;
         return 1;
     }
+    if (param_queuesize_set && param_queue_size_bytes_set) {
+        cerr << "-queue_size_bytes is mutually exclusive with -q" << endl;
+        return 1;
+    }
+    const bool lossless_option_set = param_queue_size_bytes_set || pfc_high_bytes_set ||
+                                     pfc_low_bytes_set || shared_buffer_bytes_set;
+    if (lossless_option_set && qt != LOSSLESS_INPUT) {
+        cerr << "lossless byte options require -queue_type lossless_input" << endl;
+        return 1;
+    }
+    if (qt == LOSSLESS_INPUT) {
+        if (!param_queue_size_bytes_set || !pfc_high_bytes_set || !pfc_low_bytes_set ||
+            !shared_buffer_bytes_set) {
+            cerr << "-queue_type lossless_input requires -queue_size_bytes, -pfc_high_bytes, "
+                    "-pfc_low_bytes, and -shared_buffer_bytes" << endl;
+            return 1;
+        }
+        if (queue_size_bytes == 0 || shared_buffer_bytes == 0 || pfc_high_bytes == 0 ||
+            pfc_low_bytes >= pfc_high_bytes || pfc_high_bytes > queue_size_bytes) {
+            cerr << "invalid lossless byte thresholds" << endl;
+            return 1;
+        }
+        cout << "queue_size_bytes " << queue_size_bytes << endl;
+        cout << "pfc_high_bytes " << pfc_high_bytes << endl;
+        cout << "pfc_low_bytes " << pfc_low_bytes << endl;
+        cout << "shared_buffer_bytes " << shared_buffer_bytes << endl;
+        LosslessInputQueue::configurePfc(pfc_high_bytes, pfc_low_bytes);
+    }
     if (degraded_capacity_set && degraded_capacity_gbps <= 0) {
         cerr << "invalid -degraded_capacity_gbps value: must be positive" << endl;
         return 1;
@@ -1072,7 +1149,7 @@ int main(int argc, char **argv) {
 
     no_of_nodes = conns->N;
 
-    if (!param_queuesize_set) {
+    if (!param_queuesize_set && !param_queue_size_bytes_set) {
         cout << "Automatic queue sizing enabled ";        
         if (queue_size_bdp_factor==0) {
             if (disable_trim) {
@@ -1089,7 +1166,9 @@ int main(int argc, char **argv) {
 
     unique_ptr<FatTreeTopologyCfg> topo_cfg;
     if (topo_file) {
-        topo_cfg = FatTreeTopologyCfg::load(topo_file, memFromPkt(queuesize_pkt), qt, snd_type);
+        topo_cfg = FatTreeTopologyCfg::load(topo_file,
+                                             param_queue_size_bytes_set ? queue_size_bytes : memFromPkt(queuesize_pkt),
+                                             qt, snd_type);
 
         if (topo_cfg->no_of_nodes() != no_of_nodes) {
             cerr << "Mismatch between connection matrix (" << no_of_nodes << " nodes) and topology ("
@@ -1097,7 +1176,8 @@ int main(int argc, char **argv) {
             exit(1);
         }
     } else {
-        topo_cfg = make_unique<FatTreeTopologyCfg>(tiers, no_of_nodes, linkspeed, memFromPkt(queuesize_pkt),
+        topo_cfg = make_unique<FatTreeTopologyCfg>(tiers, no_of_nodes, linkspeed,
+                                                   param_queue_size_bytes_set ? queue_size_bytes : memFromPkt(queuesize_pkt),
                                                    hop_latency, switch_latency, 
                                                    qt, snd_type);
     }
@@ -1134,7 +1214,9 @@ int main(int argc, char **argv) {
     simtime_picosec network_max_unloaded_rtt = calculate_rtt(topo_cfg.get(), linkspeed);
 
     mem_b queuesize = 0;
-    if (!param_queuesize_set) {
+    if (param_queue_size_bytes_set) {
+        queuesize = queue_size_bytes;
+    } else if (!param_queuesize_set) {
         uint32_t bdp_pkt = calculate_bdp_pkt(topo_cfg.get(), linkspeed);
         mem_b queuesize_pkt = bdp_pkt * queue_size_bdp_factor;
         queuesize = memFromPkt(queuesize_pkt);
@@ -1142,6 +1224,8 @@ int main(int argc, char **argv) {
         queuesize = memFromPkt(queuesize_pkt);
     }
     topo_cfg->set_queue_sizes(queuesize);
+    if (qt == LOSSLESS_INPUT)
+        topo_cfg->set_shared_buffer_size(shared_buffer_bytes);
 
     topo_cfg->set_failed_links(topo_num_failed);
     topo_cfg->set_degraded_link_ratio(degraded_link_ratio);
