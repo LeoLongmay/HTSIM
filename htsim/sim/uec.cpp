@@ -3713,6 +3713,17 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     auto seq_no = _rtx_queue.begin()->first;
     mem_b full_pkt_size = _rtx_queue.begin()->second;
 
+    optional<uint32_t> laps_entropy;
+    if (isLaps()) {
+        auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+        if (!laps) throw logic_error("LAPS has no LAPS multipath state");
+        laps_entropy = laps->nextLapsEntropy();
+        if (!laps_entropy.has_value()) {
+            scheduleLapsProbe();
+            return 0;
+        }
+    }
+
     spendCredit(full_pkt_size);
 
     _rtx_queue.erase(_rtx_queue.begin());
@@ -3721,7 +3732,9 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     _in_flight += full_pkt_size;
     _pull_target = computePullTarget();
     
-    const RtxPathSelection selection = selectRtxPath(seq_no);
+    const RtxPathSelection selection =
+        laps_entropy.has_value() ? RtxPathSelection{*laps_entropy, _mp->lastSelection()}
+                                 : selectRtxPath(seq_no);
     const uint32_t ev = selection.entropy;
     const Route* packet_route = &route;
     uint16_t laps_pid = 0;
@@ -3862,6 +3875,17 @@ void UecSrc::sendRTS() {
         return;
     }
 
+    optional<uint32_t> laps_entropy;
+    if (isLaps()) {
+        auto* laps = dynamic_cast<UecMpLaps*>(_mp.get());
+        if (!laps) throw logic_error("LAPS has no LAPS multipath state");
+        laps_entropy = laps->nextLapsEntropy();
+        if (!laps_entropy.has_value()) {
+            scheduleLapsProbe();
+            return;
+        }
+    }
+
     if (_msg_tracker.has_value()) {
         _msg_tracker.value()->notifyCtrlSeqno(_highest_sent);
     }
@@ -3874,7 +3898,9 @@ void UecSrc::sendRTS() {
         UecRtsPacket::newpkt(_flow, NULL, _highest_sent, _pull_target, _dstaddr);
     p->set_src(_srcaddr);
 
-    uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    uint32_t ev = laps_entropy.has_value()
+                      ? *laps_entropy
+                      : _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     const UecMpSelection selection = _mp->lastSelection();
     p->set_pathid(ev);
     p->set_hop_count(0);

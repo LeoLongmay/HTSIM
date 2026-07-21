@@ -145,6 +145,52 @@ void localized_laps_keeps_catalog_pairing_but_resprays_retransmissions() {
     assert(retry->route() == f.catalog(plane).entry(retry_pid).forward);
 }
 
+void laps_defers_retransmission_while_every_pid_is_probe_pending() {
+    LocalizedLapsFixture f;
+    auto* laps = dynamic_cast<UecMpLaps*>(f.source._mp.get());
+    assert(laps != nullptr);
+
+    f.source._rtx_queue.emplace(91, 1'500);
+    f.source._rtx_backlog = 1'500;
+    const mem_b credit_before = f.source._credit;
+    const mem_b in_flight_before = f.source._in_flight;
+    const mem_b backlog_before = f.source._rtx_backlog;
+    for (auto& state : laps->_paths) state.probe_pending = true;
+
+    assert(f.source.sendRtxPacket(f.forwardFib(0)) == 0);
+    assert(f.source._rtx_queue.count(91) == 1);
+    assert(f.source._rtx_backlog == backlog_before);
+    assert(f.source._credit == credit_before);
+    assert(f.source._in_flight == in_flight_before);
+}
+
+void laps_defers_rts_while_every_pid_is_probe_pending() {
+    LocalizedLapsFixture f;
+    auto* laps = dynamic_cast<UecMpLaps*>(f.source._mp.get());
+    assert(laps != nullptr);
+    for (auto& state : laps->_paths) state.probe_pending = true;
+
+    const auto highest_sent_before = f.source._highest_sent;
+    const auto rts_sent_before = f.source._stats.rts_pkts_sent;
+    const auto last_rts_before = f.source._last_rts;
+    const auto rto_pending_before = f.source._rtx_timeout_pending;
+    const auto rto_before = f.source._rtx_timeout;
+    const auto rto_handle_before = f.source._rto_timer_handle;
+    const auto send_records_before = f.source._tx_bitmap.size();
+    const auto controls_before = f.source_nic._control.size();
+
+    f.source.sendRTS();
+
+    assert(f.source._highest_sent == highest_sent_before);
+    assert(f.source._stats.rts_pkts_sent == rts_sent_before);
+    assert(f.source._last_rts == last_rts_before);
+    assert(f.source._rtx_timeout_pending == rto_pending_before);
+    assert(f.source._rtx_timeout == rto_before);
+    assert(f.source._rto_timer_handle == rto_handle_before);
+    assert(f.source._tx_bitmap.size() == send_records_before);
+    assert(f.source_nic._control.size() == controls_before);
+}
+
 void pooled_packet_clears_laps_metadata() {
     PacketFlow flow(nullptr);
     Route route;
@@ -163,5 +209,7 @@ void pooled_packet_clears_laps_metadata() {
 int main() {
     setLapsGlobals();
     localized_laps_keeps_catalog_pairing_but_resprays_retransmissions();
+    laps_defers_retransmission_while_every_pid_is_probe_pending();
+    laps_defers_rts_while_every_pid_is_probe_pending();
     pooled_packet_clears_laps_metadata();
 }
