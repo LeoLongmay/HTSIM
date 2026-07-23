@@ -1670,6 +1670,26 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         }
     }
 
+    // Read-only ACK queueing-delay trace.  This log intentionally admits only
+    // the genuine RTT-minus-base samples used by Prism, so offline CDFs do not
+    // mix in average-delay fallbacks, probes, retransmission ambiguity, or PFC
+    // pause artifacts.  It is available to every CC algorithm, not just Prism.
+    if (_prism_genuine_sample && valid_normal_send_attempt && !pkt.is_probe_ack()) {
+        static std::ofstream* ack_qdelay_log = [](){
+            const char* p = getenv("ACK_QDELAY");
+            return (p && *p) ? new std::ofstream(p) : nullptr;
+        }();
+        if (ack_qdelay_log) {
+            (*ack_qdelay_log) << (uint64_t)timeAsNs(eventlist().now()) << ','
+                              << flowId() << ',' << i->second.path_id << ','
+                              << (uint64_t)timeAsNs(raw_rtt) << ','
+                              << (uint64_t)timeAsNs(_base_rtt) << ','
+                              << (uint64_t)timeAsNs(delay) << ','
+                              << (pkt.ecn_echo() ? 1 : 0) << ','
+                              << (uint64_t)_cwnd << '\n';
+        }
+    }
+
     {
         static std::ofstream* prism_hold_trace = [](){
             const char* p = getenv("PRISM_HOLD_TRACE");
