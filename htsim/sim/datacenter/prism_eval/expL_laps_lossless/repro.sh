@@ -10,8 +10,8 @@ OUT="$REL/data"
 TOPO="fat_tree_128_1os.topo"
 SEEDS=(13 14 15 16 17)
 FAILEDS=(0 2 4 6 8 10 12)
-PREVIEW=(ops reps laps prism)
-ALL=(ops reps swift mswift mnscc strack laps prism)
+PREVIEW=(ops reps laps_control prism)
+ALL=(ops reps swift mswift mnscc strack laps_control prism)
 LOSSLESS_ARGS="-queue_type lossless_input -queue_size_bytes 150000 -pfc_high_bytes 122880 -pfc_low_bytes 92160 -shared_buffer_bytes 33554432"
 END_MS="${END_MS:-80}"
 
@@ -35,12 +35,28 @@ else
   BASELINES=("${PREVIEW[@]}")
 fi
 
+if [ -n "${FAILED_ONLY:-}" ]; then
+  case "$FAILED_ONLY" in
+    0|2|4|6|8|10|12) ;;
+    *) echo "FAILED_ONLY must be one of: 0 2 4 6 8 10 12" >&2; exit 2 ;;
+  esac
+  FAILEDS=("$FAILED_ONLY")
+fi
+
+if [ -n "${SEED_ONLY:-}" ]; then
+  case "$SEED_ONLY" in
+    13|14|15|16|17) ;;
+    *) echo "SEED_ONLY must be one of: 13 14 15 16 17" >&2; exit 2 ;;
+  esac
+  SEEDS=("$SEED_ONLY")
+fi
+
 arm_config() {
   case "$1" in
     ops) printf '%s %s' nscc oblivious ;;
-    reps) printf '%s %s' nscc reps ;;
-    laps) printf '%s %s' laps laps ;;
-    prism) printf '%s %s' prism reps ;;
+    reps) printf '%s %s' nscc reps_actual ;;
+    laps_control) printf '%s %s' laps_control laps_control ;;
+    prism) printf '%s %s' prism reps_actual ;;
     swift) printf '%s %s' swift reps ;;
     mswift) printf '%s %s' mswift reps ;;
     mnscc) printf '%s %s' mnscc reps ;;
@@ -49,11 +65,19 @@ arm_config() {
   esac
 }
 
+arm_extra_args() {
+  case "$1" in
+    prism) printf '%s' '-prism_coordination_mode original_prism' ;;
+    *) printf '%s' '' ;;
+  esac
+}
+
 emit_cell() {
-  local arm="$1" failed="$2" seed="$3" cc lb
+  local arm="$1" failed="$2" seed="$3" cc lb extra
   read -r cc lb <<<"$(arm_config "$arm")"
+  extra="$(arm_extra_args "$arm")"
   printf "PATHS=8 END_MS=%s EXTRA_ARGS='%s' bash %s %s %s %s %s %s %s flow expL_%s_f%s_s%s %s\n" \
-    "$END_MS" "$LOSSLESS_ARGS" "$COMMON/run_lib.sh" "$cc" "$lb" "$failed" "$TOPO" "$seed" \
+    "$END_MS" "$LOSSLESS_ARGS $extra" "$COMMON/run_lib.sh" "$cc" "$lb" "$failed" "$TOPO" "$seed" \
     "$OUT/m2m.cm" "$arm" "$failed" "$seed" "$OUT"
 }
 
@@ -69,7 +93,8 @@ if "$dry_run"; then
 fi
 
 cd "$DC"
-[ -x ./htsim_uec ] || { echo "ERROR: ./htsim_uec missing -- build it first" >&2; exit 1; }
+BIN="$DC/../build/datacenter/htsim_uec"
+[ -x "$BIN" ] || { echo "ERROR: $BIN missing -- build it first" >&2; exit 1; }
 mkdir -p "$OUT"
 python3 "$COMMON/gen/many2many.py" "$OUT/m2m.cm" 64 16 pairs 2000000 128 16
 
@@ -77,7 +102,8 @@ for failed in "${FAILEDS[@]}"; do
   for seed in "${SEEDS[@]}"; do
     for arm in "${BASELINES[@]}"; do
       read -r cc lb <<<"$(arm_config "$arm")"
-      PATHS=8 END_MS="$END_MS" EXTRA_ARGS="$LOSSLESS_ARGS" \
+      extra="$(arm_extra_args "$arm")"
+      PATHS=8 END_MS="$END_MS" EXTRA_ARGS="$LOSSLESS_ARGS $extra" \
         bash "$COMMON/run_lib.sh" "$cc" "$lb" "$failed" "$TOPO" "$seed" "$OUT/m2m.cm" \
           flow "expL_${arm}_f${failed}_s${seed}" "$OUT"
     done

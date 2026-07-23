@@ -226,6 +226,11 @@ if ( ENABLE_TESTS )
         datacenter/add_motivation/common/tests/test_laps_recovery.cpp)
     target_link_libraries(test_laps_recovery PRIVATE htsim_dc htsim)
     add_test(NAME laps_recovery COMMAND test_laps_recovery)
+
+    add_executable(test_laps_pfc_pause
+        datacenter/add_motivation/common/tests/test_laps_pfc_pause.cpp)
+    target_link_libraries(test_laps_pfc_pause PRIVATE htsim)
+    add_test(NAME laps_pfc_pause COMMAND test_laps_pfc_pause)
     set_tests_properties(laps_recovery PROPERTIES LABELS "laps;unit" TIMEOUT 60)
 
     add_executable(test_laps_path_catalog

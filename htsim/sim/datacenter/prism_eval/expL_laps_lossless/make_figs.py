@@ -13,7 +13,7 @@ FIGS = os.path.join(HERE, "figs")
 PREVIEW_BASELINES = [
     ("ops", "OPS", "ops"),
     ("reps", "REPS", "reps"),
-    ("laps", "LAPS", "laps"),
+    ("laps_control", "LAPS-Control", "laps"),
     ("prism", "Prism", "prism"),
 ]
 ALL_BASELINES = [
@@ -23,7 +23,7 @@ ALL_BASELINES = [
     ("mswift", "REPS+MSwift", "mswift"),
     ("mnscc", "REPS+MNSCC", "mnscc"),
     ("strack", "STrack", "strack"),
-    ("laps", "LAPS", "laps"),
+    ("laps_control", "LAPS-Control", "laps"),
     ("prism", "Prism", "prism"),
 ]
 FAILED = [0, 2, 4, 6, 8, 10, 12]

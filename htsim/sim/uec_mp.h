@@ -137,6 +137,7 @@ public:
     optional<simtime_picosec> nextLapsDeadline(simtime_picosec now) const;
     bool pathIsSelectable(uint16_t pid) const;
     bool hasSelectablePath() const;
+    std::optional<simtime_picosec> lapsRealVal(uint16_t pid) const;
     optional<uint32_t> nextLapsProbeEntropy(simtime_picosec now) override;
     UecMpLapsSignal lapsSignal(simtime_picosec now) const override;
 private:

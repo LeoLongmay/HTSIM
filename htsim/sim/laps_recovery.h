@@ -38,7 +38,7 @@ private:
     friend class LapsRecoveryDomain;
 };
 
-enum class LapsRecoveryCause : uint8_t { ACK_GAP, TIMEOUT };
+enum class LapsRecoveryCause : uint8_t { ACK_GAP, NACK, TIMEOUT };
 
 class LapsRecoveryOwner {
 public:
@@ -75,12 +75,15 @@ public:
     explicit LapsRecoveryDomain(EventList& eventlist);
 
     LapsAttempt sent(LapsPathKey path, LapsRecoveryOwner& owner,
-                     UecBasePacket::seq_t seq, mem_b bytes);
+                     UecBasePacket::seq_t seq, mem_b bytes,
+                     std::optional<simtime_picosec> one_way_delay = std::nullopt);
     bool acknowledge(LapsAttempt attempt,
                      std::optional<simtime_picosec> one_way_delay = std::nullopt);
     bool nack(LapsAttempt attempt);
     bool retire(LapsAttempt attempt);
     const LapsRecoveryStats& statsFor(const LapsRecoveryOwner& owner) const;
+    void pause();
+    void resume(simtime_picosec paused_for);
 
     void removeOwner(LapsRecoveryOwner& owner);
     void doNextEvent() override;
@@ -128,6 +131,7 @@ private:
     std::map<uint64_t, LapsRecoveryOwner*> attempt_owners_;
     EventList::Handle timer_handle_;
     simtime_picosec timer_deadline_;
+    bool paused_ = false;
     uint64_t next_attempt_id_ = 1;
 };
 

@@ -150,7 +150,8 @@ int main(int argc, char **argv) {
     simtime_picosec switch_latency = timeFromUs((uint32_t)0);
     queue_type qt = COMPOSITE;
 
-    enum LoadBalancing_Algo { BITMAP, REPS, REPS_LEGACY, REPS_ACTUAL, FREEZING, OBLIVIOUS, MIXED, ECMP, LAPS};
+    enum LoadBalancing_Algo { BITMAP, REPS, REPS_LEGACY, REPS_ACTUAL, FREEZING, OBLIVIOUS, MIXED, ECMP,
+                              LAPS, LAPS_CONTROL};
     LoadBalancing_Algo load_balancing_algo = MIXED;
 
     bool log_sink = false;
@@ -505,6 +506,8 @@ int main(int argc, char **argv) {
                 UecSrc::_sender_cc_algo = UecSrc::MSWIFT;
             else if (!strcmp(argv[i+1],"laps"))
                 UecSrc::_sender_cc_algo = UecSrc::LAPS;
+            else if (!strcmp(argv[i+1],"laps_control"))
+                UecSrc::_sender_cc_algo = UecSrc::LAPS_CONTROL;
             else {
                 cout << "UNKNOWN CC ALGO " << argv[i+1] << endl;
                 exit(1);
@@ -551,6 +554,9 @@ int main(int argc, char **argv) {
             }
             else if (!strcmp(argv[i+1], "laps")) {
                 load_balancing_algo = LAPS;
+            }
+            else if (!strcmp(argv[i+1], "laps_control")) {
+                load_balancing_algo = LAPS_CONTROL;
             }
             else {
                 cout << "Unknown load balancing algorithm of type " << argv[i+1] << ", expecting bitmap, reps, reps_legacy, reps_actual, freezing, oblivious, mixed, ecmp, or laps" << endl;
@@ -976,6 +982,14 @@ int main(int argc, char **argv) {
     }
     if (load_balancing_algo == LAPS && UecSrc::_sender_cc_algo != UecSrc::LAPS) {
         cerr << "-load_balancing_algo laps requires -sender_cc_algo laps" << endl;
+        return 1;
+    }
+    if (UecSrc::_sender_cc_algo == UecSrc::LAPS_CONTROL && load_balancing_algo != LAPS_CONTROL) {
+        cerr << "-sender_cc_algo laps_control requires -load_balancing_algo laps_control" << endl;
+        return 1;
+    }
+    if (load_balancing_algo == LAPS_CONTROL && UecSrc::_sender_cc_algo != UecSrc::LAPS_CONTROL) {
+        cerr << "-load_balancing_algo laps_control requires -sender_cc_algo laps_control" << endl;
         return 1;
     }
     if (prism_coordination_mode != PrismCoordinationMode::DISABLED &&
@@ -1409,6 +1423,12 @@ int main(int argc, char **argv) {
                                                        UecSrc::_laps_beta);
                 });
                 break;
+            case LAPS_CONTROL:
+                api->setMultipathFactory([path_entropy_size]() {
+                    return std::make_unique<UecMpLaps>(path_entropy_size, UecSrc::_debug,
+                                                       UecSrc::_laps_beta);
+                });
+                break;
             default:
                 cout << "ERROR: Failed to set multipath algorithm, abort." << endl;
                 abort();
@@ -1473,6 +1493,9 @@ int main(int argc, char **argv) {
             } else if (load_balancing_algo == LAPS){
                 mp = make_unique<UecMpLaps>(path_entropy_size, UecSrc::_debug,
                                              UecSrc::_laps_beta);
+            } else if (load_balancing_algo == LAPS_CONTROL){
+                mp = make_unique<UecMpLaps>(path_entropy_size, UecSrc::_debug,
+                                             UecSrc::_laps_beta);
             } else {
                 cout << "ERROR: Failed to set multipath algorithm, abort." << endl;
                 abort();
@@ -1502,7 +1525,7 @@ int main(int argc, char **argv) {
             else //each connection has its own pacer, so receiver driven mode does not kick in!
                 uec_snk = new UecSink(NULL,linkspeed,1.1,UecBasePacket::unquantize(UecSink::_credit_per_pull),eventlist,*nics.at(dest), ports);
 
-            if (uec_src->isLaps()) {
+            if (uec_src->usesLapsPathControl()) {
                 if (path_entropy_size > numeric_limits<uint16_t>::max()) {
                 cerr << "LAPS path count exceeds the catalog PID range" << endl;
                     abort();
@@ -1584,7 +1607,7 @@ int main(int argc, char **argv) {
                 uec_snk->setFlowId(crt->flowid);
             }
 
-            if (uec_src->isLaps()) {
+            if (uec_src->usesLapsPathControl()) {
                 for (uint32_t plane = 0; plane < planes; ++plane) {
                     assert(plane < laps_catalogs.size());
                     uec_snk->lapsSetPathCatalog(*uec_src, plane, laps_catalogs[plane]);
@@ -1699,6 +1722,16 @@ int main(int argc, char **argv) {
                         dsttotor->push_back(topo[p]->queues_ns_nlp[dest][topo_cfg->HOST_POD_SWITCH(dest)][0]->getRemoteEndpoint());
 
                         uec_src->connectPort(p, *srctotor, *dsttotor, *uec_snk, crt->start);
+                        // In lossless mode the host-facing queue is where a
+                        // hop-by-hop PFC frame finally reaches the source.
+                        // Register this transport port so ETH_PAUSE is
+                        // delivered to UecSrc rather than only stopping the
+                        // simulated host queue.  UecSrc then exposes the
+                        // pause to its NIC/RTO and, for LAPS, its PID timer.
+                        if (auto* host_queue = dynamic_cast<HostQueue*>(
+                                topo[p]->queues_ns_nlp[src][topo_cfg->HOST_POD_SWITCH(src)][0])) {
+                            host_queue->addHostSender(uec_src->getPort(p));
+                        }
                         //uec_src->setPaths(path_entropy_size);
                         //uec_snk->setPaths(path_entropy_size);
 

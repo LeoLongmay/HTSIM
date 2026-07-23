@@ -16,7 +16,7 @@ def main():
 
     assert module.DATA.endswith("expL_laps_lossless/data")
     assert module.FIGS.endswith("expL_laps_lossless/figs")
-    assert [x[0] for x in module.PREVIEW_BASELINES] == ["ops", "reps", "laps", "prism"]
+    assert [x[0] for x in module.PREVIEW_BASELINES] == ["ops", "reps", "laps_control", "prism"]
     assert module.PREVIEW_BASELINES[-1] == ("prism", "Prism", "prism")
     assert module.perf_figs.plot_style.COLORS["prism"] == "tab:green"
 
@@ -26,12 +26,12 @@ def main():
             with open(path, "w") as fh:
                 fh.write("0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 1000\n")
                 fh.write("0.001000000 Type FLOW_EVENT SrcID 1 Ev FINISH FlowID 1 Bytes 1000 Pkts 1\n")
-        with open(os.path.join(tmpdir, "expL_laps_f0_s13.flow.txt"), "w") as fh:
+        with open(os.path.join(tmpdir, "expL_laps_control_f0_s13.flow.txt"), "w") as fh:
             fh.write("0.000000000 Type FLOW_EVENT SrcID 1 Ev START FlowID 1 Flowsize 1000\n")
         try:
             module.require_complete_cells(tmpdir, "expL", module.PREVIEW_BASELINES, [0], [13])
         except RuntimeError as exc:
-            assert "expL_laps_f0_s13" in str(exc)
+            assert "expL_laps_control_f0_s13" in str(exc)
             assert "completion_rate" in str(exc)
         else:
             raise AssertionError("incomplete ExpL cell was accepted")

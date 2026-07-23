@@ -21,9 +21,13 @@ LapsRecoveryDomain::LapsRecoveryDomain(EventList& eventlist)
       timer_deadline_(0) {}
 
 LapsAttempt LapsRecoveryDomain::sent(LapsPathKey path, LapsRecoveryOwner& owner,
-                                     UecBasePacket::seq_t seq, mem_b bytes) {
+                                     UecBasePacket::seq_t seq, mem_b bytes,
+                                     std::optional<simtime_picosec> one_way_delay) {
     const auto path_it = paths_.try_emplace(OwnerPathKey{std::move(path), &owner}).first;
     PathState& state = path_it->second;
+    if (one_way_delay && *one_way_delay != 0) {
+        state.one_way_delay = *one_way_delay;
+    }
     const LapsAttempt attempt(next_attempt_id_++);
     owner_stats_.try_emplace(&owner);
     attempt_owners_.emplace(attempt.id_, &owner);
@@ -91,6 +95,29 @@ const LapsRecoveryStats& LapsRecoveryDomain::statsFor(const LapsRecoveryOwner& o
     static const LapsRecoveryStats empty;
     const auto found = owner_stats_.find(const_cast<LapsRecoveryOwner*>(&owner));
     return found == owner_stats_.end() ? empty : found->second;
+}
+
+void LapsRecoveryDomain::pause() {
+    if (paused_) return;
+    paused_ = true;
+    if (timer_handle_ != eventlist().nullHandle()) {
+        eventlist().cancelPendingSourceByHandle(*this, timer_handle_);
+        timer_handle_ = eventlist().nullHandle();
+    }
+}
+
+void LapsRecoveryDomain::resume(simtime_picosec paused_for) {
+    if (!paused_) return;
+    paused_ = false;
+    for (auto& entry : paths_) {
+        PathState& state = entry.second;
+        if (!state.records.empty()) {
+            state.deadline = state.deadline > std::numeric_limits<simtime_picosec>::max() - paused_for
+                                 ? std::numeric_limits<simtime_picosec>::max()
+                                 : state.deadline + paused_for;
+        }
+    }
+    updateTimer();
 }
 
 std::optional<LapsRecoveryDomain::LocatedAttempt> LapsRecoveryDomain::findAttempt(
@@ -180,6 +207,7 @@ void LapsRecoveryDomain::doNextEvent() {
 }
 
 void LapsRecoveryDomain::updateTimer() {
+    if (paused_) return;
     simtime_picosec earliest_deadline = std::numeric_limits<simtime_picosec>::max();
     bool has_active_deadline = false;
     for (const auto& [path, state] : paths_) {

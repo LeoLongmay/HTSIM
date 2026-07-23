@@ -236,7 +236,7 @@ def render_sweep():
                     color="tab:red", label=r"$C_{cc}$")
         ax.axhline(TARGET_US, color="gray", ls="--", lw=1.8)
         ax.set_xlabel("Number of senders")
-        ax.set_ylabel("Queuing delay (us)")
+        ax.set_ylabel("Queueing delay (us)")
         # ax.yaxis.set_label_coords(-0.08, 0.45)
         ax.set_xticks(x); ax.set_xticklabels([str(n) for n in LOADS])
         ax.set_ylim(bottom=0)

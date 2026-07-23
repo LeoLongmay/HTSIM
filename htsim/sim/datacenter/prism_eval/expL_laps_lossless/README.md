@@ -1,14 +1,16 @@
 # LAPS lossless/PFC preview
 
-This is an isolated lossless/PFC comparison for OPS, REPS, HTSIM-localized
-LAPS, and Prism.
+This is an isolated lossless/PFC comparison for OPS, REPS, LAPS-Control, and
+Prism.  LAPS-Control shares UEC ACK/reliability/PFC semantics with the other
+arms and evaluates LAPS-style latency-aware path/rate control; it is not a
+claim of a faithful reproduction of the original LAPS transport.
 It does not reuse, overwrite, or reinterpret Experiment A's delay-driven
 results; all generated outputs stay in this directory's `data/` and `figs/`
 trees.
 
 ## Preview matrix
 
-The default command runs 140 cells: four arms (`ops`, `reps`, `laps`,
+The default command runs 140 cells: four arms (`ops`, `reps`, `laps_control`,
 `prism`) × failures `{0,2,4,6,8,10,12}` × seeds `{13,14,15,16,17}`. Prism is
 last in both the runner's arm ordering and the figures' green legend entry.
 

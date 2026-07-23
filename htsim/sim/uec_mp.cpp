@@ -121,6 +121,13 @@ bool UecMpLaps::hasSelectablePath() const {
     return false;
 }
 
+optional<simtime_picosec> UecMpLaps::lapsRealVal(uint16_t pid) const {
+    if (pid >= _no_of_paths || !_paths[pid].valid || _paths[pid].real_val == 0) {
+        return {};
+    }
+    return _paths[pid].real_val;
+}
+
 void UecMpLaps::observeLapsDelay(uint32_t path_id, simtime_picosec delay,
                                  simtime_picosec now) {
     observe(path_id, delay, now);

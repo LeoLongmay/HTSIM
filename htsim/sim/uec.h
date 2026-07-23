@@ -67,6 +67,11 @@ public:
     const Route* requestSending(UecSrc& src);
     void startSending(UecSrc& src, mem_b pkt_size, const Route* rt);
     void cantSend(UecSrc& src);
+    void registerSource(UecSrc& src);
+    void unregisterSource(UecSrc& src);
+    void processPfcPause(uint32_t sleep_time);
+    bool pfcPaused() const { return _pfc_paused; }
+    uint64_t pfcEpoch() const { return _pfc_epoch; }
 
     // handle control traffic from receivers.
     // only one of src or sink must be set
@@ -99,6 +104,10 @@ private:
     int _ratio_data, _ratio_control, _crt;
 
     string _nodename;
+    vector<UecSrc*> _sources;
+    bool _pfc_paused = false;
+    simtime_picosec _pfc_pause_started = 0;
+    uint64_t _pfc_epoch = 0;
 };
 
 // Packets are received on ports, but then passed to the Src for handling
@@ -115,7 +124,8 @@ private:
     const Route* _route;  // we're only going to support ECMP_HOST for now.
 };
 
-class UecSrc : public EventSource, public TriggerTarget, public UecTransportConnection {
+class UecSrc : public EventSource, public TriggerTarget, public UecTransportConnection,
+               public LapsRecoveryOwner {
 public:
     static void configureMotivationTrace(const std::string& prefix, const std::string& run_id,
                                          const std::string& scenario, uint32_t seed,
@@ -175,14 +185,25 @@ public:
     void timeToSend(const Route& route);
     void receivePacket(Packet& pkt, uint32_t portnum);
     void doNextEvent();
+    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override {
+        lapsRecover(attempt, seq, bytes, LapsRecoveryCause::TIMEOUT);
+    }
+    void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes,
+                     LapsRecoveryCause cause) override;
     uint32_t dst() { return _dstaddr; }
     void setDst(uint32_t dst) { _dstaddr = dst; }
+    // ``laps`` is the retained, private-recovery research prototype.  The
+    // separately named ``laps_control`` baseline shares UEC reliability and
+    // only reuses the LAPS-style path/rate controller.
     bool isLaps() const;
+    bool isLapsControl() const;
+    bool usesLapsPathControl() const;
+    bool usesLapsPrivateRecovery() const;
     using LapsPathResolver = std::function<bool(
         uint32_t, uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void lapsSetPathResolver(LapsPathResolver resolver);
     void lapsSetPathCatalog(uint32_t plane, std::shared_ptr<const LapsPathCatalog> catalog) {
-        if (isLaps()) {
+        if (usesLapsPathControl()) {
             if (plane >= _laps_path_catalogs.size())
                 _laps_path_catalogs.resize(plane + 1);
             _laps_path_catalogs[plane] = std::move(catalog);
@@ -201,7 +222,7 @@ public:
     }
     void lapsSetRouteAudit(std::shared_ptr<LapsRouteAudit> audit) {
         _laps_route_audit = std::move(audit);
-        if (_laps_route_audit && isLaps()) {
+        if (_laps_route_audit && usesLapsPathControl()) {
             for (const auto& catalog : _laps_path_catalogs)
                 if (catalog) _laps_route_audit->registerCatalog(*catalog);
         }
@@ -280,7 +301,8 @@ public:
     static bool _sender_based_cc;
     static bool _receiver_based_cc;
 
-    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT, LAPS};
+    enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT,
+                     LAPS, LAPS_CONTROL};
     static Sender_CC _sender_cc_algo;
 
     static bool _disable_quick_adapt;
@@ -317,12 +339,14 @@ public:
     struct sendRecord {
         // need a constructor to be able to put this in a map
         sendRecord(uint32_t ppath, mem_b psize, simtime_picosec stime,
-                   UecMpSelection pselection)
-            : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection){};
+                   UecMpSelection pselection, uint64_t ppfc_epoch)
+            : path_id(ppath), pkt_size(psize), send_time(stime), selection(pselection),
+              pfc_epoch(ppfc_epoch){};
         uint32_t path_id;
         mem_b pkt_size;
         simtime_picosec send_time;
         UecMpSelection selection;
+        uint64_t pfc_epoch;
     };
     struct RtxPathSelection {
         uint32_t entropy;
@@ -352,6 +376,8 @@ public:
     void sendLapsProbe();
     void scheduleLapsProbe();
     void cancelLapsProbe();
+    bool lapsPacingPermitsSend() const;
+    void noteLapsDataSent(mem_b bytes);
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
                           UecMpSelection selection);
     RtxPathSelection selectRtxPath(UecDataPacket::seq_t seqno);
@@ -377,6 +403,8 @@ public:
                               uint64_t cwnd_bytes);
     void motivationLogPendingEpoch();
     void queueForRtx(UecBasePacket::seq_t seqno, mem_b pkt_size);
+    void lapsAcknowledge(UecBasePacket::seq_t seqno, uint32_t pid,
+                         simtime_picosec one_way_delay);
     bool validateSendTs(UecBasePacket::seq_t acked_psn, bool rtx_echo);
     void recalculateRTO();
     void startRTO(simtime_picosec send_time);
@@ -409,6 +437,7 @@ public:
     mem_b getNextPacketSize();
     void quick_adapt(bool trimmed);
     void updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
+    void updateCwndOnAck_LAPS(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly_acked_bytes);
     void prismUpdateSignals(simtime_picosec c_cc, simtime_picosec c_spray);
     void prismEpochLog(simtime_picosec c_cc, simtime_picosec c_spray, int region, bool cut);
@@ -574,6 +603,11 @@ public:
     simtime_picosec _flow_start_time;
 
 private:
+    friend class UecNIC;
+    void onPfcPause();
+    void onPfcResume(simtime_picosec paused_for);
+    void logLapsRecoverySummary();
+    void logLapsControlSummary();
     bool quick_adapt(bool is_loss, bool skip, simtime_picosec delay);
     void fair_increase(uint32_t newly_acked_bytes);
     void proportional_increase(uint32_t newly_acked_bytes,simtime_picosec delay);
@@ -594,6 +628,7 @@ private:
     simtime_picosec _rtx_timeout;    // when the RTO is currently set to expire
     simtime_picosec _last_rts;       // time when we last sent an RTS (or zero if never sent)
     EventList::Handle _rto_timer_handle;
+    bool _rto_deferred_by_pfc = false;
 
 
     // Cumulative receiver-reported bytes; also used to drive the ACK clock.
@@ -654,6 +689,7 @@ private:
     uint32_t        _prism_oracle_ack_snapshots = 0;
     uint32_t        _prism_oracle_resolution_failures = 0;
     bool            _prism_epoch_sample_deferred = false;
+    uint64_t        _prism_pfc_filtered_acks = 0;
 
     // MNSCC median-window state. Ring buffer of recent per-ACK delays; the median of the last
     // min(H, _mnscc_wcount) entries drives NSCC. H = _mnscc_h>0 ? _mnscc_h : nyquist_h(cwnd_pkts).
@@ -700,9 +736,25 @@ private:
 
     /******** LAPS probe parameters *********/
     simtime_picosec _laps_probe_timer_when = 0;
+    simtime_picosec _laps_last_probe_at = 0;
     UecDataPacket::seq_t _laps_probe_seqno = 0;
     std::set<UecDataPacket::seq_t> _laps_probe_outstanding;
     EventList::Handle _laps_probe_timer_handle;
+    std::unique_ptr<LapsRecoveryDomain> _laps_recovery;
+    std::map<UecDataPacket::seq_t, LapsAttempt> _laps_attempts;
+    LapsRateState _laps_rate{};
+    simtime_picosec _laps_next_send_at = 0;
+    simtime_picosec _laps_rate_timer_when = 0;
+    EventList::Handle _laps_rate_timer_handle;
+    uint64_t _laps_source_ack_gap_rtx = 0;
+    uint64_t _laps_source_timeout_rtx = 0;
+    uint64_t _laps_source_nack_rtx = 0;
+    uint64_t _laps_probe_sent = 0;
+    uint64_t _laps_probe_acked = 0;
+    uint64_t _pfc_pause_events = 0;
+    uint64_t _pfc_paused_ps = 0;
+    bool _laps_summary_logged = false;
+    bool _laps_control_summary_logged = false;
     /******** END LAPS probe parameters *********/
 
 
@@ -800,14 +852,14 @@ class UecSink : public DataReceiver {
     void connectPort(uint32_t port_num, UecSrc& src, const Route& routeback);
     void lapsSetPathCatalog(const UecSrc& source, uint32_t plane,
                             std::shared_ptr<const LapsPathCatalog> catalog) {
-        if (!source.isLaps())
+        if (!source.usesLapsPathControl())
             return;
         if (plane >= _laps_path_catalogs.size())
             _laps_path_catalogs.resize(plane + 1);
         _laps_path_catalogs[plane] = std::move(catalog);
     }
     void lapsSetRouteAudit(const UecSrc& source, std::shared_ptr<LapsRouteAudit> audit) {
-        if (!source.isLaps()) return;
+        if (!source.usesLapsPathControl()) return;
         _laps_route_audit = std::move(audit);
         if (_laps_route_audit) {
             for (const auto& catalog : _laps_path_catalogs)

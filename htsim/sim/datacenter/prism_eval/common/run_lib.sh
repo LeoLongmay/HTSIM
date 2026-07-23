@@ -27,6 +27,7 @@ DC="$(cd "$(dirname "$0")/../.." && pwd)"   # common -> prism_eval -> datacenter
 cd "$DC"
 PATHS="${PATHS:-8}"; END_MS="${END_MS:-2}"; MTU="${MTU:-4150}"; NODES="${NODES:-128}"
 BIN=./htsim_uec
+[ -x "$BIN" ] || BIN=../build/datacenter/htsim_uec
 DECODER=../build/parse_output
 [ -x "$BIN" ] || { echo "ERROR: $BIN missing -- build htsim_uec first"; exit 1; }
 [ -x "$DECODER" ] || { echo "ERROR: $DECODER missing -- build it first"; exit 1; }
