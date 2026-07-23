@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import csv
 import math
+import argparse
+from bisect import bisect_right
 from pathlib import Path
 
 import matplotlib
@@ -43,11 +45,9 @@ def mean_seed_ecdf(seed_samples: list[list[float]], grid: list[float]) -> list[f
     """Average seed-local ECDFs; each seed has exactly one equal-weight vote."""
     if not seed_samples or any(not samples for samples in seed_samples):
         raise ValueError("all seeds must have nonempty samples")
-    return [
-        sum(sum(value <= point for value in samples) / len(samples) for samples in seed_samples)
-        / len(seed_samples)
-        for point in grid
-    ]
+    ordered_samples = [sorted(samples) for samples in seed_samples]
+    return [sum(bisect_right(samples, point) / len(samples) for samples in ordered_samples)
+            / len(ordered_samples) for point in grid]
 
 
 def percentile(values: list[float], percentile_value: float) -> float:
@@ -59,6 +59,15 @@ def percentile(values: list[float], percentile_value: float) -> float:
 
 def _trace_path(data_dir: Path, arm: str, seed: int) -> Path:
     return data_dir / f"{arm}_s{seed}.csv"
+
+
+def plot_grid(values: list[float], upper: float, max_points: int = 4096) -> list[float]:
+    """Bound plotting work while retaining evenly-spaced ECDF order statistics."""
+    ordered = sorted(value for value in values if value <= upper)
+    if not ordered:
+        return [0.0, upper]
+    stride = max(1, math.ceil(len(ordered) / max_points))
+    return sorted({0.0, upper, *ordered[::stride]})
 
 
 def render(data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[int]) -> None:
@@ -73,8 +82,8 @@ def render(data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[
     main_xmax = max(percentile([value for seed in samples for value in seed], 0.999)
                     for samples in samples_by_arm.values())
     full_xmax = max(all_values)
-    grid = sorted({0.0, main_xmax, *[value for value in all_values if value <= main_xmax]})
-    full_grid = sorted({0.0, full_xmax, *all_values})
+    grid = plot_grid(all_values, main_xmax)
+    full_grid = plot_grid(all_values, full_xmax)
 
     figure, axis = plt.subplots(figsize=(7.4, 4.5), layout="constrained")
     inset = inset_axes(axis, width="42%", height="42%", loc="lower right", borderpad=2.0)
@@ -105,3 +114,21 @@ def render(data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[
     figure.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
     figure.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(figure)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--output-stem", type=Path, required=True)
+    parser.add_argument("--seeds", type=int, nargs="+", default=[13, 14, 15, 16, 17])
+    args = parser.parse_args()
+    render(args.data_dir, args.output_stem, {
+        "ops": "OPS+NSCC",
+        "reps": "REPS+NSCC",
+        "strack": "REPS+STrack",
+        "v2": "REPS+Prism v2-full",
+    }, args.seeds)
+
+
+if __name__ == "__main__":
+    main()

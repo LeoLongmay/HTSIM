@@ -1675,12 +1675,15 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
     // mix in average-delay fallbacks, probes, retransmission ambiguity, or PFC
     // pause artifacts.  It is available to every CC algorithm, not just Prism.
     if (_prism_genuine_sample && valid_normal_send_attempt && !pkt.is_probe_ack()) {
-        static std::ofstream* ack_qdelay_log = [](){
+        // Keep the stream itself in static storage (rather than leaking a
+        // pointer): its destructor flushes the final sample at normal process
+        // exit.  Each simulation has its own process and thus its own file.
+        static std::ofstream ack_qdelay_log = [](){
             const char* p = getenv("ACK_QDELAY");
-            return (p && *p) ? new std::ofstream(p) : nullptr;
+            return (p && *p) ? std::ofstream(p) : std::ofstream();
         }();
-        if (ack_qdelay_log) {
-            (*ack_qdelay_log) << (uint64_t)timeAsNs(eventlist().now()) << ','
+        if (ack_qdelay_log.is_open()) {
+            ack_qdelay_log << (uint64_t)timeAsNs(eventlist().now()) << ','
                               << flowId() << ',' << i->second.path_id << ','
                               << (uint64_t)timeAsNs(raw_rtt) << ','
                               << (uint64_t)timeAsNs(_base_rtt) << ','

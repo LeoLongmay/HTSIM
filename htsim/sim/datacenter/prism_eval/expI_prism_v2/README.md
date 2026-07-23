@@ -19,6 +19,17 @@ The v2 default **binary is byte-identical to today's PRISM** — no existing exp
 affected. The full bundle for v2-full is:
 `-prism_smooth_beta 0.3 -prism_hysteresis 0.25 -prism_engage_spread 28 -prism_disengage_spread 20`
 
+### 1024-node ACK queueing-delay CDF smoke trial
+
+`repro_1024_ack_qdelay_cdf.sh` runs OPS+NSCC, REPS+NSCC, REPS+STrack, and REPS+Prism v2-full on
+the 1:1 1024-node many2many workload (`256 -> 64`, 2 MB, `-failed 16`, five seeds).  It records
+genuine ACK samples as `q = raw_rtt - base_rtt`, averages seed-local ECDFs with equal seed weight,
+and writes `figI_1024_ack_qdelay_cdf.{png,pdf}`.  Run it with:
+
+```bash
+bash repro_1024_ack_qdelay_cdf.sh
+```
+
 Spec: `docs/superpowers/specs/2026-06-25-prism-v2-robust-gated-design.md`
 
 ## 2. Setup
