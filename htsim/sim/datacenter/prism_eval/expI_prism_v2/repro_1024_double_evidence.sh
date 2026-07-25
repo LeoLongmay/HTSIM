@@ -67,7 +67,16 @@ for failed in $FAILURES; do
   done
 done
 
+RENDER=(
+  python3 "$HERE/make_1024_ack_qdelay_cdf.py"
+  --sweep-data-dir "$DATA_REL"
+  --figs-dir "$REL/figs"
+  --failures $FAILURES
+  --seeds $SEEDS
+)
+
 if [ "$DRYRUN" = 1 ]; then
+  echo "${RENDER[*]}"
   exit 0
 fi
 
@@ -85,4 +94,5 @@ for failed in $FAILURES; do
   done
 done
 
-# Task 3 wires the failure-sweep renderer here after these guards pass.
+"${RENDER[@]}"
+echo "done: $REL/figs/figI_1024_{failure_sweep,f32_fct_cdf,v2_engagement_sweep}.{png,pdf}"

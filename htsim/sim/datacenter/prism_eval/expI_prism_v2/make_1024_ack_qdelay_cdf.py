@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Render an equal-seed-weighted CDF of genuine ACK queueing-delay samples."""
+"""Render equal-seed-weighted ACK-delay and failure-sweep evidence."""
 
 from __future__ import annotations
 
+import argparse
 import csv
 import math
-import argparse
 import random
+import statistics
+import sys
 from bisect import bisect_right
 from pathlib import Path
 
@@ -15,6 +17,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+COMMON = Path(__file__).resolve().parent.parent / "common"
+sys.path.insert(0, str(COMMON))
+import metrics  # noqa: E402
 
 
 COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756")
@@ -220,18 +226,237 @@ def render(data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[
     plt.close(figure)
 
 
+def _mean_sem(values: list[float]) -> tuple[float, float]:
+    """Return arithmetic mean and sample standard error for seed-local values."""
+    if not values:
+        raise ValueError("sample mean requires at least one value")
+    finite = [value for value in values if math.isfinite(value)]
+    if not finite:
+        return float("nan"), 0.0
+    mean = statistics.mean(finite)
+    sem = statistics.stdev(finite) / math.sqrt(len(finite)) if len(finite) > 1 else 0.0
+    return mean, sem
+
+
+def _flow_path(data_dir: Path, arm: str, failure: int, seed: int) -> Path:
+    return data_dir / f"double_{arm}_f{failure}_s{seed}.flow.txt"
+
+
+def aggregate_failure_sweep(
+    data_dir: Path, arms: dict[str, str], failures: list[int], seeds: list[int]
+) -> dict[str, dict[int, dict[str, tuple[float, float]]]]:
+    """Aggregate each arm/failure cell as equal-weight seed mean and sample SEM."""
+    if not arms or not failures or not seeds:
+        raise ValueError("arms, failures, and seeds must be nonempty")
+    aggregate: dict[str, dict[int, dict[str, tuple[float, float]]]] = {}
+    for arm in arms:
+        aggregate[arm] = {}
+        for failure in failures:
+            seed_metrics = {
+                "goodput_gbps": [],
+                "mean_fct_us": [],
+                "p99_fct_us": [],
+                "completion_rate": [],
+            }
+            for seed in seeds:
+                flow_path = _flow_path(data_dir, arm, failure, seed)
+                stats = metrics.fct_stats(flow_path)
+                seed_metrics["goodput_gbps"].append(
+                    metrics.aggregate_goodput_gbps(flow_path)
+                )
+                seed_metrics["mean_fct_us"].append(stats["avg_s"] * 1e6)
+                seed_metrics["p99_fct_us"].append(stats["p99_s"] * 1e6)
+                seed_metrics["completion_rate"].append(stats["completion_rate"])
+            aggregate[arm][failure] = {
+                name: _mean_sem(values) for name, values in seed_metrics.items()
+            }
+    return aggregate
+
+
+def engagement_fraction(path: Path) -> float:
+    """Return the arithmetic mean of the Prism v2 engaged flag in CSV column 9."""
+    engaged: list[int] = []
+    with path.open(newline="", encoding="ascii") as stream:
+        for line_number, row in enumerate(csv.reader(stream), start=1):
+            if len(row) != 12:
+                raise ValueError(f"{path}:{line_number}: expected twelve columns")
+            try:
+                value = int(row[9])
+            except ValueError as error:
+                raise ValueError(f"{path}:{line_number}: invalid engaged flag") from error
+            if value not in (0, 1):
+                raise ValueError(f"{path}:{line_number}: engaged flag must be zero or one")
+            engaged.append(value)
+    if not engaged:
+        raise ValueError(f"{path}: no epoch rows")
+    return statistics.mean(engaged)
+
+
+def _flow_fcts_us(path: Path) -> list[float]:
+    starts, finishes = metrics.parse_flow_events(path)
+    return sorted(
+        (finish_time - starts[key]) * 1e6
+        for key, (finish_time, _bytes) in finishes.items()
+        if key in starts
+    )
+
+
+def _save_figure(figure, figures_dir: Path, stem: str) -> None:
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    figure.savefig(figures_dir / f"{stem}.png", dpi=180, bbox_inches="tight")
+    figure.savefig(figures_dir / f"{stem}.pdf", bbox_inches="tight")
+    plt.close(figure)
+
+
+def render_failure_sweep(
+    data_dir: Path,
+    figs_dir: Path,
+    arms: dict[str, str],
+    failures: list[int],
+    seeds: list[int],
+) -> None:
+    """Render performance, failure-32 FCT CDF, and Prism engagement evidence."""
+    if "v2" not in arms:
+        raise ValueError("arms must include Prism v2 key 'v2'")
+    if 32 not in failures:
+        raise ValueError("failure sweep must include failure 32")
+    aggregate = aggregate_failure_sweep(data_dir, arms, failures, seeds)
+
+    performance, axes = plt.subplots(
+        3, 1, figsize=(6.8, 9.0), sharex=True, layout="constrained"
+    )
+    panels = (
+        ("goodput_gbps", "Goodput (Gbps)"),
+        ("mean_fct_us", "Mean FCT (us)"),
+        ("p99_fct_us", "P99 FCT (us)"),
+    )
+    for axis, (metric_name, y_label) in zip(axes, panels):
+        for arm_index, (arm, label) in enumerate(arms.items()):
+            values = [aggregate[arm][failure][metric_name][0] for failure in failures]
+            errors = [aggregate[arm][failure][metric_name][1] for failure in failures]
+            axis.errorbar(
+                failures,
+                values,
+                yerr=errors,
+                marker="o",
+                linewidth=1.8,
+                capsize=3,
+                color=COLORS[arm_index % len(COLORS)],
+                label=label,
+            )
+            for failure, value in zip(failures, values):
+                completion = aggregate[arm][failure]["completion_rate"][0]
+                if completion < 0.999 and math.isfinite(value):
+                    axis.annotate(
+                        f"CR={completion:.3f}",
+                        (failure, value),
+                        xytext=(3, 4),
+                        textcoords="offset points",
+                        color="firebrick",
+                        fontsize=6,
+                    )
+        axis.set_ylabel(y_label)
+        axis.grid(alpha=0.25)
+    axes[0].legend(fontsize=8)
+    axes[-1].set_xlabel("Failed links")
+    axes[-1].set_xticks(failures)
+    performance.suptitle("1024-node many2many failure sweep; seed mean ± sample SEM")
+    _save_figure(performance, figs_dir, "figI_1024_failure_sweep")
+
+    fct_samples = {
+        arm: [
+            _flow_fcts_us(_flow_path(data_dir, arm, 32, seed)) for seed in seeds
+        ]
+        for arm in arms
+    }
+    all_fcts = [
+        value
+        for arm_samples in fct_samples.values()
+        for seed_samples in arm_samples
+        for value in seed_samples
+    ]
+    if not all_fcts:
+        raise ValueError("failure-32 flow logs contain no completed flows")
+    fct_grid = plot_grid(all_fcts, max(all_fcts))
+    fct_figure, fct_axis = plt.subplots(figsize=(7.0, 4.4), layout="constrained")
+    for arm_index, (arm, label) in enumerate(arms.items()):
+        fct_axis.plot(
+            fct_grid,
+            mean_seed_ecdf(fct_samples[arm], fct_grid),
+            linewidth=1.8,
+            color=COLORS[arm_index % len(COLORS)],
+            label=label,
+        )
+    fct_axis.set_xlim(0.0, fct_grid[-1])
+    fct_axis.set_ylim(0.0, 1.01)
+    fct_axis.set_xlabel("Flow completion time (us)")
+    fct_axis.set_ylabel("Empirical CDF")
+    fct_axis.set_title("Failure=32; seed-local FCT ECDFs equally weighted")
+    fct_axis.grid(alpha=0.25)
+    fct_axis.legend(fontsize=8)
+    _save_figure(fct_figure, figs_dir, "figI_1024_f32_fct_cdf")
+
+    engagement = {
+        failure: _mean_sem(
+            [
+                engagement_fraction(
+                    data_dir / f"double_v2_f{failure}_s{seed}.epoch.csv"
+                )
+                for seed in seeds
+            ]
+        )
+        for failure in failures
+    }
+    engagement_figure, engagement_axis = plt.subplots(
+        figsize=(6.8, 4.0), layout="constrained"
+    )
+    engagement_axis.errorbar(
+        failures,
+        [engagement[failure][0] for failure in failures],
+        yerr=[engagement[failure][1] for failure in failures],
+        marker="o",
+        linewidth=1.8,
+        capsize=3,
+        color=COLORS[list(arms).index("v2") % len(COLORS)],
+        label=arms["v2"],
+    )
+    engagement_axis.set_ylim(0.0, 1.0)
+    engagement_axis.set_xticks(failures)
+    engagement_axis.set_xlabel("Failed links")
+    engagement_axis.set_ylabel("Engaged epoch fraction")
+    engagement_axis.set_title("Prism v2 engagement; seed mean ± sample SEM")
+    engagement_axis.grid(alpha=0.25)
+    engagement_axis.legend(fontsize=8)
+    _save_figure(
+        engagement_figure, figs_dir, "figI_1024_v2_engagement_sweep"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--output-stem", type=Path, required=True)
+    parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--output-stem", type=Path)
+    parser.add_argument("--sweep-data-dir", type=Path)
+    parser.add_argument("--figs-dir", type=Path)
+    parser.add_argument("--failures", type=int, nargs="+", default=[0, 8, 16, 24, 32])
     parser.add_argument("--seeds", type=int, nargs="+", default=[13, 14, 15, 16, 17])
     args = parser.parse_args()
-    render_ack_evidence(args.data_dir, args.output_stem, {
+    arms = {
         "ops": "OPS+NSCC",
         "reps": "REPS+NSCC",
         "strack": "REPS+STrack",
         "v2": "REPS+Prism v2-full",
-    }, args.seeds)
+    }
+    if args.sweep_data_dir is not None or args.figs_dir is not None:
+        if args.sweep_data_dir is None or args.figs_dir is None:
+            parser.error("--sweep-data-dir and --figs-dir must be provided together")
+        render_failure_sweep(
+            args.sweep_data_dir, args.figs_dir, arms, args.failures, args.seeds
+        )
+    else:
+        if args.data_dir is None or args.output_stem is None:
+            parser.error("--data-dir and --output-stem must be provided together")
+        render_ack_evidence(args.data_dir, args.output_stem, arms, args.seeds)
 
 
 if __name__ == "__main__":
