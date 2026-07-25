@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import math
 import argparse
+import random
 from bisect import bisect_right
 from pathlib import Path
 
@@ -57,6 +58,48 @@ def percentile(values: list[float], percentile_value: float) -> float:
     return ordered[min(len(ordered) - 1, math.ceil(percentile_value * len(ordered)) - 1)]
 
 
+def nearest(values: list[float], percentile_value: float) -> float:
+    """Return the nearest-rank percentile for a nonempty sequence."""
+    return percentile(values, percentile_value)
+
+
+def bootstrap_delta_band(
+    reference_samples: list[list[float]],
+    arm_samples: list[list[float]],
+    grid: list[float],
+    draws: int = 2000,
+    seed: int = 20260725,
+) -> tuple[list[float], list[float], list[float]]:
+    """Return seed-resampled target-minus-reference ECDF bands.
+
+    Corresponding seed lists are resampled together, preserving per-seed pairing
+    while giving every seed one vote regardless of its trace length.
+    """
+    if len(reference_samples) != len(arm_samples):
+        raise ValueError("reference and arm must have the same number of seeds")
+    if not reference_samples or draws <= 0:
+        raise ValueError("samples and draws must be nonempty")
+    rng = random.Random(seed)
+    draws_by_x = [[] for _ in grid]
+    for _ in range(draws):
+        picks = [rng.randrange(len(reference_samples)) for _ in reference_samples]
+        reference = mean_seed_ecdf([reference_samples[index] for index in picks], grid)
+        arm = mean_seed_ecdf([arm_samples[index] for index in picks], grid)
+        for index, value in enumerate(arm):
+            draws_by_x[index].append(value - reference[index])
+    mean = [
+        arm - reference
+        for arm, reference in zip(
+            mean_seed_ecdf(arm_samples, grid), mean_seed_ecdf(reference_samples, grid)
+        )
+    ]
+    return (
+        mean,
+        [nearest(values, 0.025) for values in draws_by_x],
+        [nearest(values, 0.975) for values in draws_by_x],
+    )
+
+
 def _trace_path(data_dir: Path, arm: str, seed: int) -> Path:
     return data_dir / f"{arm}_s{seed}.csv"
 
@@ -68,6 +111,67 @@ def plot_grid(values: list[float], upper: float, max_points: int = 4096) -> list
         return [0.0, upper]
     stride = max(1, math.ceil(len(ordered) / max_points))
     return sorted({0.0, upper, *ordered[::stride]})
+
+
+def render_ack_evidence(
+    data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[int]
+) -> None:
+    """Render seed-weighted full, low-delay, and relative ACK CDF evidence."""
+    if not arms or not seeds:
+        raise ValueError("arms and seeds must be nonempty")
+    if "reps" not in arms:
+        raise ValueError("arms must include REPS reference key 'reps'")
+
+    samples_by_arm = {
+        arm: [load_qdelay_us(_trace_path(data_dir, arm, seed)) for seed in seeds]
+        for arm in arms
+    }
+    all_values = [
+        value for arm_samples in samples_by_arm.values() for samples in arm_samples for value in samples
+    ]
+    full_grid = plot_grid(all_values, max(all_values))
+    zoom_grid = plot_grid(all_values, upper=25.0)
+
+    figure, axes = plt.subplots(1, 3, figsize=(13.0, 4.1), layout="constrained")
+    full_axis, zoom_axis, delta_axis = axes
+    for index, (arm, label) in enumerate(arms.items()):
+        color = COLORS[index % len(COLORS)]
+        samples = samples_by_arm[arm]
+        full_axis.plot(full_grid, mean_seed_ecdf(samples, full_grid), color=color, linewidth=1.8, label=label)
+        zoom_axis.plot(zoom_grid, mean_seed_ecdf(samples, zoom_grid), color=color, linewidth=1.8, label=label)
+
+    reference_samples = samples_by_arm["reps"]
+    for index, (arm, label) in enumerate(arms.items()):
+        if arm == "reps":
+            continue
+        color = COLORS[index % len(COLORS)]
+        mean, lower, upper = bootstrap_delta_band(reference_samples, samples_by_arm[arm], full_grid)
+        delta_axis.fill_between(full_grid, [value * 100.0 for value in lower],
+                                [value * 100.0 for value in upper], color=color, alpha=0.18)
+        delta_axis.plot(full_grid, [value * 100.0 for value in mean], color=color, linewidth=1.8,
+                        label=f"{label} − {arms['reps']}")
+
+    full_axis.set_xlim(0.0, full_grid[-1])
+    zoom_axis.set_xlim(0.0, 25.0)
+    for axis in (full_axis, zoom_axis):
+        axis.set_ylim(0.0, 1.01)
+        axis.set_xlabel("ACK-derived end-to-end queuing delay (us)")
+        axis.set_ylabel("Empirical CDF")
+        axis.grid(alpha=0.25)
+        axis.legend(fontsize=8)
+    full_axis.set_title("full range")
+    zoom_axis.set_title("low delay")
+    delta_axis.axhline(0.0, color="black", linewidth=1.0, linestyle="--")
+    delta_axis.set_xlim(0.0, full_grid[-1])
+    delta_axis.set_xlabel("ACK-derived end-to-end queuing delay (us)")
+    delta_axis.set_ylabel("Δ ECDF vs REPS+NSCC (percentage points)")
+    delta_axis.grid(alpha=0.25)
+    delta_axis.legend(fontsize=8)
+    figure.suptitle("1024-node many2many, failed=16; five seed-local ECDFs equally weighted")
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
+    figure.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    plt.close(figure)
 
 
 def render(data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[int]) -> None:
@@ -122,7 +226,7 @@ def main() -> None:
     parser.add_argument("--output-stem", type=Path, required=True)
     parser.add_argument("--seeds", type=int, nargs="+", default=[13, 14, 15, 16, 17])
     args = parser.parse_args()
-    render(args.data_dir, args.output_stem, {
+    render_ack_evidence(args.data_dir, args.output_stem, {
         "ops": "OPS+NSCC",
         "reps": "REPS+NSCC",
         "strack": "REPS+STrack",
