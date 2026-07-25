@@ -74,6 +74,86 @@ Defaults (m=0, engage_spread=0) ⇒ gating off ⇒ byte-identical (golden 53e85c
 
 ## 3. Results
 
+### 1024-node predeclared double-evidence sweep
+
+This result uses `fat_tree_1024.topo` with `NODES=1024`, `PATHS=8`, `END_MS=8`, and
+delay-driven mode (`-disable_trim`).  The fixed workload is a 1:1 many2many pattern with
+256 sources, 64 destinations, and 256 paired 2 MB flows.  The predeclared grid contains all
+five failure levels `{0, 8, 16, 24, 32}`, all five seeds `{13, 14, 15, 16, 17}`, and these
+four arms:
+
+| token | arm | congestion control / load balancing | extra flags |
+|-------|-----|--------------------------------------|-------------|
+| ops | OPS+NSCC | `nscc / oblivious` | `-disable_trim` |
+| reps | REPS+NSCC | `nscc / reps` | `-disable_trim` |
+| strack | REPS+STrack | `strack / reps` | `-disable_trim` |
+| v2 | REPS+Prism v2-full | `prism / reps` | `-disable_trim -prism_smooth_beta 0.3 -prism_hysteresis 0.25 -prism_engage_spread 28 -prism_disengage_spread 20` |
+
+From the repository root, reproduce the full 100-run grid and its six sweep figure files with
+the exact command:
+
+```bash
+bash htsim/sim/datacenter/prism_eval/expI_prism_v2/repro_1024_double_evidence.sh
+```
+
+The completion rule is applied independently to every run: `metrics.fct_stats` must report
+`completion_rate >= 0.999`, otherwise the script stops before rendering.  The completed sweep
+has 100/100 qualifying flow logs (observed minimum and maximum completion rate are both 1.0)
+and 25/25 nonempty v2 epoch logs.
+
+For the failure-sweep panels, each point is the arithmetic mean of the five seed-local metrics
+and each error bar is the sample standard error.  ECDFs first form one ECDF per seed and then
+average the five seed-local ECDF values, so every seed has equal weight regardless of its number
+of samples.  The ACK delta panel is target arm minus REPS+NSCC; its band is the 2.5th--97.5th
+nearest-rank interval from 2,000 paired seed-resampling draws (fixed bootstrap seed `20260725`).
+The ACK figure uses the existing 20 `failed=16` traces and does not rerun simulation.
+
+The complete sweep means are reported below; no failure level was omitted.  FCT values are in
+microseconds and each row is the mean of seeds 13--17.
+
+| failed | arm | goodput (Gbps) | mean FCT | p99 FCT | minimum completion |
+|-------:|:----|---------------:|---------:|--------:|-------------------:|
+| 0 | OPS+NSCC | 3459.109 | 767.625 | 1115.829 | 1.000000 |
+| 0 | REPS+NSCC | 3758.322 | 751.779 | 1059.936 | 1.000000 |
+| 0 | REPS+STrack | 3497.405 | 810.694 | 1109.393 | 1.000000 |
+| 0 | REPS+Prism v2-full | 3636.876 | 756.651 | 1080.357 | 1.000000 |
+| 8 | OPS+NSCC | 1489.806 | 1420.969 | 2647.216 | 1.000000 |
+| 8 | REPS+NSCC | 1961.590 | 1230.824 | 2030.388 | 1.000000 |
+| 8 | REPS+STrack | 1909.988 | 1287.728 | 2053.771 | 1.000000 |
+| 8 | REPS+Prism v2-full | 2029.783 | 1198.546 | 1911.483 | 1.000000 |
+| 16 | OPS+NSCC | 1315.955 | 1788.935 | 3040.878 | 1.000000 |
+| 16 | REPS+NSCC | 1839.069 | 1469.808 | 2154.317 | 1.000000 |
+| 16 | REPS+STrack | 1757.739 | 1511.484 | 2258.426 | 1.000000 |
+| 16 | REPS+Prism v2-full | 1923.890 | 1384.304 | 2038.842 | 1.000000 |
+| 24 | OPS+NSCC | 1244.193 | 2075.390 | 3227.589 | 1.000000 |
+| 24 | REPS+NSCC | 1608.370 | 1625.618 | 2511.200 | 1.000000 |
+| 24 | REPS+STrack | 1639.226 | 1644.256 | 2402.344 | 1.000000 |
+| 24 | REPS+Prism v2-full | 1919.751 | 1489.424 | 2055.921 | 1.000000 |
+| 32 | OPS+NSCC | 1197.305 | 2238.630 | 3356.501 | 1.000000 |
+| 32 | REPS+NSCC | 1558.686 | 1689.954 | 2545.351 | 1.000000 |
+| 32 | REPS+STrack | 1569.680 | 1724.593 | 2540.039 | 1.000000 |
+| 32 | REPS+Prism v2-full | 1864.818 | 1532.143 | 2114.668 | 1.000000 |
+
+Prism v2 engagement rises with the complete failure grid rather than being inferred from one
+selected point:
+
+| failed | engaged fraction mean | sample SEM |
+|-------:|----------------------:|-----------:|
+| 0 | 0.024501 | 0.006676 |
+| 8 | 0.228617 | 0.004341 |
+| 16 | 0.333500 | 0.006698 |
+| 24 | 0.387380 | 0.007347 |
+| 32 | 0.420157 | 0.006159 |
+
+Across all five predeclared levels, v2 versus REPS+NSCC changes goodput by
+`{-3.2%, +3.5%, +4.6%, +19.4%, +19.6%}`, mean FCT by
+`{+0.6%, -2.6%, -5.8%, -8.4%, -9.3%}`, and p99 FCT by
+`{+1.9%, -5.9%, -5.4%, -18.1%, -16.9%}` for failures `{0, 8, 16, 24, 32}`,
+respectively.  Thus the complete sweep records a small f=0 cost as well as the improvements at
+every tested nonzero failure level.  `figI_1024_f32_fct_cdf` is the predeclared explanatory
+endpoint for the highest failure level, not a post-hoc selection or a substitute for the full
+sweep.
+
 ### Goodput (Gbps, 5-seed mean) + Δ vs ref
 
 | condition | ref | bold | a1 | a1a2 | v2-full |
@@ -223,6 +303,14 @@ The OAT sweep data establishes the following data-backed conclusions:
 
 ## 5. Figures
 
+- **figI_1024_ack_qdelay_evidence** — existing `failed=16` ACK traces shown as the full and
+  low-delay equal-seed ECDFs plus paired-bootstrap ECDF deltas versus REPS+NSCC.
+- **figI_1024_failure_sweep** — goodput, mean FCT, and p99 FCT over all five predeclared failure
+  levels; points are five-seed means with sample-SEM error bars.
+- **figI_1024_f32_fct_cdf** — the predeclared highest-failure explanatory endpoint, with
+  equally weighted seed-local FCT ECDFs.
+- **figI_1024_v2_engagement_sweep** — v2 engaged-epoch fraction over the complete failure grid;
+  points are five-seed means with sample-SEM error bars.
 - **figI_a_headline** — grouped bars: goodput + avg FCT for {ref, bold, v2-full} across
   {m2m f=0, m2m f=8, incast n32 f=8}. Shows do-no-harm on f0/incast and the preserved f8 win.
 - **figI_b_queue_stability** — last-hop switch queue delay vs time (time-series run, seed 13) for
