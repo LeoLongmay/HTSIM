@@ -96,10 +96,20 @@ the exact command:
 bash htsim/sim/datacenter/prism_eval/expI_prism_v2/repro_1024_double_evidence.sh
 ```
 
-The completion rule is applied independently to every run: `metrics.fct_stats` must report
-`completion_rate >= 0.999`, otherwise the script stops before rendering.  The completed sweep
-has 100/100 qualifying flow logs (observed minimum and maximum completion rate are both 1.0)
-and 25/25 nonempty v2 epoch logs.
+To regenerate only `figI_1024_ack_qdelay_evidence.{png,pdf}` from the existing 20 ACK traces,
+without running any simulation, use this exact repository-root command:
+
+```bash
+python3 htsim/sim/datacenter/prism_eval/expI_prism_v2/make_1024_ack_qdelay_cdf.py \
+  --data-dir htsim/sim/datacenter/prism_eval/expI_prism_v2/data/ack_qdelay_1024 \
+  --output-stem htsim/sim/datacenter/prism_eval/expI_prism_v2/figs/figI_1024_ack_qdelay_evidence \
+  --seeds 13 14 15 16 17
+```
+
+The completion rule is applied independently to every run: `metrics.fct_stats` must report a
+finite numeric `completion_rate >= 0.999`, otherwise the script stops before rendering.  The
+completed sweep has 100/100 qualifying flow logs (observed minimum and maximum completion rate
+are both 1.0) and 25/25 nonempty v2 epoch logs.
 
 For the failure-sweep panels, each point is the arithmetic mean of the five seed-local metrics
 and each error bar is the sample standard error.  ECDFs first form one ECDF per seed and then

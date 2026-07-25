@@ -14,7 +14,7 @@ SPEC.loader.exec_module(MODULE)
 def write_ack_samples(path: Path, values_us: list[float]) -> None:
     path.write_text(
         "".join(
-            f"1,1,0,{14000 + int(value * 1000)},14000,{int(value * 1000)},0,100\\n"
+            f"1,1,0,{14000 + int(value * 1000)},14000,{int(value * 1000)},0,100\n"
             for value in values_us
         ),
         encoding="ascii",
@@ -67,7 +67,7 @@ def test_bootstrap_delta_band_is_deterministic_and_contains_mean():
     assert all(low <= value <= high for low, value, high in zip(lower, mean, upper))
 
 
-def test_render_ack_evidence_writes_png_and_pdf(tmp_path):
+def test_render_ack_evidence_writes_required_plot_semantics(tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()
     arms = {
@@ -79,13 +79,41 @@ def test_render_ack_evidence_writes_png_and_pdf(tmp_path):
     seeds = [13, 14, 15, 16, 17]
     for arm_index, arm in enumerate(arms):
         for seed_index, seed in enumerate(seeds):
-            write_ack_samples(data / f"{arm}_s{seed}.csv", [1.0 + arm_index + seed_index])
+            values = [1.0 + arm_index + seed_index]
+            if arm == "ops" and seed == 13:
+                values.append(1.25)
+            write_ack_samples(data / f"{arm}_s{seed}.csv", values)
 
+    closed_figures = []
+    monkeypatch.setattr(MODULE.plt, "close", closed_figures.append)
     output = tmp_path / "ack_evidence"
     MODULE.render_ack_evidence(data, output, arms, seeds)
 
     assert output.with_suffix(".png").is_file()
     assert output.with_suffix(".pdf").is_file()
+    assert len(closed_figures) == 1
+    figure = closed_figures[0]
+    full_axis, zoom_axis, delta_axis = figure.axes
+    assert [axis.get_title() for axis in (full_axis, zoom_axis)] == [
+        "full range",
+        "low delay",
+    ]
+    assert all(axis.get_ylabel() == "Empirical CDF" for axis in (full_axis, zoom_axis))
+    assert [text.get_text() for text in full_axis.get_legend().get_texts()] == list(
+        arms.values()
+    )
+    assert delta_axis.get_ylabel() == "Δ ECDF vs REPS+NSCC (percentage points)"
+    assert len(delta_axis.collections) == 3
+    assert any(
+        line.get_linestyle() == "--" and set(line.get_ydata()) == {0.0}
+        for line in delta_axis.lines
+    )
+    assert [text.get_text() for text in delta_axis.get_legend().get_texts()] == [
+        "OPS+NSCC − REPS+NSCC",
+        "REPS+STrack − REPS+NSCC",
+        "REPS+Prism v2-full − REPS+NSCC",
+    ]
+    assert "five seed-local ECDFs equally weighted" in figure._suptitle.get_text()
 
 
 def test_failure_sweep_aggregates_equal_weight_seed_means_and_sample_sem(tmp_path):
@@ -146,7 +174,7 @@ def test_engagement_fraction_rejects_empty_or_malformed_rows(tmp_path, contents)
         MODULE.engagement_fraction(epoch)
 
 
-def test_render_failure_sweep_writes_all_png_and_pdf_targets(tmp_path):
+def test_render_failure_sweep_writes_required_plot_semantics(tmp_path, monkeypatch):
     data = tmp_path / "data"
     figures = tmp_path / "figures"
     data.mkdir()
@@ -174,6 +202,14 @@ def test_render_failure_sweep_writes_all_png_and_pdf_targets(tmp_path):
                 encoding="ascii",
             )
 
+    captured_figures = {}
+    save_figure = MODULE._save_figure
+
+    def capture_figure(figure, figures_dir, stem):
+        captured_figures[stem] = figure
+        save_figure(figure, figures_dir, stem)
+
+    monkeypatch.setattr(MODULE, "_save_figure", capture_figure)
     MODULE.render_failure_sweep(data, figures, arms, failures, seeds)
 
     for stem in (
@@ -183,3 +219,41 @@ def test_render_failure_sweep_writes_all_png_and_pdf_targets(tmp_path):
     ):
         assert (figures / f"{stem}.png").is_file()
         assert (figures / f"{stem}.pdf").is_file()
+
+    performance = captured_figures["figI_1024_failure_sweep"]
+    assert [axis.get_ylabel() for axis in performance.axes] == [
+        "Goodput (Gbps)",
+        "Mean FCT (us)",
+        "P99 FCT (us)",
+    ]
+    assert performance.axes[-1].get_xlabel() == "Failed links"
+    assert all(
+        len(axis.containers) == len(arms)
+        and all(container.has_yerr for container in axis.containers)
+        for axis in performance.axes
+    )
+    assert all(
+        [text.get_text() for text in axis.texts] == ["CR=0.833"]
+        for axis in performance.axes
+    )
+    assert "seed mean ± sample SEM" in performance._suptitle.get_text()
+
+    fct_axis = captured_figures["figI_1024_f32_fct_cdf"].axes[0]
+    assert fct_axis.get_xlabel() == "Flow completion time (us)"
+    assert fct_axis.get_ylabel() == "Empirical CDF"
+    assert fct_axis.get_title() == "Failure=32; seed-local FCT ECDFs equally weighted"
+    assert len(fct_axis.lines) == len(arms)
+    assert [text.get_text() for text in fct_axis.get_legend().get_texts()] == list(
+        arms.values()
+    )
+
+    engagement_axis = captured_figures["figI_1024_v2_engagement_sweep"].axes[0]
+    assert engagement_axis.get_ylim() == (0.0, 1.0)
+    assert engagement_axis.get_xlabel() == "Failed links"
+    assert engagement_axis.get_ylabel() == "Engaged epoch fraction"
+    assert engagement_axis.get_title() == "Prism v2 engagement; seed mean ± sample SEM"
+    assert len(engagement_axis.containers) == 1
+    assert engagement_axis.containers[0].has_yerr
+    assert [text.get_text() for text in engagement_axis.get_legend().get_texts()] == [
+        arms["v2"]
+    ]

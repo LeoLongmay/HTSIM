@@ -10,7 +10,11 @@ DATA_REL="$REL/data/double_evidence"
 cd "$DC"
 
 DRYRUN=${DRYRUN:-0}
-END_MS=${END_MS:-8}
+if [ "${END_MS+x}" = x ] && [ "$END_MS" != 8 ]; then
+  echo "ERROR: END_MS must be 8 for the predeclared double-evidence sweep" >&2
+  exit 1
+fi
+END_MS=8
 FAILURES="0 8 16 24 32"
 SEEDS="13 14 15 16 17"
 TOPO=fat_tree_1024.topo
@@ -84,12 +88,33 @@ for failed in $FAILURES; do
   for seed in $SEEDS; do
     for token in ops reps strack v2; do
       flow="$DATA_REL/double_${token}_f${failed}_s${seed}.flow.txt"
-      cr=$(FLOW="$flow" PYTHONPATH="$COMMON" python3 -c \
-        'import os, metrics; print(metrics.fct_stats(os.environ["FLOW"])["completion_rate"])')
-      awk -v cr="$cr" 'BEGIN { exit !(cr >= 0.999) }' || {
-        echo "ERROR: completion rate $cr below 0.999 for arm=$token failed=$failed seed=$seed" >&2
-        exit 1
-      }
+      FLOW="$flow" ARM="$token" FAILED="$failed" SEED="$seed" \
+        PYTHONPATH="$COMMON" python3 -c '
+import math
+import os
+import sys
+
+import metrics
+
+raw = metrics.fct_stats(os.environ["FLOW"])["completion_rate"]
+arm = os.environ["ARM"]
+failed = os.environ["FAILED"]
+seed = os.environ["SEED"]
+try:
+    completion_rate = float(raw)
+except (TypeError, ValueError):
+    valid = False
+else:
+    valid = math.isfinite(completion_rate) and completion_rate >= 0.999
+if not valid:
+    print(
+        f"ERROR: invalid completion rate {raw} for arm={arm} "
+        f"failed={failed} seed={seed} "
+        "(require finite value >= 0.999)",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+'
     done
   done
 done
