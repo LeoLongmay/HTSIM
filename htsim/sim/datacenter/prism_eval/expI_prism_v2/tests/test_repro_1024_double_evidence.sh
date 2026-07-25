@@ -15,9 +15,14 @@ OUT=$(DRYRUN=1 bash "$ROOT/repro_1024_double_evidence.sh")
 
 test "$(grep -c 'run_lib.sh' <<<"$OUT")" -eq 100
 test "$(grep -c 'PRISM_EPOCH=' <<<"$OUT")" -eq 25
+EPOCH_PATHS=$(grep -o 'PRISM_EPOCH=[^ ]*' <<<"$OUT" | cut -d= -f2)
+test "$(sort -u <<<"$EPOCH_PATHS" | wc -l)" -eq 25
 for f in 0 8 16 24 32; do
   grep -F -- " $f fat_tree_1024.topo" <<<"$OUT" >/dev/null
   test "$(grep -c " $f fat_tree_1024.topo" <<<"$OUT")" -eq 20
+done
+for seed in 13 14 15 16 17; do
+  test "$(grep -cF -- "fat_tree_1024.topo $seed " <<<"$OUT")" -eq 20
 done
 for arm in \
   'run_lib.sh nscc oblivious' \
