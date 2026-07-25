@@ -115,6 +115,17 @@ def test_failure_sweep_preserves_incomplete_completion_rate(tmp_path):
     assert aggregate["ops"][0]["completion_rate"][0] < 0.999
 
 
+def test_failure_sweep_rejects_nonfinite_requested_seed_metric(tmp_path):
+    write_flow_log(tmp_path / "double_ops_f0_s13.flow.txt", [1.0])
+    write_flow_log(tmp_path / "double_ops_f0_s14.flow.txt", [])
+    write_flow_log(tmp_path / "double_ops_f0_s15.flow.txt", [3.0])
+
+    with pytest.raises(ValueError, match="non-finite"):
+        MODULE.aggregate_failure_sweep(
+            tmp_path, {"ops": "OPS+NSCC"}, [0], [13, 14, 15]
+        )
+
+
 def test_engagement_fraction_reads_column_nine(tmp_path):
     epoch = tmp_path / "double_v2_f32_s13.epoch.csv"
     epoch.write_text(

@@ -230,11 +230,10 @@ def _mean_sem(values: list[float]) -> tuple[float, float]:
     """Return arithmetic mean and sample standard error for seed-local values."""
     if not values:
         raise ValueError("sample mean requires at least one value")
-    finite = [value for value in values if math.isfinite(value)]
-    if not finite:
-        return float("nan"), 0.0
-    mean = statistics.mean(finite)
-    sem = statistics.stdev(finite) / math.sqrt(len(finite)) if len(finite) > 1 else 0.0
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("sample mean rejects non-finite seed metrics")
+    mean = statistics.mean(values)
+    sem = statistics.stdev(values) / math.sqrt(len(values)) if len(values) > 1 else 0.0
     return mean, sem
 
 
