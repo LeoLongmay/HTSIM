@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# 1024-node ACK-derived queueing-delay CDF: five equal-weight seeds, failed=16.
+# 1024-node ACK-derived queueing-delay CDF: five equal-weight seeds.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 COMMON=$(cd "$HERE/../common" && pwd)
 DC=$(cd "$HERE/../.." && pwd)
 REL="prism_eval/expI_prism_v2"
-DATA_REL="$REL/data/ack_qdelay_1024"
+FAILED=${FAILED:-16}
+DATA_REL=${DATA_REL:-"$REL/data/ack_qdelay_1024"}
+OUTPUT_STEM=${OUTPUT_STEM:-"$REL/figs/figI_1024_ack_qdelay_cdf"}
 cd "$DC"
 
 DRYRUN=${DRYRUN:-0}
@@ -29,19 +31,22 @@ fi
 
 run_one() {
   local token=$1 cc=$2 lb=$3 extra=$4 seed=$5
-  local tag="ackcdf_${token}_f16_s${seed}"
+  local tag="ackcdf_${token}_f${FAILED}_s${seed}"
   local trace="$DATA_REL/${token}_s${seed}.csv"
-  local command="ACK_QDELAY=$trace PATHS=8 NODES=1024 END_MS=$END_MS EXTRA_ARGS=\"$extra\" bash $COMMON/run_lib.sh $cc $lb 16 $TOPO $seed $CM flow $tag $DATA_REL"
+  local command="ACK_QDELAY=$trace PATHS=8 NODES=1024 END_MS=$END_MS EXTRA_ARGS=\"$extra\" bash $COMMON/run_lib.sh $cc $lb $FAILED $TOPO $seed $CM flow $tag $DATA_REL"
   echo "$command"
   if [ "$DRYRUN" != 1 ]; then
     ACK_QDELAY="$trace" PATHS=8 NODES=1024 END_MS="$END_MS" EXTRA_ARGS="$extra" \
-      bash "$COMMON/run_lib.sh" "$cc" "$lb" 16 "$TOPO" "$seed" "$CM" flow "$tag" "$DATA_REL"
+      bash "$COMMON/run_lib.sh" "$cc" "$lb" "$FAILED" "$TOPO" "$seed" "$CM" flow "$tag" "$DATA_REL"
   fi
 }
 
 for seed in $SEEDS; do
   run_one ops    nscc   oblivious "$DD" "$seed"
   run_one reps   nscc   reps      "$DD" "$seed"
+  run_one swift  swift  reps      "$DD" "$seed"
+  run_one mswift mswift reps      "$DD" "$seed"
+  run_one mnscc  mnscc  reps      "$DD" "$seed"
   run_one strack strack reps      "$DD" "$seed"
   run_one v2     prism  reps      "$V2" "$seed"
 done
@@ -50,9 +55,9 @@ if [ "$DRYRUN" = 1 ]; then
   exit 0
 fi
 
-for token in ops reps strack v2; do
+for token in ops reps swift mswift mnscc strack v2; do
   for seed in $SEEDS; do
-    flow="$DATA_REL/ackcdf_${token}_f16_s${seed}.flow.txt"
+    flow="$DATA_REL/ackcdf_${token}_f${FAILED}_s${seed}.flow.txt"
     test -s "$flow"
     test -s "$DATA_REL/${token}_s${seed}.csv"
     cr=$(PYTHONPATH="$COMMON" python3 -c "import metrics; print(metrics.fct_stats('$flow')['completion_rate'])")
@@ -65,6 +70,7 @@ done
 
 python3 "$HERE/make_1024_ack_qdelay_cdf.py" \
   --data-dir "$DATA_REL" \
-  --output-stem "$REL/figs/figI_1024_ack_qdelay_cdf" \
+  --output-stem "$OUTPUT_STEM" \
+  --simple-cdf --failure "$FAILED" \
   --seeds $SEEDS
-echo "done: $REL/figs/figI_1024_ack_qdelay_cdf.{png,pdf}"
+echo "done: $OUTPUT_STEM.{png,pdf}"

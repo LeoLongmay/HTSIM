@@ -23,8 +23,25 @@ sys.path.insert(0, str(COMMON))
 import metrics  # noqa: E402
 
 
-COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756")
+# Keep ACK-CDF baselines visually identical to expA_delaydriven/figA1dd_avg_fct.
+ARM_COLORS = {
+    "ops": "tab:gray",
+    "reps": "tab:blue",
+    "swift": "tab:pink",
+    "mswift": "tab:olive",
+    "mnscc": "tab:brown",
+    "strack": "tab:orange",
+    "v2": "tab:green",
+}
 MAIN_ACK_QDELAY_XMAX_US = 25.0
+
+
+def color_for_arm(arm: str) -> str:
+    """Return the shared evaluation colour for a named ACK-CDF arm."""
+    try:
+        return ARM_COLORS[arm]
+    except KeyError as error:
+        raise ValueError(f"no plotting colour configured for arm {arm!r}") from error
 
 
 def load_qdelay_us(path: Path) -> list[float]:
@@ -145,17 +162,17 @@ def render_ack_evidence(
 
     figure, axes = plt.subplots(1, 3, figsize=(13.0, 4.1), layout="constrained")
     full_axis, zoom_axis, delta_axis = axes
-    for index, (arm, label) in enumerate(arms.items()):
-        color = COLORS[index % len(COLORS)]
+    for arm, label in arms.items():
+        color = color_for_arm(arm)
         samples = samples_by_arm[arm]
         full_axis.plot(full_grid, mean_seed_ecdf(samples, full_grid), color=color, linewidth=1.8, label=label)
         zoom_axis.plot(zoom_grid, mean_seed_ecdf(samples, zoom_grid), color=color, linewidth=1.8, label=label)
 
     reference_samples = samples_by_arm["reps"]
-    for index, (arm, label) in enumerate(arms.items()):
+    for arm, label in arms.items():
         if arm == "reps":
             continue
-        color = COLORS[index % len(COLORS)]
+        color = color_for_arm(arm)
         mean, lower, upper = bootstrap_delta_band(reference_samples, samples_by_arm[arm], full_grid)
         delta_axis.fill_between(full_grid, [value * 100.0 for value in lower],
                                 [value * 100.0 for value in upper], color=color, alpha=0.18)
@@ -203,8 +220,8 @@ def render(
 
     figure, axis = plt.subplots(figsize=(7.4, 4.5), layout="constrained")
     inset = inset_axes(axis, width="42%", height="42%", loc="lower right", borderpad=2.0)
-    for index, (arm, label) in enumerate(arms.items()):
-        color = COLORS[index % len(COLORS)]
+    for arm, label in arms.items():
+        color = color_for_arm(arm)
         seed_samples = samples_by_arm[arm]
         axis.plot(grid, mean_seed_ecdf(seed_samples, grid), color=color, linewidth=1.8, label=label)
         inset.plot(full_grid, mean_seed_ecdf(seed_samples, full_grid), color=color, linewidth=1.3)
@@ -444,6 +461,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--output-stem", type=Path)
+    parser.add_argument("--simple-cdf", action="store_true",
+                        help="write the two-panel-compatible CDF with a full-range inset")
+    parser.add_argument("--failure", type=int, default=16,
+                        help="failed-link count to state on a simple CDF title")
     parser.add_argument("--sweep-data-dir", type=Path)
     parser.add_argument("--figs-dir", type=Path)
     parser.add_argument("--failures", type=int, nargs="+", default=[0, 8, 16, 24, 32])
@@ -453,6 +474,9 @@ def main() -> None:
     arms = {
         "ops": "OPS+NSCC",
         "reps": "REPS+NSCC",
+        "swift": "REPS+Swift",
+        "mswift": "REPS+MSwift",
+        "mnscc": "REPS+MNSCC",
         "strack": "REPS+STrack",
         "v2": "REPS+Prism v2-full",
     }
@@ -472,7 +496,10 @@ def main() -> None:
     else:
         if args.data_dir is None or args.output_stem is None:
             parser.error("--data-dir and --output-stem must be provided together")
-        render_ack_evidence(args.data_dir, args.output_stem, arms, args.seeds)
+        if args.simple_cdf:
+            render(args.data_dir, args.output_stem, arms, args.seeds, args.failure)
+        else:
+            render_ack_evidence(args.data_dir, args.output_stem, arms, args.seeds)
 
 
 if __name__ == "__main__":

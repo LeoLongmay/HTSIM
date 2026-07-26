@@ -38,7 +38,7 @@ def test_load_qdelay_rejects_bad_schema(tmp_path):
 def test_render_writes_png_and_pdf(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
-    arms = {"reps": "REPS+NSCC", "prism": "REPS+Prism v2-full"}
+    arms = {"reps": "REPS+NSCC", "v2": "REPS+Prism v2-full"}
     for arm in arms:
         for seed, value in ((13, 1000), (14, 2000)):
             (data / f"{arm}_s{seed}.csv").write_text(
@@ -58,3 +58,15 @@ def test_main_ack_cdf_is_limited_to_low_delay_range():
 
 def test_ack_cdf_title_names_failure_level():
     assert MODULE.ack_cdf_title(32) == "1024-node many2many, failed=32; equal-weight five-seed ECDF"
+
+
+def test_ack_cdf_uses_the_delay_driven_baseline_palette():
+    assert MODULE.ARM_COLORS == {
+        "ops": "tab:gray",
+        "reps": "tab:blue",
+        "swift": "tab:pink",
+        "mswift": "tab:olive",
+        "mnscc": "tab:brown",
+        "strack": "tab:orange",
+        "v2": "tab:green",
+    }
