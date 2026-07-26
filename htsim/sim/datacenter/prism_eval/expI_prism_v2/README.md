@@ -89,7 +89,7 @@ four arms:
 | strack | REPS+STrack | `strack / reps` | `-disable_trim` |
 | v2 | REPS+Prism v2-full | `prism / reps` | `-disable_trim -prism_smooth_beta 0.3 -prism_hysteresis 0.25 -prism_engage_spread 28 -prism_disengage_spread 20` |
 
-From the repository root, reproduce the full 100-run grid and its six sweep figure files with
+From the repository root, reproduce the full 100-run grid and its eight sweep figure files with
 the exact command:
 
 ```bash
@@ -160,9 +160,9 @@ Across all five predeclared levels, v2 versus REPS+NSCC changes goodput by
 `{+0.6%, -2.6%, -5.8%, -8.4%, -9.3%}`, and p99 FCT by
 `{+1.9%, -5.9%, -5.4%, -18.1%, -16.9%}` for failures `{0, 8, 16, 24, 32}`,
 respectively.  Thus the complete sweep records a small f=0 cost as well as the improvements at
-every tested nonzero failure level.  `figI_1024_f32_fct_cdf` is the predeclared explanatory
-endpoint for the highest failure level, not a post-hoc selection or a substitute for the full
-sweep.
+every tested nonzero failure level.  `figI_1024_f16_fct_cdf` and
+`figI_1024_f32_fct_cdf` are the predeclared explanatory endpoints for moderate and highest
+failure, respectively, not post-hoc selections or substitutes for the full sweep.
 
 ### Goodput (Gbps, 5-seed mean) + Δ vs ref
 
@@ -317,8 +317,8 @@ The OAT sweep data establishes the following data-backed conclusions:
   low-delay equal-seed ECDFs plus paired-bootstrap ECDF deltas versus REPS+NSCC.
 - **figI_1024_failure_sweep** — goodput, mean FCT, and p99 FCT over all five predeclared failure
   levels; points are five-seed means with sample-SEM error bars.
-- **figI_1024_f32_fct_cdf** — the predeclared highest-failure explanatory endpoint, with
-  equally weighted seed-local FCT ECDFs.
+- **figI_1024_f16_fct_cdf** and **figI_1024_f32_fct_cdf** — the predeclared moderate- and
+  highest-failure explanatory endpoints, with equally weighted seed-local FCT ECDFs.
 - **figI_1024_v2_engagement_sweep** — v2 engaged-epoch fraction over the complete failure grid;
   points are five-seed means with sample-SEM error bars.
 - **figI_a_headline** — grouped bars: goodput + avg FCT for {ref, bold, v2-full} across

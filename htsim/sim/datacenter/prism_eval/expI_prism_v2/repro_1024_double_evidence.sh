@@ -120,4 +120,5 @@ if not valid:
 done
 
 "${RENDER[@]}"
-echo "done: $REL/figs/figI_1024_{failure_sweep,f32_fct_cdf,v2_engagement_sweep}.{png,pdf}"
+"${RENDER[@]}" --fct-cdf-failure 16
+echo "done: $REL/figs/figI_1024_{failure_sweep,f16_fct_cdf,f32_fct_cdf,v2_engagement_sweep}.{png,pdf}"

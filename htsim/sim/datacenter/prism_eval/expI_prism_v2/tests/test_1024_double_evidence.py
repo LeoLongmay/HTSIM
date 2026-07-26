@@ -184,7 +184,7 @@ def test_render_failure_sweep_writes_required_plot_semantics(tmp_path, monkeypat
         "strack": "REPS+STrack",
         "v2": "REPS+Prism v2-full",
     }
-    failures = [0, 32]
+    failures = [0, 8, 16, 24, 32]
     seeds = [13, 14]
     for arm_index, arm in enumerate(arms):
         for failure in failures:
@@ -211,10 +211,14 @@ def test_render_failure_sweep_writes_required_plot_semantics(tmp_path, monkeypat
 
     monkeypatch.setattr(MODULE, "_save_figure", capture_figure)
     MODULE.render_failure_sweep(data, figures, arms, failures, seeds)
+    MODULE.render_failure_sweep(
+        data, figures, arms, failures, seeds, fct_cdf_failure=16
+    )
 
     for stem in (
         "figI_1024_failure_sweep",
         "figI_1024_f32_fct_cdf",
+        "figI_1024_f16_fct_cdf",
         "figI_1024_v2_engagement_sweep",
     ):
         assert (figures / f"{stem}.png").is_file()
@@ -238,10 +242,10 @@ def test_render_failure_sweep_writes_required_plot_semantics(tmp_path, monkeypat
     )
     assert "seed mean ± sample SEM" in performance._suptitle.get_text()
 
-    fct_axis = captured_figures["figI_1024_f32_fct_cdf"].axes[0]
+    fct_axis = captured_figures["figI_1024_f16_fct_cdf"].axes[0]
     assert fct_axis.get_xlabel() == "Flow completion time (us)"
     assert fct_axis.get_ylabel() == "Empirical CDF"
-    assert fct_axis.get_title() == "Failure=32; seed-local FCT ECDFs equally weighted"
+    assert fct_axis.get_title() == "Failure=16; seed-local FCT ECDFs equally weighted"
     assert len(fct_axis.lines) == len(arms)
     assert [text.get_text() for text in fct_axis.get_legend().get_texts()] == list(
         arms.values()

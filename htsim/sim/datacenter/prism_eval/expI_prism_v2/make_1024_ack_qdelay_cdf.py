@@ -313,12 +313,13 @@ def render_failure_sweep(
     arms: dict[str, str],
     failures: list[int],
     seeds: list[int],
+    fct_cdf_failure: int = 32,
 ) -> None:
-    """Render performance, failure-32 FCT CDF, and Prism engagement evidence."""
+    """Render performance, selected FCT CDF, and Prism engagement evidence."""
     if "v2" not in arms:
         raise ValueError("arms must include Prism v2 key 'v2'")
-    if 32 not in failures:
-        raise ValueError("failure sweep must include failure 32")
+    if fct_cdf_failure not in failures:
+        raise ValueError("FCT CDF failure must be included in failure sweep")
     aggregate = aggregate_failure_sweep(data_dir, arms, failures, seeds)
 
     performance, axes = plt.subplots(
@@ -364,7 +365,7 @@ def render_failure_sweep(
 
     fct_samples = {
         arm: [
-            _flow_fcts_us(_flow_path(data_dir, arm, 32, seed)) for seed in seeds
+            _flow_fcts_us(_flow_path(data_dir, arm, fct_cdf_failure, seed)) for seed in seeds
         ]
         for arm in arms
     }
@@ -375,7 +376,7 @@ def render_failure_sweep(
         for value in seed_samples
     ]
     if not all_fcts:
-        raise ValueError("failure-32 flow logs contain no completed flows")
+        raise ValueError("selected failure flow logs contain no completed flows")
     fct_grid = plot_grid(all_fcts, max(all_fcts))
     fct_figure, fct_axis = plt.subplots(figsize=(7.0, 4.4), layout="constrained")
     for arm_index, (arm, label) in enumerate(arms.items()):
@@ -390,10 +391,12 @@ def render_failure_sweep(
     fct_axis.set_ylim(0.0, 1.01)
     fct_axis.set_xlabel("Flow completion time (us)")
     fct_axis.set_ylabel("Empirical CDF")
-    fct_axis.set_title("Failure=32; seed-local FCT ECDFs equally weighted")
+    fct_axis.set_title(
+        f"Failure={fct_cdf_failure}; seed-local FCT ECDFs equally weighted"
+    )
     fct_axis.grid(alpha=0.25)
     fct_axis.legend(fontsize=8)
-    _save_figure(fct_figure, figs_dir, "figI_1024_f32_fct_cdf")
+    _save_figure(fct_figure, figs_dir, f"figI_1024_f{fct_cdf_failure}_fct_cdf")
 
     engagement = {
         failure: _mean_sem(
@@ -439,6 +442,7 @@ def main() -> None:
     parser.add_argument("--figs-dir", type=Path)
     parser.add_argument("--failures", type=int, nargs="+", default=[0, 8, 16, 24, 32])
     parser.add_argument("--seeds", type=int, nargs="+", default=[13, 14, 15, 16, 17])
+    parser.add_argument("--fct-cdf-failure", type=int, default=32)
     args = parser.parse_args()
     arms = {
         "ops": "OPS+NSCC",
@@ -449,8 +453,15 @@ def main() -> None:
     if args.sweep_data_dir is not None or args.figs_dir is not None:
         if args.sweep_data_dir is None or args.figs_dir is None:
             parser.error("--sweep-data-dir and --figs-dir must be provided together")
+        if args.fct_cdf_failure not in args.failures:
+            parser.error("--fct-cdf-failure must be present in --failures")
         render_failure_sweep(
-            args.sweep_data_dir, args.figs_dir, arms, args.failures, args.seeds
+            args.sweep_data_dir,
+            args.figs_dir,
+            arms,
+            args.failures,
+            args.seeds,
+            args.fct_cdf_failure,
         )
     else:
         if args.data_dir is None or args.output_stem is None:
