@@ -24,6 +24,7 @@ import metrics  # noqa: E402
 
 
 COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756")
+MAIN_ACK_QDELAY_XMAX_US = 25.0
 
 
 def load_qdelay_us(path: Path) -> list[float]:
@@ -189,8 +190,7 @@ def render(data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[
         samples_by_arm[arm] = [load_qdelay_us(_trace_path(data_dir, arm, seed)) for seed in seeds]
 
     all_values = [value for samples in samples_by_arm.values() for seed in samples for value in seed]
-    main_xmax = max(percentile([value for seed in samples for value in seed], 0.999)
-                    for samples in samples_by_arm.values())
+    main_xmax = MAIN_ACK_QDELAY_XMAX_US
     full_xmax = max(all_values)
     grid = plot_grid(all_values, main_xmax)
     full_grid = plot_grid(all_values, full_xmax)

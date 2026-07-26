@@ -50,3 +50,7 @@ def test_render_writes_png_and_pdf(tmp_path):
 
     assert output.with_suffix(".png").is_file()
     assert output.with_suffix(".pdf").is_file()
+
+
+def test_main_ack_cdf_is_limited_to_low_delay_range():
+    assert MODULE.MAIN_ACK_QDELAY_XMAX_US == 25.0
