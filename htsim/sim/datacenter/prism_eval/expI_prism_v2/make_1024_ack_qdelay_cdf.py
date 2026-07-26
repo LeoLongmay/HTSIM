@@ -21,6 +21,7 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 COMMON = Path(__file__).resolve().parent.parent / "common"
 sys.path.insert(0, str(COMMON))
 import metrics  # noqa: E402
+import plot_style  # noqa: E402
 
 
 # Keep ACK-CDF baselines visually identical to expA_delaydriven/figA1dd_avg_fct.
@@ -34,6 +35,9 @@ ARM_COLORS = {
     "v2": "tab:green",
 }
 MAIN_ACK_QDELAY_XMAX_US = 25.0
+# Match expA_delaydriven/figA1dd_avg_fct, rendered by render_main_perf_split().
+REFERENCE_FIGSIZE_IN = (5.2, 3.8)
+REFERENCE_FONT_SIZE_PT = 24
 
 
 def color_for_arm(arm: str) -> str:
@@ -42,6 +46,11 @@ def color_for_arm(arm: str) -> str:
         return ARM_COLORS[arm]
     except KeyError as error:
         raise ValueError(f"no plotting colour configured for arm {arm!r}") from error
+
+
+def apply_reference_figure_style() -> None:
+    """Use the canvas and base typography of figA1dd_avg_fct."""
+    plot_style.apply_style(REFERENCE_FONT_SIZE_PT)
 
 
 def load_qdelay_us(path: Path) -> list[float]:
@@ -218,7 +227,8 @@ def render(
     grid = plot_grid(all_values, main_xmax)
     full_grid = plot_grid(all_values, full_xmax)
 
-    figure, axis = plt.subplots(figsize=(7.4, 4.5), layout="constrained")
+    apply_reference_figure_style()
+    figure, axis = plt.subplots(figsize=REFERENCE_FIGSIZE_IN, layout="constrained")
     inset = inset_axes(axis, width="42%", height="42%", loc="lower right", borderpad=2.0)
     for arm, label in arms.items():
         color = color_for_arm(arm)
@@ -233,19 +243,18 @@ def render(
 
     axis.set_xlim(0.0, main_xmax)
     axis.set_ylim(0.0, 1.01)
-    axis.set_xlabel("ACK-derived end-to-end queuing delay (us)")
+    axis.set_xlabel("ACK E2E qdelay ($\\mu$s)")
     axis.set_ylabel("Empirical CDF")
-    axis.set_title(ack_cdf_title(failure))
     axis.grid(alpha=0.25)
-    axis.legend(fontsize=8)
+    axis.legend(fontsize=10)
     inset.set_xlim(0.0, full_xmax)
     inset.set_ylim(0.0, 1.01)
-    inset.set_title("full range", fontsize=8)
-    inset.tick_params(labelsize=7)
+    inset.set_title("full range", fontsize=10)
+    inset.tick_params(labelsize=10)
     inset.grid(alpha=0.2)
     output_stem.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
-    figure.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    figure.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight", pad_inches=0.04)
+    figure.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.04)
     plt.close(figure)
 
 
@@ -343,6 +352,7 @@ def render_failure_sweep(
         raise ValueError("arms must include Prism v2 key 'v2'")
     if fct_cdf_failure not in failures:
         raise ValueError("FCT CDF failure must be included in failure sweep")
+    apply_reference_figure_style()
     aggregate = aggregate_failure_sweep(data_dir, arms, failures, seeds)
 
     performance, axes = plt.subplots(
@@ -401,7 +411,7 @@ def render_failure_sweep(
     if not all_fcts:
         raise ValueError("selected failure flow logs contain no completed flows")
     fct_grid = plot_grid(all_fcts, max(all_fcts))
-    fct_figure, fct_axis = plt.subplots(figsize=(7.0, 4.4), layout="constrained")
+    fct_figure, fct_axis = plt.subplots(figsize=REFERENCE_FIGSIZE_IN, layout="constrained")
     for arm, label in arms.items():
         fct_axis.plot(
             fct_grid,
@@ -412,13 +422,10 @@ def render_failure_sweep(
         )
     fct_axis.set_xlim(0.0, fct_grid[-1])
     fct_axis.set_ylim(0.0, 1.01)
-    fct_axis.set_xlabel("Flow completion time (us)")
+    fct_axis.set_xlabel("FCT ($\\mu$s)")
     fct_axis.set_ylabel("Empirical CDF")
-    fct_axis.set_title(
-        f"Failure={fct_cdf_failure}; seed-local FCT ECDFs equally weighted"
-    )
     fct_axis.grid(alpha=0.25)
-    fct_axis.legend(fontsize=8)
+    fct_axis.legend(fontsize=10)
     _save_figure(fct_figure, figs_dir, f"figI_1024_f{fct_cdf_failure}_fct_cdf")
 
     engagement = {

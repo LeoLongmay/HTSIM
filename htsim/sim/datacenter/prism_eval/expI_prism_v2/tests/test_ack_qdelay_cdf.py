@@ -56,6 +56,11 @@ def test_main_ack_cdf_is_limited_to_low_delay_range():
     assert MODULE.MAIN_ACK_QDELAY_XMAX_US == 25.0
 
 
+def test_ack_cdf_uses_the_reference_figure_canvas_and_base_font():
+    assert MODULE.REFERENCE_FIGSIZE_IN == (5.2, 3.8)
+    assert MODULE.REFERENCE_FONT_SIZE_PT == 24
+
+
 def test_ack_cdf_title_names_failure_level():
     assert MODULE.ack_cdf_title(32) == "1024-node many2many, failed=32; equal-weight five-seed ECDF"
 
