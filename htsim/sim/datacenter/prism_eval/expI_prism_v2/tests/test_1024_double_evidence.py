@@ -250,6 +250,9 @@ def test_render_failure_sweep_writes_required_plot_semantics(tmp_path, monkeypat
     assert [text.get_text() for text in fct_axis.get_legend().get_texts()] == list(
         arms.values()
     )
+    assert [line.get_color() for line in fct_axis.lines] == [
+        MODULE.ARM_COLORS[arm] for arm in arms
+    ]
 
     engagement_axis = captured_figures["figI_1024_v2_engagement_sweep"].axes[0]
     assert engagement_axis.get_ylim() == (0.0, 1.0)

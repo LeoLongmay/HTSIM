@@ -354,7 +354,7 @@ def render_failure_sweep(
         ("p99_fct_us", "P99 FCT (us)"),
     )
     for axis, (metric_name, y_label) in zip(axes, panels):
-        for arm_index, (arm, label) in enumerate(arms.items()):
+        for arm, label in arms.items():
             values = [aggregate[arm][failure][metric_name][0] for failure in failures]
             errors = [aggregate[arm][failure][metric_name][1] for failure in failures]
             axis.errorbar(
@@ -364,7 +364,7 @@ def render_failure_sweep(
                 marker="o",
                 linewidth=1.8,
                 capsize=3,
-                color=COLORS[arm_index % len(COLORS)],
+                color=color_for_arm(arm),
                 label=label,
             )
             for failure, value in zip(failures, values):
@@ -402,12 +402,12 @@ def render_failure_sweep(
         raise ValueError("selected failure flow logs contain no completed flows")
     fct_grid = plot_grid(all_fcts, max(all_fcts))
     fct_figure, fct_axis = plt.subplots(figsize=(7.0, 4.4), layout="constrained")
-    for arm_index, (arm, label) in enumerate(arms.items()):
+    for arm, label in arms.items():
         fct_axis.plot(
             fct_grid,
             mean_seed_ecdf(fct_samples[arm], fct_grid),
             linewidth=1.8,
-            color=COLORS[arm_index % len(COLORS)],
+            color=color_for_arm(arm),
             label=label,
         )
     fct_axis.set_xlim(0.0, fct_grid[-1])
@@ -442,7 +442,7 @@ def render_failure_sweep(
         marker="o",
         linewidth=1.8,
         capsize=3,
-        color=COLORS[list(arms).index("v2") % len(COLORS)],
+        color=color_for_arm("v2"),
         label=arms["v2"],
     )
     engagement_axis.set_ylim(0.0, 1.0)
