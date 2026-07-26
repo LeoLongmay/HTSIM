@@ -54,3 +54,7 @@ def test_render_writes_png_and_pdf(tmp_path):
 
 def test_main_ack_cdf_is_limited_to_low_delay_range():
     assert MODULE.MAIN_ACK_QDELAY_XMAX_US == 25.0
+
+
+def test_ack_cdf_title_names_failure_level():
+    assert MODULE.ack_cdf_title(32) == "1024-node many2many, failed=32; equal-weight five-seed ECDF"

@@ -111,6 +111,10 @@ def _trace_path(data_dir: Path, arm: str, seed: int) -> Path:
     return data_dir / f"{arm}_s{seed}.csv"
 
 
+def ack_cdf_title(failure: int) -> str:
+    return f"1024-node many2many, failed={failure}; equal-weight five-seed ECDF"
+
+
 def plot_grid(values: list[float], upper: float, max_points: int = 4096) -> list[float]:
     """Bound plotting work while retaining evenly-spaced ECDF order statistics."""
     ordered = sorted(value for value in values if value <= upper)
@@ -181,7 +185,9 @@ def render_ack_evidence(
     plt.close(figure)
 
 
-def render(data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[int]) -> None:
+def render(
+    data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[int], failure: int = 16
+) -> None:
     if not arms or not seeds:
         raise ValueError("arms and seeds must be nonempty")
 
@@ -212,7 +218,7 @@ def render(data_dir: Path, output_stem: Path, arms: dict[str, str], seeds: list[
     axis.set_ylim(0.0, 1.01)
     axis.set_xlabel("ACK-derived end-to-end queuing delay (us)")
     axis.set_ylabel("Empirical CDF")
-    axis.set_title("1024-node many2many, failed=16; equal-weight five-seed ECDF")
+    axis.set_title(ack_cdf_title(failure))
     axis.grid(alpha=0.25)
     axis.legend(fontsize=8)
     inset.set_xlim(0.0, full_xmax)
