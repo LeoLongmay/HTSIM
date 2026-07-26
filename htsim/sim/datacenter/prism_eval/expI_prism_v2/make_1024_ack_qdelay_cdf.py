@@ -474,8 +474,6 @@ def main() -> None:
     arms = {
         "ops": "OPS+NSCC",
         "reps": "REPS+NSCC",
-        "swift": "REPS+Swift",
-        "mswift": "REPS+MSwift",
         "mnscc": "REPS+MNSCC",
         "strack": "REPS+STrack",
         "v2": "REPS+Prism v2-full",

@@ -44,8 +44,6 @@ run_one() {
 for seed in $SEEDS; do
   run_one ops    nscc   oblivious "$DD" "$seed"
   run_one reps   nscc   reps      "$DD" "$seed"
-  run_one swift  swift  reps      "$DD" "$seed"
-  run_one mswift mswift reps      "$DD" "$seed"
   run_one mnscc  mnscc  reps      "$DD" "$seed"
   run_one strack strack reps      "$DD" "$seed"
   run_one v2     prism  reps      "$V2" "$seed"
@@ -55,7 +53,7 @@ if [ "$DRYRUN" = 1 ]; then
   exit 0
 fi
 
-for token in ops reps swift mswift mnscc strack v2; do
+for token in ops reps mnscc strack v2; do
   for seed in $SEEDS; do
     flow="$DATA_REL/ackcdf_${token}_f${FAILED}_s${seed}.flow.txt"
     test -s "$flow"
