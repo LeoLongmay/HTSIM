@@ -466,7 +466,7 @@ def render_failure_sweep(
         )
     fct_axis.set_xlim(0.0, fct_grid[-1])
     fct_axis.set_ylim(0.0, 1.01)
-    fct_axis.set_xlabel("FCT (ms)")
+    fct_axis.set_xlabel("Avg FCT (ms)")
     fct_axis.set_ylabel("CDF")
     fct_axis.grid(alpha=0.25)
     _save_figure(fct_figure, figs_dir, f"figI_1024_f{fct_cdf_failure}_fct_cdf")

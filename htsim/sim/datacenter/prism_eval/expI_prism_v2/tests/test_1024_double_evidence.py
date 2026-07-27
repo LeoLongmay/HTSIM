@@ -243,7 +243,7 @@ def test_render_failure_sweep_writes_required_plot_semantics(tmp_path, monkeypat
     assert "seed mean ± sample SEM" in performance._suptitle.get_text()
 
     fct_axis = captured_figures["figI_1024_f16_fct_cdf"].axes[0]
-    assert fct_axis.get_xlabel() == "FCT (ms)"
+    assert fct_axis.get_xlabel() == "Avg FCT (ms)"
     assert fct_axis.get_ylabel() == "CDF"
     assert fct_axis.get_title() == ""
     assert len(fct_axis.lines) == len(arms)
