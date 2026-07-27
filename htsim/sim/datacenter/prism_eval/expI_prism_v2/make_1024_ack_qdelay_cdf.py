@@ -263,7 +263,15 @@ def render(
 
     apply_reference_figure_style()
     figure, axis = plt.subplots(figsize=REFERENCE_FIGSIZE_IN, layout="constrained")
-    inset = inset_axes(axis, width="42%", height="42%", loc="lower right", borderpad=2.0)
+    inset = inset_axes(
+        axis,
+        width="100%",
+        height="100%",
+        loc="lower left",
+        bbox_to_anchor=(0.64, 0.08, 0.32, 0.32),
+        bbox_transform=axis.transAxes,
+        borderpad=0,
+    )
     for arm, label in arms.items():
         color = color_for_arm(arm)
         seed_samples = samples_by_arm[arm]
