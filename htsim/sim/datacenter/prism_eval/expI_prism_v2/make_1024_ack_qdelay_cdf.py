@@ -268,7 +268,7 @@ def render(
         width="100%",
         height="100%",
         loc="lower left",
-        bbox_to_anchor=(0.64, 0.08, 0.32, 0.32),
+        bbox_to_anchor=(0.64, 0.18, 0.32, 0.32),
         bbox_transform=axis.transAxes,
         borderpad=0,
     )
