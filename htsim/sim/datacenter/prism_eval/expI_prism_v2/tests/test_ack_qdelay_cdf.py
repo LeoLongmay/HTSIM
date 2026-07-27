@@ -75,3 +75,15 @@ def test_ack_cdf_uses_the_delay_driven_baseline_palette():
         "strack": "tab:orange",
         "v2": "tab:green",
     }
+
+
+def test_shared_cdf_legend_uses_short_algorithm_labels(tmp_path):
+    MODULE.render_cdf_legend(tmp_path)
+
+    assert MODULE.CDF_ARMS == {
+        "ops": "OPS",
+        "reps": "REPS",
+        "strack": "STrack",
+        "v2": "Prism",
+    }
+    assert (tmp_path / "figI_1024_cdf_legend.pdf").is_file()

@@ -38,6 +38,12 @@ MAIN_ACK_QDELAY_XMAX_US = 25.0
 # Match expA_delaydriven/figA1dd_avg_fct, rendered by render_main_perf_split().
 REFERENCE_FIGSIZE_IN = (5.2, 3.8)
 REFERENCE_FONT_SIZE_PT = 24
+CDF_ARMS = {
+    "ops": "OPS",
+    "reps": "REPS",
+    "strack": "STrack",
+    "v2": "Prism",
+}
 
 
 def color_for_arm(arm: str) -> str:
@@ -51,6 +57,34 @@ def color_for_arm(arm: str) -> str:
 def apply_reference_figure_style() -> None:
     """Use the canvas and base typography of figA1dd_avg_fct."""
     plot_style.apply_style(REFERENCE_FONT_SIZE_PT)
+
+
+def render_cdf_legend(figs_dir: Path, arms: dict[str, str] = CDF_ARMS) -> None:
+    """Write the shared standalone legend used by all 1024-node CDF panels."""
+    from matplotlib.lines import Line2D
+
+    apply_reference_figure_style()
+    handles = [
+        Line2D([], [], color=color_for_arm(arm), linewidth=1.8, label=label)
+        for arm, label in arms.items()
+    ]
+    figure = plt.figure(figsize=(5.2, 0.55))
+    figure.legend(
+        handles=handles,
+        loc="center",
+        ncol=len(handles),
+        frameon=False,
+        fontsize=16,
+        handlelength=1.8,
+        handletextpad=0.4,
+        columnspacing=0.9,
+    )
+    figs_dir.mkdir(parents=True, exist_ok=True)
+    figure.savefig(figs_dir / "figI_1024_cdf_legend.png", dpi=180,
+                   bbox_inches="tight", pad_inches=0.04)
+    figure.savefig(figs_dir / "figI_1024_cdf_legend.pdf",
+                   bbox_inches="tight", pad_inches=0.04)
+    plt.close(figure)
 
 
 def load_qdelay_us(path: Path) -> list[float]:
@@ -243,10 +277,9 @@ def render(
 
     axis.set_xlim(0.0, main_xmax)
     axis.set_ylim(0.0, 1.01)
-    axis.set_xlabel("ACK E2E qdelay ($\\mu$s)")
-    axis.set_ylabel("Empirical CDF")
+    axis.set_xlabel("Queueing delay (us)")
+    axis.set_ylabel("CDF")
     axis.grid(alpha=0.25)
-    axis.legend(fontsize=10)
     inset.set_xlim(0.0, full_xmax)
     inset.set_ylim(0.0, 1.01)
     inset.set_title("full range", fontsize=10)
@@ -398,7 +431,10 @@ def render_failure_sweep(
 
     fct_samples = {
         arm: [
-            _flow_fcts_us(_flow_path(data_dir, arm, fct_cdf_failure, seed)) for seed in seeds
+            [value / 1000.0 for value in _flow_fcts_us(
+                _flow_path(data_dir, arm, fct_cdf_failure, seed)
+            )]
+            for seed in seeds
         ]
         for arm in arms
     }
@@ -422,11 +458,11 @@ def render_failure_sweep(
         )
     fct_axis.set_xlim(0.0, fct_grid[-1])
     fct_axis.set_ylim(0.0, 1.01)
-    fct_axis.set_xlabel("FCT ($\\mu$s)")
-    fct_axis.set_ylabel("Empirical CDF")
+    fct_axis.set_xlabel("FCT (ms)")
+    fct_axis.set_ylabel("CDF")
     fct_axis.grid(alpha=0.25)
-    fct_axis.legend(fontsize=10)
     _save_figure(fct_figure, figs_dir, f"figI_1024_f{fct_cdf_failure}_fct_cdf")
+    render_cdf_legend(figs_dir, arms)
 
     engagement = {
         failure: _mean_sem(
@@ -478,12 +514,7 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, nargs="+", default=[13, 14, 15, 16, 17])
     parser.add_argument("--fct-cdf-failure", type=int, default=32)
     args = parser.parse_args()
-    arms = {
-        "ops": "OPS+NSCC",
-        "reps": "REPS+NSCC",
-        "strack": "REPS+STrack",
-        "v2": "REPS+Prism v2-full",
-    }
+    arms = CDF_ARMS
     if args.sweep_data_dir is not None or args.figs_dir is not None:
         if args.sweep_data_dir is None or args.figs_dir is None:
             parser.error("--sweep-data-dir and --figs-dir must be provided together")
@@ -502,6 +533,7 @@ def main() -> None:
             parser.error("--data-dir and --output-stem must be provided together")
         if args.simple_cdf:
             render(args.data_dir, args.output_stem, arms, args.seeds, args.failure)
+            render_cdf_legend(args.output_stem.parent, arms)
         else:
             render_ack_evidence(args.data_dir, args.output_stem, arms, args.seeds)
 
