@@ -203,7 +203,7 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
             for f in failed if aggs[lab].get(f)))
 
 def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None, pad_inches=0.02,
-                  row_height=0.42):
+                  row_height=0.42, figure_width=None):
     """Standalone legend image of the baseline arms, matching the line style of
     render_main_perf_split (marker 'o', lw 2.0, ms 6, per-arm color). Saves {fig_stem}.{png,pdf}
     (legend only, tight-cropped). Default: one row (ncol=len(baselines)). Pass row_counts=[3,4]
@@ -216,7 +216,8 @@ def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None, pad
                for (lab, disp, ck) in baselines]
     if row_counts:
         n = len(row_counts)
-        fig = plt.figure(figsize=(2.7 * max(row_counts), row_height * n))
+        width = figure_width if figure_width is not None else 2.7 * max(row_counts)
+        fig = plt.figure(figsize=(width, row_height * n))
         ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
         i = 0
         for r, cnt in enumerate(row_counts):
