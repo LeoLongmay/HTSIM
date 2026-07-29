@@ -202,7 +202,8 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
             f"p99={aggs[lab][f]['p99_fct'][0] / 1000:.3f}ms,cr={aggs[lab][f]['cr'][0]:.2f}"
             for f in failed if aggs[lab].get(f)))
 
-def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None):
+def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None, pad_inches=0.02,
+                  row_height=0.42):
     """Standalone legend image of the baseline arms, matching the line style of
     render_main_perf_split (marker 'o', lw 2.0, ms 6, per-arm color). Saves {fig_stem}.{png,pdf}
     (legend only, tight-cropped). Default: one row (ncol=len(baselines)). Pass row_counts=[3,4]
@@ -215,7 +216,7 @@ def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None):
                for (lab, disp, ck) in baselines]
     if row_counts:
         n = len(row_counts)
-        fig = plt.figure(figsize=(2.7 * max(row_counts), 0.42 * n))   # short -> rows close; tight-crop trims
+        fig = plt.figure(figsize=(2.7 * max(row_counts), row_height * n))
         ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
         i = 0
         for r, cnt in enumerate(row_counts):
@@ -231,8 +232,8 @@ def render_legend(figs_dir, baselines, fig_stem, ncol=None, row_counts=None):
         fig.legend(handles=handles, ncol=(ncol or len(baselines)), loc="center", frameon=False, fontsize=20)
         desc = f"ncol={ncol or len(baselines)}, single row"
     os.makedirs(figs_dir, exist_ok=True)
-    for ext in ("png", "pdf"):   # tighter crop than plot_style.save (pad 0.02 vs 0.04) for a compact legend
-        fig.savefig(os.path.join(figs_dir, f"{fig_stem}.{ext}"), bbox_inches="tight", pad_inches=0.02)
+    for ext in ("png", "pdf"):   # tighter crop than plot_style.save (default pad 0.02 vs 0.04)
+        fig.savefig(os.path.join(figs_dir, f"{fig_stem}.{ext}"), bbox_inches="tight", pad_inches=pad_inches)
     plt.close(fig)
     print(f"[{fig_stem}] standalone legend: {len(handles)} entries, {desc}")
 
