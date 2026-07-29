@@ -207,7 +207,7 @@ def render_qd():
     proxies = [Line2D([0], [0], marker="s", ls="-", lw=2.3, ms=7, color=plot_style.COLORS["prism"]),
                Line2D([0], [0], marker="o", ls="--", lw=2.2, ms=7, color=QCOL)]
     figL = plt.figure(figsize=(7.0, 0.6))
-    figL.legend(proxies, ["Goodput (Gbps)", "Queuing delay (us)"], ncol=2,
+    figL.legend(proxies, ["Goodput (Gbps)", "Queueing delay (us)"], ncol=2,
                 loc="center", frameon=False, fontsize=18)
     plot_style.save(figL, "figK_qd_legend", FIGS); plt.close(figL)
 
