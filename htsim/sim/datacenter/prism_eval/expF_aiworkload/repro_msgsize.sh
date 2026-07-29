@@ -41,7 +41,7 @@ run_arms() { # size seed cm
 echo "== ExpF AI-ring message-size sweep: failed=$FAILED, sizes={$SIZES}, seeds={$SEEDS} =="
 for sz in $SIZES; do
   for s in $SEEDS; do
-    cm="$OUT/ai_ring_sz${sz}_s${s}.cm"
+    cm="$OUT/expFmsg_ai_ring_sz${sz}_s${s}.cm"
     python3 "$COMMON/gen/ai_ring.py" "$cm" 128 16 8 8 "$sz" "$s"
     run_arms "$sz" "$s" "$cm"
   done
