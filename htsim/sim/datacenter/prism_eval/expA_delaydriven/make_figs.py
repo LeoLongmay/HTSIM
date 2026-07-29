@@ -17,6 +17,12 @@ BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
              ("swift", "REPS+Swift", "swift"), ("mswift", "REPS+MSwift", "mswift"),
              ("mnscc", "REPS+MNSCC", "mnscc"), ("strack", "STrack", "strack"),
              ("prism", "Prism", "prism")]
+# The standalone paper legend uses short display labels without changing the
+# names printed on the performance panels.
+LEGEND_BASELINES = [("ops", "OPS", "ops"), ("reps", "REPS", "reps"),
+                    ("swift", "Swift", "swift"), ("mswift", "MSwift", "mswift"),
+                    ("mnscc", "MNSCC", "mnscc"), ("strack", "STrack", "strack"),
+                    ("prism", "DecMT", "prism")]
 LAPS_BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
                   ("swift", "REPS+Swift", "swift"), ("mswift", "REPS+MSwift", "mswift"),
                   ("mnscc", "REPS+MNSCC", "mnscc"), ("strack", "STrack", "strack"),
@@ -44,7 +50,7 @@ if __name__ == "__main__":
     else:
         os.makedirs(FIGS, exist_ok=True)
         perf_figs.render_main_perf_split(DATA, FIGS, "expA", BASELINES, FAILED, SEEDS, "figA1dd", XLABEL, goodput_tbps=True)
-        perf_figs.render_legend(FIGS, BASELINES, "figA1dd_legend", row_counts=[3, 4])
+        perf_figs.render_legend(FIGS, LEGEND_BASELINES, "figA1dd_legend", row_counts=[3, 4])
         perf_figs.render_fairness(DATA, FIGS, "expA", BASELINES, FAILED, SEEDS, "figA1dd_fairness", XLABEL)
         perf_figs.render_mechanism_split(DATA, FIGS, "expA", "figA2dd", 8, xlim_ms=3.0)
         perf_figs.render_decomposition(DATA, FIGS, "expA",
