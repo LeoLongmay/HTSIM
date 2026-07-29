@@ -18,6 +18,10 @@ BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
              ("swift", "REPS+Swift", "swift"), ("mswift", "REPS+MSwift", "mswift"),
              ("mnscc", "REPS+MNSCC", "mnscc"), ("strack", "STrack", "strack"),
              ("prism", "Prism", "prism")]
+LEGEND_BASELINES = [("ops", "OPS", "ops"), ("reps", "REPS", "reps"),
+                    ("swift", "Swift", "swift"), ("mswift", "MSwift", "mswift"),
+                    ("mnscc", "MNSCC", "mnscc"), ("strack", "STrack", "strack"),
+                    ("prism", "DecMT", "prism")]
 SIZES = [16384, 65536, 262144, 1048576, 4194304]
 REF = "reps"  # reference arm for the relative-CCT y-axis: REPS+NSCC (the UEC baseline)
 # Y-axis mode. True  -> genuine "CCT slowdown" vs the per-seed best arm (every bar >= 1.0, but the
@@ -45,4 +49,5 @@ if __name__ == "__main__":
             msgsweep_figs.render_relative_bars(DATA, FIGS, f"expG2{coll}", BASELINES, REF,
                                                SIZES, seeds, stem, ylabel=ylabel,
                                                ybottom=ybot, vs_best=VS_BEST, yticks=yticks)
-        msgsweep_figs.render_legend(FIGS, BASELINES, "figH_legend")
+        msgsweep_figs.render_legend(FIGS, LEGEND_BASELINES, "figH_legend",
+                                    figure_width=7.0, figure_height=0.4, pad_inches=0.0)

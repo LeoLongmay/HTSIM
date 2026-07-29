@@ -171,16 +171,24 @@ def render_relative_bars(data_dir, figs_dir, tag_prefix, baselines, ref_label, s
                 ha="right", va="top", fontsize=6, color="0.3")
     plt.tight_layout(); plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
 
-def render_legend(figs_dir, baselines, fig_stem):
+def render_legend(figs_dir, baselines, fig_stem, figure_width=None, figure_height=0.5,
+                  pad_inches=None):
     """Standalone shared legend (one row of arm color patches) for the message-size bar panels."""
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     plot_style.apply_style(12)
     handles = [Patch(facecolor=plot_style.COLORS.get(ck), label=disp)
                for _lab, disp, ck in baselines]
-    fig = plt.figure(figsize=(1.6 * len(baselines), 0.5))
+    fig = plt.figure(figsize=(figure_width or 1.6 * len(baselines), figure_height))
     fig.legend(handles=handles, ncol=len(baselines), loc="center", frameon=False, fontsize=13)
-    plot_style.save(fig, fig_stem, figs_dir); plt.close(fig)
+    if pad_inches is None:
+        plot_style.save(fig, fig_stem, figs_dir)
+    else:
+        os.makedirs(figs_dir, exist_ok=True)
+        for ext in ("png", "pdf"):
+            fig.savefig(os.path.join(figs_dir, f"{fig_stem}.{ext}"), bbox_inches="tight",
+                        pad_inches=pad_inches)
+    plt.close(fig)
 
 def _write_flow(path, start_us, finish_us):
     """Write a 2-flow synthetic collective log: both flows start at start_us, finish at finish_us
