@@ -5,12 +5,10 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import statistics
 import sys
 from pathlib import Path
-from typing import Any
 
 
 HERE = Path(__file__).resolve().parent
@@ -54,36 +52,37 @@ def _missing_seed_message(paths: set[Path], root: Path) -> str | None:
     return None
 
 
-def _load_manifest(path: Path, case: run.Case) -> dict[str, Any]:
+def _validate_runner_bundle(root: Path, case: run.Case) -> Path:
+    """Require the runner's complete, immutable formal-output contract."""
+    workload = root / "m2m.cm"
     try:
-        manifest = json.loads(path.read_text(encoding="ascii"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"invalid manifest: {path.name}") from exc
-    if not isinstance(manifest, dict):
-        raise ValueError(f"invalid manifest: {path.name}")
-    expected = {
-        "schema": run.SCHEMA,
-        "schema_version": run.SCHEMA_VERSION,
-        "experiment": "ExpJ_decmt_ablation",
-        "phase": "formal",
-        "run_id": run.case_id(case),
-        "arm": case.arm,
-        "failed_links": case.failed,
-        "seed": case.seed,
-    }
-    if any(manifest.get(name) != value for name, value in expected.items()):
-        raise ValueError(f"formal manifest identity conflicts: {path.name}")
-    output_files = manifest.get("output_files")
-    expected_flow = f"{run.case_id(case)}.flow.txt"
-    if not isinstance(output_files, dict) or output_files.get("flow") != expected_flow:
-        raise ValueError(f"formal manifest flow output conflicts: {path.name}")
-    return manifest
+        workload_text = workload.read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError("missing or unreadable locked formal workload") from exc
+    if workload_text != run._workload_text():
+        raise ValueError("conflicting locked formal workload")
+    try:
+        expected = run._expected_manifest(
+            phase="formal",
+            case=case,
+            workload=workload,
+            workload_hash=run._sha256(workload),
+            output_root=root,
+        )
+    except OSError as exc:
+        raise ValueError("unable to reconstruct formal provenance contract") from exc
+    outputs = run._required_outputs(root, run.case_id(case))
+    try:
+        valid = run._reuse_or_reject(outputs, expected)
+    except (FileExistsError, ValueError) as exc:
+        raise ValueError(f"formal runner contract invalid: {exc}") from exc
+    if not valid:
+        raise ValueError(f"formal runner contract missing: {run.case_id(case)}")
+    return outputs["flow"]
 
 
 def _per_seed_row(root: Path, case: run.Case) -> dict[str, float | int | str]:
-    path = root / f"{run.case_id(case)}.manifest.json"
-    manifest = _load_manifest(path, case)
-    flow_path = root / manifest["output_files"]["flow"]
+    flow_path = _validate_runner_bundle(root, case)
     try:
         stats = fct_stats(flow_path)
         avg_fct_us = stats["avg_s"] * 1e6

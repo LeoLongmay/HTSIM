@@ -6,7 +6,9 @@ import csv
 import json
 import statistics
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -18,37 +20,61 @@ import analyze  # noqa: E402
 import run  # noqa: E402
 
 
+@contextmanager
+def _patched_runner_inputs(root: Path):
+    """Provide stable provenance inputs for full immutable-manifest fixtures."""
+    assets = root / "runner-inputs"
+    assets.mkdir()
+    topology = assets / "fat_tree_128_1os.topo"
+    binary = assets / "htsim_uec"
+    decoder = assets / "parse_output"
+    runner = assets / "run_lib.sh"
+    for path in (topology, binary, decoder, runner):
+        path.write_text("fixture\n", encoding="ascii")
+    with patch.object(run, "TOPOLOGY", topology), patch.object(run, "HTSIM_UEC", binary), patch.object(
+        run, "PARSE_OUTPUT", decoder
+    ), patch.object(run, "RUN_LIB", runner):
+        yield
+
+
 def _write_case(root: Path, case: run.Case) -> None:
-    """Write one complete, small flow log and its formal manifest fixture."""
+    """Write one complete runner-valid bundle with all 64 locked flows and idmap rows."""
     run_id = run.case_id(case)
     duration_s = (case.seed - 12) * 1e-6
     flow_path = root / f"{run_id}.flow.txt"
-    flow_path.write_text(
-        "\n".join(
-            (
-                "0 Type FLOW_EVENT SrcID 1 Ev START FlowID 11 Flowsize 1000",
-                f"{duration_s} Type FLOW_EVENT SrcID 1 Ev FINISH FlowID 11 Bytes 1000",
-                "0 Type FLOW_EVENT SrcID 2 Ev START FlowID 12 Flowsize 1000",
-                f"{duration_s} Type FLOW_EVENT SrcID 2 Ev FINISH FlowID 12 Bytes 1000",
-            )
-        )
-        + "\n",
-        encoding="ascii",
+    idmap_path = root / f"{run_id}.idmap"
+    flow_lines = []
+    idmap_lines = []
+    for index in range(run.FLOW_COUNT):
+        src_id, flow_id = 1000 + index, 2000 + index
+        src, dst = 16 + index, index % 16
+        flow_lines.extend((
+            f"1000 Type FLOW_EVENT SrcID {src_id} Ev START FlowID {flow_id} Flowsize {run.FLOW_SIZE_BYTES}",
+            f"{1000 + duration_s} Type FLOW_EVENT SrcID {src_id} Ev FINISH FlowID {flow_id} Bytes {run.FLOW_SIZE_BYTES}",
+        ))
+        idmap_lines.extend((f"{src_id} Uec_{src}_{dst}", f"{flow_id} Uec_{src}_{dst}"))
+    flow_path.write_text("\n".join(flow_lines) + "\n", encoding="ascii")
+    idmap_path.write_text("\n".join(idmap_lines) + "\n", encoding="ascii")
+    (root / f"{run_id}.stdout").write_text("simulator output\n", encoding="ascii")
+
+    workload = root / "m2m.cm"
+    if not workload.exists():
+        workload.write_text(run._workload_text(), encoding="ascii")
+    expected = run._expected_manifest(
+        phase="formal",
+        case=case,
+        workload=workload,
+        workload_hash=run._sha256(workload),
+        output_root=root,
     )
+    bindings = run._validate_flow(flow_path, idmap_path)
     (root / f"{run_id}.manifest.json").write_text(
         json.dumps(
-            {
-                "schema": run.SCHEMA,
-                "schema_version": run.SCHEMA_VERSION,
-                "experiment": "ExpJ_decmt_ablation",
-                "phase": "formal",
-                "run_id": run_id,
-                "arm": case.arm,
-                "failed_links": case.failed,
-                "seed": case.seed,
-                "output_files": {"flow": flow_path.name},
-            }
-        ),
+            expected | {"flow_event_bindings": run._serialized_event_bindings(bindings)},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="ascii",
     )
 
@@ -61,44 +87,44 @@ def _write_formal_matrix(root: Path) -> None:
 
 def test_summary_requires_ten_seeds_per_arm_and_condition(tmp_path):
     """Dropping one result must not silently reduce a condition's uncertainty."""
-    formal = tmp_path / "formal"
-    formal.mkdir()
-    cases = [
-        case
-        for case in run.cases_for_phase("formal")
-        if not (case.arm == "decmt" and case.failed == 8 and case.seed == 22)
-    ]
-    for case in cases:
-        _write_case(formal, case)
+    with _patched_runner_inputs(tmp_path):
+        formal = tmp_path / "formal"
+        formal.mkdir()
+        cases = [
+            case
+            for case in run.cases_for_phase("formal")
+            if not (case.arm == "decmt" and case.failed == 8 and case.seed == 22)
+        ]
+        for case in cases:
+            _write_case(formal, case)
 
-    with pytest.raises(ValueError, match="missing seeds"):
-        analyze.analyze_formal(formal, tmp_path / "aggregate")
+        with pytest.raises(ValueError, match="missing seeds"):
+            analyze.analyze_formal(formal, tmp_path / "aggregate")
 
 
 def test_aggregation_writes_per_seed_and_sample_standard_deviation(tmp_path):
     """A full locked matrix produces independently checkable seed and summary metrics."""
-    formal = tmp_path / "formal"
-    _write_formal_matrix(formal)
+    with _patched_runner_inputs(tmp_path):
+        formal = tmp_path / "formal"
+        _write_formal_matrix(formal)
 
-    result = analyze.analyze_formal(formal, tmp_path / "aggregate")
+        result = analyze.analyze_formal(formal, tmp_path / "aggregate")
 
     assert len(result["per_seed"]) == 80
     assert len(result["summary"]) == 8
     decmt_8 = next(
         row for row in result["summary"] if row["arm"] == "decmt" and row["failed_links"] == 8
     )
-    expected_goodputs = [16.0 / divisor for divisor in range(1, 11)]
-    assert decmt_8 == {
-        "arm": "decmt",
-        "failed_links": 8,
-        "n_seeds": 10,
-        "mean_goodput_gbps": statistics.mean(expected_goodputs),
-        "std_goodput_gbps": statistics.stdev(expected_goodputs),
-        "mean_avg_fct_us": 5.5,
-        "std_avg_fct_us": statistics.stdev(range(1, 11)),
-        "mean_p99_fct_us": 5.5,
-        "std_p99_fct_us": statistics.stdev(range(1, 11)),
+    expected_goodputs = [1_024_000.0 / divisor for divisor in range(1, 11)]
+    assert {name: decmt_8[name] for name in ("arm", "failed_links", "n_seeds")} == {
+        "arm": "decmt", "failed_links": 8, "n_seeds": 10,
     }
+    assert decmt_8["mean_goodput_gbps"] == pytest.approx(statistics.mean(expected_goodputs))
+    assert decmt_8["std_goodput_gbps"] == pytest.approx(statistics.stdev(expected_goodputs))
+    assert decmt_8["mean_avg_fct_us"] == pytest.approx(5.5)
+    assert decmt_8["std_avg_fct_us"] == pytest.approx(statistics.stdev(range(1, 11)))
+    assert decmt_8["mean_p99_fct_us"] == pytest.approx(5.5)
+    assert decmt_8["std_p99_fct_us"] == pytest.approx(statistics.stdev(range(1, 11)))
 
     with (tmp_path / "aggregate" / "per_seed.csv").open(newline="") as stream:
         per_seed_rows = list(csv.DictReader(stream))
@@ -111,11 +137,41 @@ def test_aggregation_writes_per_seed_and_sample_standard_deviation(tmp_path):
     }
 
 
+def test_aggregation_rejects_partial_flow_output(tmp_path):
+    """A 63-of-64 completion log is not allowed to become a formal measurement."""
+    with _patched_runner_inputs(tmp_path):
+        formal = tmp_path / "formal"
+        _write_formal_matrix(formal)
+        case = run.Case("decmt", 8, 13)
+        flow_path = formal / f"{run.case_id(case)}.flow.txt"
+        lines = flow_path.read_text(encoding="ascii").splitlines()
+        flow_path.write_text("\n".join(lines[:-1]) + "\n", encoding="ascii")
+
+        with pytest.raises(ValueError, match="incomplete flow output"):
+            analyze.analyze_formal(formal, tmp_path / "aggregate")
+
+
+def test_aggregation_rejects_mutated_immutable_manifest_field(tmp_path):
+    """A changed fixed runner environment cannot be mistaken for the locked experiment."""
+    with _patched_runner_inputs(tmp_path):
+        formal = tmp_path / "formal"
+        _write_formal_matrix(formal)
+        case = run.Case("floor_only", 8, 13)
+        manifest_path = formal / f"{run.case_id(case)}.manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+        manifest["config"]["environment"]["PATHS"] = "99"
+        manifest_path.write_text(json.dumps(manifest), encoding="ascii")
+
+        with pytest.raises(ValueError, match="identity conflicts"):
+            analyze.analyze_formal(formal, tmp_path / "aggregate")
+
+
 def test_aggregation_rejects_unexpected_formal_manifest(tmp_path):
     """A stale or unrelated manifest cannot be folded into the locked 80-case study."""
-    formal = tmp_path / "formal"
-    _write_formal_matrix(formal)
-    (formal / "stale.manifest.json").write_text("{}", encoding="ascii")
+    with _patched_runner_inputs(tmp_path):
+        formal = tmp_path / "formal"
+        _write_formal_matrix(formal)
+        (formal / "stale.manifest.json").write_text("{}", encoding="ascii")
 
-    with pytest.raises(ValueError, match="exactly 80 formal manifests"):
-        analyze.analyze_formal(formal, tmp_path / "aggregate")
+        with pytest.raises(ValueError, match="exactly 80 formal manifests"):
+            analyze.analyze_formal(formal, tmp_path / "aggregate")
