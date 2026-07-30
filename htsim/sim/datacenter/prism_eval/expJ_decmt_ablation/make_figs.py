@@ -77,29 +77,31 @@ def render_single_panels(
     rows: Mapping[tuple[str, int], Mapping[str, float | int | str]], output_dir: Path,
 ) -> None:
     """Render each failed=8 metric as a self-contained grouped-bar panel."""
+    import matplotlib as mpl
     import matplotlib.pyplot as plt
 
-    plot_style.apply_style(16)
-    arms = tuple(run.ARMS)
-    x = [0]
-    group_width = 0.66
-    bar_width = group_width / len(arms)
-    for mean_name, std_name, ylabel, scale, stem in PANEL_METRICS:
-        fig, axis = plt.subplots(figsize=(6.4, 2.8))
-        for position, (arm, color_key) in enumerate(PANEL_ARMS):
-            offsets = [index - group_width / 2 + bar_width * (position + 0.5) for index in x]
-            values = [float(rows[(arm, 8)][mean_name]) * scale]
-            errors = [float(rows[(arm, 8)][std_name]) * scale]
-            axis.bar(offsets, values, bar_width, yerr=errors, capsize=2,
-                     color=plot_style.COLORS[color_key], label=DISPLAY_LABELS[arm])
-        axis.set_xticks(x, ["8"])
-        axis.set_xlabel("Number of failed links")
-        axis.set_ylabel(ylabel)
-        axis.grid(axis="y", alpha=0.3)
-        axis.legend(ncol=2, fontsize=9, frameon=False)
-        plt.tight_layout()
-        plot_style.save(fig, stem, output_dir)
-        plt.close(fig)
+    with mpl.rc_context():
+        plot_style.apply_style(16)
+        arms = tuple(run.ARMS)
+        x = [0]
+        group_width = 0.66
+        bar_width = group_width / len(arms)
+        for mean_name, std_name, ylabel, scale, stem in PANEL_METRICS:
+            fig, axis = plt.subplots(figsize=(6.4, 2.8))
+            for position, (arm, color_key) in enumerate(PANEL_ARMS):
+                offsets = [index - group_width / 2 + bar_width * (position + 0.5) for index in x]
+                values = [float(rows[(arm, 8)][mean_name]) * scale]
+                errors = [float(rows[(arm, 8)][std_name]) * scale]
+                axis.bar(offsets, values, bar_width, yerr=errors, capsize=2,
+                         color=plot_style.COLORS[color_key], label=DISPLAY_LABELS[arm])
+            axis.set_xticks(x, ["8"])
+            axis.set_xlabel("Number of failed links")
+            axis.set_ylabel(ylabel)
+            axis.grid(axis="y", alpha=0.3)
+            axis.legend(ncol=2, fontsize=9, frameon=False)
+            plt.tight_layout()
+            plot_style.save(fig, stem, output_dir)
+            plt.close(fig)
 
 
 def render(summary: Iterable[Mapping[str, object]], output_dir: Path) -> None:

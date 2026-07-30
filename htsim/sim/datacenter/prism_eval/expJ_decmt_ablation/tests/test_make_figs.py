@@ -48,6 +48,25 @@ def test_render_creates_all_standalone_panels(tmp_path):
         assert (tmp_path / f"{stem}.png").is_file()
 
 
+def test_render_keeps_composite_stable_across_standalone_panel_renders(tmp_path):
+    """Standalone styling must not leak into the next legacy composite render."""
+    import matplotlib as mpl
+
+    first_output = tmp_path / "first"
+    second_output = tmp_path / "second"
+    with mpl.rc_context():
+        mpl.rcdefaults()
+        make_figs.render(_summary_rows(), first_output)
+        first_composite = (first_output / "figJ1_decmt_ablation.png").read_bytes()
+        make_figs.render(_summary_rows(), second_output)
+
+    assert first_composite == (second_output / "figJ1_decmt_ablation.png").read_bytes()
+    for output_dir in (first_output, second_output):
+        for stem in ("figJ1_goodput", "figJ1_avg_fct", "figJ1_p99_fct"):
+            assert (output_dir / f"{stem}.pdf").is_file()
+            assert (output_dir / f"{stem}.png").is_file()
+
+
 def test_render_rejects_summary_without_the_failed_zero_control(tmp_path):
     """The compact control comparison is mandatory, not an optional annotation."""
     rows = [row for row in _summary_rows() if row["failed_links"] != 0]
