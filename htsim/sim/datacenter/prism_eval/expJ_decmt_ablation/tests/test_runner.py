@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -104,9 +105,21 @@ def test_formal_matrix_and_locked_arm_arguments():
 
 
 def test_fixed_environment_clears_ambient_run_and_trace_knobs(monkeypatch):
+    inherited_trace_variables = (
+        "HTSIM_TRACE_FLOW_COMPLETIONS",
+        "ACK_QDELAY",
+        "PRISM_ORACLE_VALIDATION",
+        "MNSCC_MEDIAN",
+        "HTSIM_TRACE_FLOW",
+        "HTSIM_TRACE_TRIGGERS",
+        "PRISM_EPOCH",
+        "PRISM_PATHRTT",
+        "PRISM_HOLD_TRACE",
+        "PRISM_LOSS",
+    )
     for name in (
-        "TQD", "EXTRA_ARGS", "KEEPDAT", "PRISM_EPOCH", "PRISM_PATHRTT", "PRISM_HOLD_TRACE",
-        "PRISM_LOSS", "TMPDIR", "TMP", "TEMP",
+        "TQD", "EXTRA_ARGS", "KEEPDAT", "TMPDIR", "TMP", "TEMP",
+        *inherited_trace_variables,
     ):
         monkeypatch.setenv(name, "inherited")
 
@@ -117,10 +130,7 @@ def test_fixed_environment_clears_ambient_run_and_trace_knobs(monkeypatch):
     }
     assert env["TQD"] == "14"
     assert env["EXTRA_ARGS"] == "-disable_trim -prism_floor_only"
-    for name in (
-        "KEEPDAT", "PRISM_EPOCH", "PRISM_PATHRTT", "PRISM_HOLD_TRACE", "PRISM_LOSS",
-        "TMPDIR", "TMP", "TEMP",
-    ):
+    for name in ("KEEPDAT", "TMPDIR", "TMP", "TEMP", *inherited_trace_variables):
         assert name not in env
 
 
@@ -147,8 +157,49 @@ def test_successful_case_writes_immutable_manifest_and_rejects_conflict():
         assert manifest["arm"] == "decmt"
         assert manifest["fixed_parameters"]["flow_count"] == 64
         assert len(manifest["flow_event_bindings"]) == 64
+        serialized = json.dumps(manifest)
+        assert str(root.resolve()) not in serialized
+        assert manifest["config"]["run_lib_argv"][1] == "prism_eval/common/run_lib.sh"
+        assert manifest["config"]["run_lib_argv"][7:] == [
+            "bundle:m2m.cm", "flow", "expj_decmt_f8_s13", "bundle:.",
+        ]
+        assert manifest["run_lib"] == {
+            "path": "prism_eval/common/run_lib.sh",
+            "sha256": hashlib.sha256(b"fixture\n").hexdigest(),
+        }
+        for name in ("flow", "idmap", "stdout"):
+            artifact = root / "smoke" / manifest["output_files"][name]["filename"]
+            assert manifest["output_files"][name]["sha256"] == hashlib.sha256(
+                artifact.read_bytes()
+            ).hexdigest()
 
         manifest["seed"] = 99
         manifest_path.write_text(json.dumps(manifest), encoding="ascii")
         with patched_inputs(root), pytest.raises(ValueError, match="identity conflicts"):
             run.run_one(case, phase="smoke", output_root=root / "smoke")
+
+
+@pytest.mark.parametrize("artifact_name", ("flow", "stdout", "idmap"))
+def test_reuse_rejects_retained_artifact_tampering(artifact_name):
+    """Every retained result byte must remain tied to its manifest digest."""
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        output_root = root / "smoke"
+        case = run.Case("decmt", 8, 13)
+        with patched_inputs(root), patch.object(run.subprocess, "run", side_effect=run_lib_with_flow()):
+            run.run_one(case, phase="smoke", output_root=output_root)
+
+        outputs = run._required_outputs(output_root, run.case_id(case))
+        if artifact_name == "flow":
+            text = outputs["flow"].read_text(encoding="ascii")
+            outputs["flow"].write_text(text.replace("2000 Type", "2001 Type", 1), encoding="ascii")
+        elif artifact_name == "stdout":
+            outputs["stdout"].write_text("different simulator output\n", encoding="ascii")
+        else:
+            with outputs["idmap"].open("a", encoding="ascii") as stream:
+                stream.write("9999 unrelated_object\n")
+
+        with patched_inputs(root), pytest.raises(
+            ValueError, match=rf"artifact SHA-256 mismatch: {artifact_name}"
+        ):
+            run.run_one(case, phase="smoke", output_root=output_root)

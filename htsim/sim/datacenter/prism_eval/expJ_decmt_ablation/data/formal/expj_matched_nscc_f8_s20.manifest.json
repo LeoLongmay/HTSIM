@@ -11,16 +11,16 @@
     },
     "run_lib_argv": [
       "bash",
-      "/home/leo/htsim/htsim/sim/datacenter/prism_eval/common/run_lib.sh",
+      "prism_eval/common/run_lib.sh",
       "nscc",
       "reps",
       "8",
       "fat_tree_128_1os.topo",
       "20",
-      "/home/leo/htsim/htsim/sim/datacenter/prism_eval/expJ_decmt_ablation/data/formal/m2m.cm",
+      "bundle:m2m.cm",
       "flow",
       "expj_matched_nscc_f8_s20",
-      "/home/leo/htsim/htsim/sim/datacenter/prism_eval/expJ_decmt_ablation/data/formal"
+      "bundle:."
     ]
   },
   "experiment": "ExpJ_decmt_ablation",
@@ -439,10 +439,18 @@
     "sha256": "76df0d84dee293261c90ea84ae9bf23e4bfc9e70a1fdd1084ec54927e25264ed"
   },
   "output_files": {
-    "flow": "expj_matched_nscc_f8_s20.flow.txt",
-    "idmap": "expj_matched_nscc_f8_s20.idmap",
-    "manifest": "expj_matched_nscc_f8_s20.manifest.json",
-    "stdout": "expj_matched_nscc_f8_s20.stdout"
+    "flow": {
+      "filename": "expj_matched_nscc_f8_s20.flow.txt",
+      "sha256": "6e2e855ea757025ba6cd9e3375cc815185329630c921af17e065dea9cb33c65b"
+    },
+    "idmap": {
+      "filename": "expj_matched_nscc_f8_s20.idmap",
+      "sha256": "31ca264468976b9b02f1d5ec9d86b7d0e2656bbca25153b259b29a4273b4048a"
+    },
+    "stdout": {
+      "filename": "expj_matched_nscc_f8_s20.stdout",
+      "sha256": "e717bd1e113a7ec783b2df616e32ae008d8f986ed7a92b6ac2d9b34f034eb5eb"
+    }
   },
   "parse_output": {
     "filename": "parse_output",
@@ -450,9 +458,13 @@
   },
   "phase": "formal",
   "run_id": "expj_matched_nscc_f8_s20",
+  "run_lib": {
+    "path": "prism_eval/common/run_lib.sh",
+    "sha256": "c636a536a229da6eed638bef1234609da068cd124ee54557e012e608d8ee1d91"
+  },
   "scenario": "real_expa_many_to_many",
   "schema": "expj_decmt_ablation_runner",
-  "schema_version": 1,
+  "schema_version": 2,
   "seed": 20,
   "topology": {
     "filename": "fat_tree_128_1os.topo",

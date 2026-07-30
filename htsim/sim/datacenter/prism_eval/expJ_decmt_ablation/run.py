@@ -25,7 +25,7 @@ from metrics import fct_stats  # noqa: E402
 
 
 SCHEMA = "expj_decmt_ablation_runner"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ARMS = {
     "original_nscc": ("nscc", "reps", None, None),
     "matched_nscc": ("nscc", "reps", "14", None),
@@ -40,12 +40,26 @@ PATHS, END_MS, NODES, MTU = 8, 8, 128, 4150
 FLOW_COUNT, FLOW_SIZE_BYTES = 64, 2_000_000
 TOPOLOGY_NAME = "fat_tree_128_1os.topo"
 WORKLOAD_PARAMETERS = (FLOW_COUNT, 16, "pairs", FLOW_SIZE_BYTES, NODES, 16)
+TRACE_ENVIRONMENT_VARIABLES = (
+    "HTSIM_TRACE_FLOW_COMPLETIONS",
+    "ACK_QDELAY",
+    "PRISM_ORACLE_VALIDATION",
+    "MNSCC_MEDIAN",
+    "HTSIM_TRACE_FLOW",
+    "HTSIM_TRACE_TRIGGERS",
+    "PRISM_EPOCH",
+    "PRISM_PATHRTT",
+    "PRISM_HOLD_TRACE",
+    "PRISM_LOSS",
+)
 
 TOPOLOGY = DATACENTER / "topologies" / TOPOLOGY_NAME
 HTSIM_UEC = DATACENTER / "htsim_uec"
 PARSE_OUTPUT = DATACENTER.parent / "build" / "parse_output"
 RUN_LIB = COMMON / "run_lib.sh"
 UEC_IDMAP_NAME = re.compile(r"Uec_(?P<src>\d+)_(?P<dst>\d+)")
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+RETAINED_ARTIFACTS = ("flow", "stdout", "idmap")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -127,9 +141,9 @@ def fixed_environment(case: Case) -> dict[str, str]:
     _, _, target_q_delay, arm_extra = ARMS[case.arm]
     env = os.environ.copy()
     for name in (
-        "TQD", "EXTRA_ARGS", "MTU", "NODES", "KEEPDAT", "PRISM_EPOCH",
-        "PRISM_PATHRTT", "PRISM_HOLD_TRACE", "PRISM_LOSS", "PRISM_TRACE",
+        "TQD", "EXTRA_ARGS", "MTU", "NODES", "KEEPDAT", "PRISM_TRACE",
         "PRISM_TMP", "UEC_TMP", "TMP", "TEMP", "TMPDIR",
+        *TRACE_ENVIRONMENT_VARIABLES,
     ):
         env.pop(name, None)
     extra_args = ["-disable_trim"]
@@ -148,10 +162,21 @@ def fixed_environment(case: Case) -> dict[str, str]:
 
 
 def run_lib_command(case: Case, workload: Path, output_root: Path) -> list[str]:
+    """Build the transient execution argv, including resolved filesystem paths."""
     cc, lb, _, _ = ARMS[case.arm]
     return [
         "bash", str(RUN_LIB), cc, lb, str(case.failed), TOPOLOGY_NAME,
         str(case.seed), str(workload), "flow", case_id(case), str(output_root),
+    ]
+
+
+def _logical_run_lib_command(case: Case) -> list[str]:
+    """Build a canonical, relocatable representation of the run-lib invocation."""
+    cc, lb, _, _ = ARMS[case.arm]
+    return [
+        "bash", "prism_eval/common/run_lib.sh", cc, lb, str(case.failed),
+        TOPOLOGY_NAME, str(case.seed), "bundle:m2m.cm", "flow", case_id(case),
+        "bundle:.",
     ]
 
 
@@ -352,7 +377,7 @@ def _expected_manifest(
             },
         },
         "config": {
-            "run_lib_argv": run_lib_command(case, workload, output_root),
+            "run_lib_argv": _logical_run_lib_command(case),
             "environment": {
                 name: fixed_environment(case)[name]
                 for name in ("PATHS", "END_MS", "MTU", "NODES", "EXTRA_ARGS")
@@ -362,10 +387,62 @@ def _expected_manifest(
         "topology": {"filename": TOPOLOGY.name, "sha256": _sha256(TOPOLOGY)},
         "htsim_uec": {"filename": HTSIM_UEC.name, "sha256": _sha256(HTSIM_UEC)},
         "parse_output": {"filename": PARSE_OUTPUT.name, "sha256": _sha256(PARSE_OUTPUT)},
+        "run_lib": {
+            "path": "prism_eval/common/run_lib.sh",
+            "sha256": _sha256(RUN_LIB),
+        },
         "output_files": {
-            name: path.name for name, path in outputs.items() if name not in ("dat", "ascii")
+            name: {"filename": outputs[name].name} for name in RETAINED_ARTIFACTS
         },
     }
+
+
+def _completed_manifest(
+    expected: dict,
+    outputs: dict[str, Path],
+    bindings: dict[tuple[int, int], tuple[int, int]],
+) -> dict:
+    """Attach content provenance that exists only after a successful simulation."""
+    return expected | {
+        "output_files": {
+            name: expected["output_files"][name] | {"sha256": _sha256(outputs[name])}
+            for name in RETAINED_ARTIFACTS
+        },
+        "flow_event_bindings": _serialized_event_bindings(bindings),
+    }
+
+
+def _validated_manifest_identity(
+    actual: object, outputs: dict[str, Path]
+) -> tuple[dict, object]:
+    """Validate retained hashes and return the path-independent identity portion."""
+    if not isinstance(actual, dict):
+        raise ValueError("existing manifest is invalid")
+    manifest = dict(actual)
+    serialized_bindings = manifest.pop("flow_event_bindings", None)
+    artifacts = manifest.get("output_files")
+    if not isinstance(artifacts, dict) or set(artifacts) != set(RETAINED_ARTIFACTS):
+        raise ValueError("existing manifest artifact metadata is invalid")
+    identity_artifacts = {}
+    for name in RETAINED_ARTIFACTS:
+        metadata = artifacts[name]
+        if not isinstance(metadata, dict) or set(metadata) != {"filename", "sha256"}:
+            raise ValueError(f"existing manifest artifact metadata is invalid: {name}")
+        filename = metadata["filename"]
+        recorded_hash = metadata["sha256"]
+        if not isinstance(filename, str) or not isinstance(recorded_hash, str):
+            raise ValueError(f"existing manifest artifact metadata is invalid: {name}")
+        if SHA256_HEX.fullmatch(recorded_hash) is None:
+            raise ValueError(f"existing manifest artifact SHA-256 is invalid: {name}")
+        try:
+            actual_hash = _sha256(outputs[name])
+        except OSError as exc:
+            raise ValueError(f"existing manifest artifact is unreadable: {name}") from exc
+        if actual_hash != recorded_hash:
+            raise ValueError(f"artifact SHA-256 mismatch: {name}")
+        identity_artifacts[name] = {"filename": filename}
+    manifest["output_files"] = identity_artifacts
+    return manifest, serialized_bindings
 
 
 def _reuse_or_reject(outputs: dict[str, Path], expected: dict) -> bool:
@@ -380,8 +457,7 @@ def _reuse_or_reject(outputs: dict[str, Path], expected: dict) -> bool:
         actual = json.loads(outputs["manifest"].read_text(encoding="ascii"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("existing manifest is invalid") from exc
-    manifest = dict(actual)
-    serialized_bindings = manifest.pop("flow_event_bindings", None)
+    manifest, serialized_bindings = _validated_manifest_identity(actual, outputs)
     if manifest != expected:
         raise ValueError("existing manifest identity conflicts")
     try:
@@ -428,7 +504,7 @@ def run_one(case: Case, *, phase: str, output_root: Path) -> Path:
         raise RuntimeError(f"incomplete flow output: {exc}") from exc
     with outputs["manifest"].open("x", encoding="ascii", newline="") as stream:
         json.dump(
-            expected | {"flow_event_bindings": _serialized_event_bindings(bindings)},
+            _completed_manifest(expected, outputs, bindings),
             stream,
             indent=2,
             sort_keys=True,

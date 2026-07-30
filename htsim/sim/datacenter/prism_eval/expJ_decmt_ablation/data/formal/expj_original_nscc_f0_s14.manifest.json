@@ -10,16 +10,16 @@
     },
     "run_lib_argv": [
       "bash",
-      "/home/leo/htsim/htsim/sim/datacenter/prism_eval/common/run_lib.sh",
+      "prism_eval/common/run_lib.sh",
       "nscc",
       "reps",
       "0",
       "fat_tree_128_1os.topo",
       "14",
-      "/home/leo/htsim/htsim/sim/datacenter/prism_eval/expJ_decmt_ablation/data/formal/m2m.cm",
+      "bundle:m2m.cm",
       "flow",
       "expj_original_nscc_f0_s14",
-      "/home/leo/htsim/htsim/sim/datacenter/prism_eval/expJ_decmt_ablation/data/formal"
+      "bundle:."
     ]
   },
   "experiment": "ExpJ_decmt_ablation",
@@ -438,10 +438,18 @@
     "sha256": "76df0d84dee293261c90ea84ae9bf23e4bfc9e70a1fdd1084ec54927e25264ed"
   },
   "output_files": {
-    "flow": "expj_original_nscc_f0_s14.flow.txt",
-    "idmap": "expj_original_nscc_f0_s14.idmap",
-    "manifest": "expj_original_nscc_f0_s14.manifest.json",
-    "stdout": "expj_original_nscc_f0_s14.stdout"
+    "flow": {
+      "filename": "expj_original_nscc_f0_s14.flow.txt",
+      "sha256": "4030a8ca89625671a14357079a417d75e618705d6655291301bb5bab8e39a445"
+    },
+    "idmap": {
+      "filename": "expj_original_nscc_f0_s14.idmap",
+      "sha256": "31ca264468976b9b02f1d5ec9d86b7d0e2656bbca25153b259b29a4273b4048a"
+    },
+    "stdout": {
+      "filename": "expj_original_nscc_f0_s14.stdout",
+      "sha256": "8928c86a624d8064b6c832fd93cce7ba3b90488b4917e45e7fd405977f8a15cb"
+    }
   },
   "parse_output": {
     "filename": "parse_output",
@@ -449,9 +457,13 @@
   },
   "phase": "formal",
   "run_id": "expj_original_nscc_f0_s14",
+  "run_lib": {
+    "path": "prism_eval/common/run_lib.sh",
+    "sha256": "c636a536a229da6eed638bef1234609da068cd124ee54557e012e608d8ee1d91"
+  },
   "scenario": "real_expa_many_to_many",
   "schema": "expj_decmt_ablation_runner",
-  "schema_version": 1,
+  "schema_version": 2,
   "seed": 14,
   "topology": {
     "filename": "fat_tree_128_1os.topo",

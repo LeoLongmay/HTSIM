@@ -11,16 +11,16 @@
     },
     "run_lib_argv": [
       "bash",
-      "/home/leo/htsim/htsim/sim/datacenter/prism_eval/common/run_lib.sh",
+      "prism_eval/common/run_lib.sh",
       "prism",
       "reps",
       "0",
       "fat_tree_128_1os.topo",
       "18",
-      "/home/leo/htsim/htsim/sim/datacenter/prism_eval/expJ_decmt_ablation/data/formal/m2m.cm",
+      "bundle:m2m.cm",
       "flow",
       "expj_floor_only_f0_s18",
-      "/home/leo/htsim/htsim/sim/datacenter/prism_eval/expJ_decmt_ablation/data/formal"
+      "bundle:."
     ]
   },
   "experiment": "ExpJ_decmt_ablation",
@@ -439,10 +439,18 @@
     "sha256": "76df0d84dee293261c90ea84ae9bf23e4bfc9e70a1fdd1084ec54927e25264ed"
   },
   "output_files": {
-    "flow": "expj_floor_only_f0_s18.flow.txt",
-    "idmap": "expj_floor_only_f0_s18.idmap",
-    "manifest": "expj_floor_only_f0_s18.manifest.json",
-    "stdout": "expj_floor_only_f0_s18.stdout"
+    "flow": {
+      "filename": "expj_floor_only_f0_s18.flow.txt",
+      "sha256": "cdda6833feb589256176676a0b7bb04073e6cea0f38940e6b6ed6b71235ad49b"
+    },
+    "idmap": {
+      "filename": "expj_floor_only_f0_s18.idmap",
+      "sha256": "31ca264468976b9b02f1d5ec9d86b7d0e2656bbca25153b259b29a4273b4048a"
+    },
+    "stdout": {
+      "filename": "expj_floor_only_f0_s18.stdout",
+      "sha256": "9a3eb66a8ac484416042aed87224ce269688db73fc209b66428f2b187415b8a5"
+    }
   },
   "parse_output": {
     "filename": "parse_output",
@@ -450,9 +458,13 @@
   },
   "phase": "formal",
   "run_id": "expj_floor_only_f0_s18",
+  "run_lib": {
+    "path": "prism_eval/common/run_lib.sh",
+    "sha256": "c636a536a229da6eed638bef1234609da068cd124ee54557e012e608d8ee1d91"
+  },
   "scenario": "real_expa_many_to_many",
   "schema": "expj_decmt_ablation_runner",
-  "schema_version": 1,
+  "schema_version": 2,
   "seed": 18,
   "topology": {
     "filename": "fat_tree_128_1os.topo",

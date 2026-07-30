@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import shutil
 import statistics
 import sys
 from contextlib import contextmanager
@@ -68,6 +70,13 @@ def _write_case(root: Path, case: run.Case) -> None:
         output_root=root,
     )
     bindings = run._validate_flow(flow_path, idmap_path)
+    expected["output_files"] = {
+        name: {
+            **metadata,
+            "sha256": hashlib.sha256((root / metadata["filename"]).read_bytes()).hexdigest(),
+        }
+        for name, metadata in expected["output_files"].items()
+    }
     (root / f"{run_id}.manifest.json").write_text(
         json.dumps(
             expected | {"flow_event_bindings": run._serialized_event_bindings(bindings)},
@@ -158,9 +167,42 @@ def test_aggregation_rejects_partial_flow_output(tmp_path):
         flow_path = formal / f"{run.case_id(case)}.flow.txt"
         lines = flow_path.read_text(encoding="ascii").splitlines()
         flow_path.write_text("\n".join(lines[:-1]) + "\n", encoding="ascii")
+        manifest_path = formal / f"{run.case_id(case)}.manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+        manifest["output_files"]["flow"]["sha256"] = hashlib.sha256(
+            flow_path.read_bytes()
+        ).hexdigest()
+        manifest_path.write_text(json.dumps(manifest), encoding="ascii")
 
         with pytest.raises(ValueError, match="incomplete flow output"):
             analyze.analyze_formal(formal, tmp_path / "aggregate")
+
+
+def test_aggregation_rejects_retained_artifact_hash_mismatch(tmp_path):
+    """Strict analysis must authenticate even retained artifacts it does not parse."""
+    with _patched_runner_inputs(tmp_path):
+        formal = tmp_path / "formal"
+        _write_formal_matrix(formal)
+        case = run.Case("decmt", 8, 13)
+        stdout_path = formal / f"{run.case_id(case)}.stdout"
+        stdout_path.write_text("tampered but nonempty\n", encoding="ascii")
+
+        with pytest.raises(ValueError, match="artifact SHA-256 mismatch: stdout"):
+            analyze.analyze_formal(formal, tmp_path / "aggregate")
+
+
+def test_aggregation_validates_a_relocated_formal_bundle(tmp_path):
+    """Manifest identity must remain strict without depending on checkout location."""
+    with _patched_runner_inputs(tmp_path):
+        source = tmp_path / "source" / "formal"
+        _write_formal_matrix(source)
+        relocated = tmp_path / "relocated" / "formal"
+        shutil.copytree(source, relocated)
+
+        result = analyze.analyze_formal(relocated, tmp_path / "aggregate")
+
+    assert len(result["per_seed"]) == 80
+    assert len(result["summary"]) == 8
 
 
 def test_aggregation_rejects_mutated_immutable_manifest_field(tmp_path):
