@@ -2,8 +2,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+cd "$HERE"
 
-python3 "$HERE/run.py" smoke
-python3 "$HERE/run.py" formal
-python3 "$HERE/analyze.py"
-python3 "$HERE/make_figs.py"
+python3 run.py smoke
+python3 run.py formal
+python3 analyze.py
+python3 make_figs.py

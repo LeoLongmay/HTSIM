@@ -18,6 +18,13 @@ sys.path.insert(0, str(EXPERIMENT_DIR))
 import run  # noqa: E402
 
 
+def test_repro_script_lists_smoke_then_formal_then_render():
+    script = (EXPERIMENT_DIR / "repro.sh").read_text(encoding="utf-8")
+
+    assert script.index("run.py smoke") < script.index("run.py formal")
+    assert script.index("run.py formal") < script.index("analyze.py") < script.index("make_figs.py")
+
+
 @contextmanager
 def patched_inputs(root: Path):
     topology = root / "fat_tree_128_1os.topo"
