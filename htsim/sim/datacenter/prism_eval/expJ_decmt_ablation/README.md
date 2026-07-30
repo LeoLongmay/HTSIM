@@ -28,7 +28,8 @@ pause window growth.
 ## Metrics and outputs
 
 For each completed flow, FCT is `FINISH time - START time`. The per-case
-average FCT and P99 FCT use those 64 FCTs; P99 is the nearest-rank percentile.
+average FCT and P99 FCT use those 64 FCTs; P99 selects the sorted completion
+time at zero-based index `round(0.99 * (n - 1))` (index 62 for 64 flows).
 Finite-workload aggregate goodput is completed bytes times eight divided by
 the elapsed span from the first START to the last FINISH, in Gbps. Formal
 summaries report the mean and sample standard deviation over the ten seeds.

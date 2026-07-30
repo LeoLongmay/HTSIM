@@ -60,3 +60,33 @@ at `htsim/sim/build/datacenter/htsim_uec`. Matplotlib warned that
 `~/.config/matplotlib` was not writable and used a temporary cache under
 `/tmp`; rendering still exited successfully and both nonempty figure products
 were verified. No other issues were observed.
+
+## Review round 1 corrections
+
+The review identified two scoped reproducibility-package issues. The README
+had called P99 “nearest-rank,” while the implemented `metrics.fct_stats`
+selects sorted completion time at zero-based `round(0.99 * (n - 1))`. The
+README now states that exact rule (and the fixed-64-flow index, 62). A new
+contract constructs 64 ordered FCTs, verifies the implementation returns the
+63rd order statistic, and requires the README to document the same rule.
+
+The aggregate CSV writer now passes `lineterminator="\n"` to `csv.DictWriter`.
+A new aggregation contract rejects CRLF in either generated table. Before the
+fixes, the targeted test run produced the expected two failures: the README
+did not contain the rounded-index definition, and both generated tables
+contained `\r\n`. After the fixes:
+
+```text
+python3 -m pytest -q tests/test_runner.py tests/test_analysis.py
+12 passed in 1.71s
+
+python3 -m pytest -q tests ../common/tests/test_metrics.py
+25 passed in 3.36s
+```
+
+`python3 analyze.py` regenerated the two formal aggregate CSVs in 8.9 seconds,
+and `python3 make_figs.py` regenerated the primary figure in 1.8 seconds.
+Final direct validation confirmed 80 manifests and 80 complete (64 START/64
+FINISH) flow logs, 80 per-seed rows, 8 summary rows, LF-only aggregate CSVs,
+and nonempty `figJ1_decmt_ablation.{pdf,png}` products (20,187 and 139,335
+bytes). Matplotlib repeated the harmless temporary-cache warning noted above.

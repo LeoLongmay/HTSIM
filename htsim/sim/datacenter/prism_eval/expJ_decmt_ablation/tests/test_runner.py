@@ -16,6 +16,7 @@ EXPERIMENT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(EXPERIMENT_DIR))
 
 import run  # noqa: E402
+from metrics import fct_stats  # noqa: E402
 
 
 def test_repro_script_lists_smoke_then_formal_then_render():
@@ -23,6 +24,25 @@ def test_repro_script_lists_smoke_then_formal_then_render():
 
     assert script.index("run.py smoke") < script.index("run.py formal")
     assert script.index("run.py formal") < script.index("analyze.py") < script.index("make_figs.py")
+
+
+def test_readme_documents_the_implemented_rounded_index_p99():
+    readme = (EXPERIMENT_DIR / "README.md").read_text(encoding="utf-8")
+
+    assert "zero-based index `round(0.99 * (n - 1))`" in readme
+
+    with tempfile.TemporaryDirectory() as directory:
+        flow_path = Path(directory) / "ordered.flow.txt"
+        lines = []
+        for flow_id in range(64):
+            duration_s = (flow_id + 1) * 1e-6
+            lines.extend((
+                f"0 Type FLOW_EVENT SrcID {flow_id} Ev START FlowID {flow_id} Flowsize 1",
+                f"{duration_s} Type FLOW_EVENT SrcID {flow_id} Ev FINISH FlowID {flow_id} Bytes 1",
+            ))
+        flow_path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+        assert fct_stats(flow_path)["p99_s"] == pytest.approx(63e-6)
 
 
 @contextmanager

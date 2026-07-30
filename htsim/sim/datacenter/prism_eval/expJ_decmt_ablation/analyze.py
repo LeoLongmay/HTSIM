@@ -125,7 +125,7 @@ def _summary_row(rows: list[dict[str, float | int | str]], case: run.Case) -> di
 
 def _write_csv(path: Path, fields: tuple[str, ...], rows: list[dict[str, float | int | str]]) -> None:
     with path.open("w", encoding="ascii", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 

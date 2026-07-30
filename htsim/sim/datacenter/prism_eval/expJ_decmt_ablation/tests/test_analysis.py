@@ -137,6 +137,18 @@ def test_aggregation_writes_per_seed_and_sample_standard_deviation(tmp_path):
     }
 
 
+def test_aggregation_writes_lf_terminated_csvs(tmp_path):
+    """Generated tables must not add CRLF noise to the committed result package."""
+    with _patched_runner_inputs(tmp_path):
+        formal = tmp_path / "formal"
+        _write_formal_matrix(formal)
+        aggregate = tmp_path / "aggregate"
+        analyze.analyze_formal(formal, aggregate)
+
+    for name in ("per_seed.csv", "summary.csv"):
+        assert b"\r\n" not in (aggregate / name).read_bytes()
+
+
 def test_aggregation_rejects_partial_flow_output(tmp_path):
     """A 63-of-64 completion log is not allowed to become a formal measurement."""
     with _patched_runner_inputs(tmp_path):
