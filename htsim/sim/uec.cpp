@@ -176,6 +176,7 @@ uint32_t        UecSrc::_prism_n_min            = 3;
 bool            UecSrc::_prism_path_median_signal = false;
 bool            UecSrc::_prism_path_median_spread = false;
 bool            UecSrc::_prism_hold_as_increase = false;
+bool            UecSrc::_prism_floor_only = false;
 double          UecSrc::_laps_beta              = 1.0;
 simtime_picosec UecSrc::_laps_probe_interval    = timeFromUs(50u);
 bool            UecSrc::_prism_oracle_validation = false;
@@ -2660,7 +2661,7 @@ void UecSrc::updateCwndOnAck_PRISM(bool skip, simtime_picosec delay, mem_b newly
                                         _prism_hysteresis, (prism::Region)_prism_region)
             : prism::decide_region(f_cc, f_spray, _target_Qdelay, t_spray);
         region = prism::apply_hold_override(static_cast<prism::Region>(region),
-                                            _prism_hold_as_increase);
+                                            _prism_hold_as_increase || _prism_floor_only);
         PrismCoordinationResult coordination_result;
         if (_prism_coordination_mode != PrismCoordinationMode::DISABLED) {
             coordination_result = _prism_coordinator.closeEpoch(

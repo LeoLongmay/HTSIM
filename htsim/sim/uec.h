@@ -529,6 +529,7 @@ public:
     static bool            _prism_path_median_signal;
     static bool            _prism_path_median_spread;
     static bool            _prism_hold_as_increase;
+    static bool            _prism_floor_only;
     static double          _laps_beta;           // Softmax inverse-temperature; default 1.0
     static simtime_picosec _laps_probe_interval; // microseconds on CLI; default 50us
     // Motivation-only REPS admission gate. Disabled unless explicitly requested.

@@ -323,6 +323,9 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-prism_hold_as_increase")) {
             UecSrc::_prism_hold_as_increase = true;
             cout << "prism_hold_as_increase enabled" << endl;
+        } else if (!strcmp(argv[i], "-prism_floor_only")) {
+            UecSrc::_prism_floor_only = true;
+            cout << "prism_floor_only enabled" << endl;
         } else if (!strcmp(argv[i],"-laps_beta")) {
             UecSrc::_laps_beta = atof(argv[i+1]);
             cout << "laps_beta " << UecSrc::_laps_beta << endl;
