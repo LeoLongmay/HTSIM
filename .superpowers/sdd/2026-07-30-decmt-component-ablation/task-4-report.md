@@ -90,3 +90,26 @@ Final direct validation confirmed 80 manifests and 80 complete (64 START/64
 FINISH) flow logs, 80 per-seed rows, 8 summary rows, LF-only aggregate CSVs,
 and nonempty `figJ1_decmt_ablation.{pdf,png}` products (20,187 and 139,335
 bytes). Matplotlib repeated the harmless temporary-cache warning noted above.
+
+## Review round 2 correction
+
+The common `metrics._percentile` docstring was the last stale P99 description:
+it called the rounded-index algorithm “Nearest-rank” even though the helper
+executes `round(p / 100.0 * (n - 1))`. The docstring now states the exact
+zero-based formula. The common metric regression contract requires both that
+wording and the 64-sample P99 selection of index 62.
+
+The new contract first failed only on the stale docstring:
+
+```text
+python3 -m pytest -q common/tests/test_metrics.py
+1 failed, 11 passed
+```
+
+After the documentation correction, the common suite reported `12 passed in
+0.04s`; the covering ExpJ/common suite reported `26 passed in 3.24s`. A final
+read-only formal-product check retained 80 manifests, 80 flow logs, 80
+per-seed rows, 8 summary rows, and LF-only aggregate CSVs. This round changes
+only the common helper documentation, its regression test, and this report;
+formal data and figures were not regenerated because their semantics and
+bytes are unchanged.

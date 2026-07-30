@@ -25,6 +25,11 @@ def test_fct_stats():
     assert abs(s["p50_s"] - 0.002) < 1e-9, s
     print("ok fct_stats")
 
+def test_percentile_documents_and_uses_rounded_zero_based_index():
+    assert "zero-based index round(p / 100.0 * (n - 1))" in metrics._percentile.__doc__
+    assert metrics._percentile(list(range(64)), 99) == 62
+    print("ok rounded-index percentile")
+
 def test_goodput():
     d = tempfile.mkdtemp()
     p = os.path.join(d, "g.sink.txt")
@@ -199,6 +204,7 @@ def test_tor_downqueue_delay_series():
 
 if __name__ == "__main__":
     test_fct_stats()
+    test_percentile_documents_and_uses_rounded_zero_based_index()
     test_goodput()
     test_aggregate_goodput()
     test_count_cwnd_cuts()

@@ -31,7 +31,7 @@ def parse_flow_events(path):
     return starts, finishes
 
 def _percentile(sorted_vals, p):
-    """Nearest-rank percentile on a pre-sorted, non-empty list."""
+    """Percentile on a sorted list at zero-based index round(p / 100.0 * (n - 1))."""
     if not sorted_vals:
         return float("nan")
     i = int(round(p / 100.0 * (len(sorted_vals) - 1)))
