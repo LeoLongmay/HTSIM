@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -12,6 +13,9 @@ import run
 
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "common"))
+import plot_style  # noqa: E402
+
 OUTPUT_BASENAME = "figJ1_decmt_ablation"
 DISPLAY_LABELS = {
     "original_nscc": "Original NSCC",
@@ -20,6 +24,17 @@ DISPLAY_LABELS = {
     "decmt": "DecMT",
 }
 COLORS = ("#7f7f7f", "#4e79a7", "#f28e2b", "#59a14f")
+PANEL_ARMS = (
+    ("original_nscc", "ops"),
+    ("matched_nscc", "reps"),
+    ("floor_only", "ccc"),
+    ("decmt", "prism"),
+)
+PANEL_METRICS = (
+    ("mean_goodput_gbps", "std_goodput_gbps", "Goodput (Gbps)", 1.0, "figJ1_goodput"),
+    ("mean_avg_fct_us", "std_avg_fct_us", "Average FCT (ms)", 1e-3, "figJ1_avg_fct"),
+    ("mean_p99_fct_us", "std_p99_fct_us", "P99 FCT (ms)", 1e-3, "figJ1_p99_fct"),
+)
 
 
 def _normalize(summary: Iterable[Mapping[str, object]]) -> dict[tuple[str, int], dict[str, float | int | str]]:
@@ -58,6 +73,35 @@ def _control_text(rows: Mapping[tuple[str, int], Mapping[str, float | int | str]
     return "failed=0 control (goodput; avg/p99 FCT): " + " | ".join(parts)
 
 
+def render_single_panels(
+    rows: Mapping[tuple[str, int], Mapping[str, float | int | str]], output_dir: Path,
+) -> None:
+    """Render each failed=8 metric as a self-contained grouped-bar panel."""
+    import matplotlib.pyplot as plt
+
+    plot_style.apply_style(16)
+    arms = tuple(run.ARMS)
+    x = [0]
+    group_width = 0.66
+    bar_width = group_width / len(arms)
+    for mean_name, std_name, ylabel, scale, stem in PANEL_METRICS:
+        fig, axis = plt.subplots(figsize=(6.4, 2.8))
+        for position, (arm, color_key) in enumerate(PANEL_ARMS):
+            offsets = [index - group_width / 2 + bar_width * (position + 0.5) for index in x]
+            values = [float(rows[(arm, 8)][mean_name]) * scale]
+            errors = [float(rows[(arm, 8)][std_name]) * scale]
+            axis.bar(offsets, values, bar_width, yerr=errors, capsize=2,
+                     color=plot_style.COLORS[color_key], label=DISPLAY_LABELS[arm])
+        axis.set_xticks(x, ["8"])
+        axis.set_xlabel("Number of failed links")
+        axis.set_ylabel(ylabel)
+        axis.grid(axis="y", alpha=0.3)
+        axis.legend(ncol=2, fontsize=9, frameon=False)
+        plt.tight_layout()
+        plot_style.save(fig, stem, output_dir)
+        plt.close(fig)
+
+
 def render(summary: Iterable[Mapping[str, object]], output_dir: Path) -> None:
     """Render failed=8 bars plus a compact failed=0 textual control comparison."""
     rows = _normalize(summary)
@@ -67,11 +111,7 @@ def render(summary: Iterable[Mapping[str, object]], output_dir: Path) -> None:
 
     arms = tuple(run.ARMS)
     x = list(range(len(arms)))
-    panels = (
-        ("mean_goodput_gbps", "std_goodput_gbps", "Goodput (Gbps)", 1.0),
-        ("mean_avg_fct_us", "std_avg_fct_us", "Average FCT (ms)", 1e-3),
-        ("mean_p99_fct_us", "std_p99_fct_us", "P99 FCT (ms)", 1e-3),
-    )
+    panels = tuple(metric[:4] for metric in PANEL_METRICS)
     fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.5))
     for axis, (mean_name, std_name, title, scale) in zip(axes, panels):
         means = [float(rows[(arm, 8)][mean_name]) * scale for arm in arms]
@@ -88,6 +128,7 @@ def render(summary: Iterable[Mapping[str, object]], output_dir: Path) -> None:
     fig.savefig(pdf, bbox_inches="tight", pad_inches=0.04)
     fig.savefig(pdf.with_suffix(".png"), bbox_inches="tight", pad_inches=0.04, dpi=220)
     plt.close(fig)
+    render_single_panels(rows, output_dir)
 
 
 def _read_summary(path: Path) -> list[dict[str, str]]:

@@ -39,6 +39,15 @@ def test_render_creates_three_panel_figure(tmp_path):
     assert (tmp_path / "figJ1_decmt_ablation.png").is_file()
 
 
+def test_render_creates_all_standalone_panels(tmp_path):
+    """Each failed=8 metric is also available as a standalone paper panel."""
+    make_figs.render(_summary_rows(), tmp_path)
+
+    for stem in ("figJ1_goodput", "figJ1_avg_fct", "figJ1_p99_fct"):
+        assert (tmp_path / f"{stem}.pdf").is_file()
+        assert (tmp_path / f"{stem}.png").is_file()
+
+
 def test_render_rejects_summary_without_the_failed_zero_control(tmp_path):
     """The compact control comparison is mandatory, not an optional annotation."""
     rows = [row for row in _summary_rows() if row["failed_links"] != 0]
