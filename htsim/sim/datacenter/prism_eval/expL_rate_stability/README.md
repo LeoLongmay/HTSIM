@@ -20,6 +20,44 @@ is isolated under `data/smoke/`, so it can never alter the formal raw bundle.
 The runner reuses only output bundles whose manifest and retained raw files
 have matching SHA-256 hashes.
 
+## Analysis and plotting
+
+From this directory, generate the CSV contract and publication figures with:
+
+```bash
+python3 analyze.py --input data/raw --output data
+python3 make_figs.py --data data --figs figs
+```
+
+`make_figs.py` writes `figs/figL1_rate_timeseries.{png,pdf}` and
+`figs/figL2_beta_timeseries.{png,pdf}`.  `FigL1` places the symmetric case on
+the left and the asymmetric case on the right, with the aggregate median
+trajectory of each primary arm.  Its green DecMT envelope is the pointwise
+25th--75th percentile over the five seed trajectories; no other arm has a
+spread band.  `FigL2` is the asymmetric DecMT beta sensitivity plot, with
+curves ordered `β=1.0`, `β=0.5`, `β=0.3`, and `β=0.15`.
+
+The displayed aggregate delivery rate is the sum of decoded `UEC_SINK Rate`
+records across all sinks in each 10-us bin.  It is controller-neutral and is
+**not a direct packet-departure trace**.  The plotted median is smoothed only
+for display by a centered 50-us arithmetic mean; stability statistics always
+use the unsmoothed aggregate bins.
+
+For each seed and its five-seed aggregate, `stability_summary.csv` reports:
+
+- `coefficient_of_variation`: population standard deviation divided by the
+  1--6 ms steady-window mean.
+- `normalized_p95_p5`: nearest-rank `(P95 - P5)` divided by that same mean.
+- `settling_time_us`: the first time in the 1--6 ms window after which the
+  next complete 200 us stays within plus or minus 10% of the steady-window
+  mean.
+
+The first two metrics are dimensionless fractions: values nearer zero indicate
+less steady-state variation.  A settling time earlier than another run's
+indicates faster convergence under the fixed 10%/200-us rule.  Metrics are
+`valid=false` when the steady window has fewer than 100 nonzero bins; that is
+insufficient evidence, not a zero-variation result.
+
 ## Locked matrix
 
 The formal matrix contains exactly 60 runs.  Every listed row uses seeds
