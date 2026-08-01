@@ -35,12 +35,10 @@ mkdir -p "$OUTDIR"
 TQD_ARG=""; [ -n "${TQD:-}" ] && TQD_ARG="-target_q_delay ${TQD}"
 LOGTIME_ARG=""
 if [ -n "${LOGTIME_US:-}" ]; then
-    case "$LOGTIME_US" in
-        0|*[!0-9]*)
-            echo "ERROR: LOGTIME_US must be a decimal-free positive integer" >&2
-            exit 2
-            ;;
-    esac
+    if ! [[ "$LOGTIME_US" =~ ^[0-9]*[1-9][0-9]*$ ]]; then
+        echo "ERROR: LOGTIME_US must be a decimal-free positive integer" >&2
+        exit 2
+    fi
     LOGTIME_ARG="-logtime_us ${LOGTIME_US}"
 fi
 LOGARGS=""

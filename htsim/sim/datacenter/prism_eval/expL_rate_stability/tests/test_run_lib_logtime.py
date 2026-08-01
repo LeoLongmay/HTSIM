@@ -21,7 +21,9 @@ def test_rate_stability_runner_sets_ten_microsecond_logtime():
     ).read_text()
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "1.5", "abc", "10 -end 0"])
+@pytest.mark.parametrize(
+    "value", ["0", "00", "000", "-1", "1.5", "abc", "10 -end 0"]
+)
 def test_run_lib_rejects_invalid_logtime_us(value):
     result = subprocess.run(
         [
