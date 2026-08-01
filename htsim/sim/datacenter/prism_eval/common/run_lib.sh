@@ -33,13 +33,15 @@ DECODER=../build/parse_output
 [ -x "$DECODER" ] || { echo "ERROR: $DECODER missing -- build it first"; exit 1; }
 mkdir -p "$OUTDIR"
 TQD_ARG=""; [ -n "${TQD:-}" ] && TQD_ARG="-target_q_delay ${TQD}"
+LOGTIME_ARG=""
+[ -n "${LOGTIME_US:-}" ] && LOGTIME_ARG="-logtime_us ${LOGTIME_US}"
 LOGARGS=""
 case ",$LOGSPEC," in *,sink,*)  LOGARGS="$LOGARGS -log sink";; esac
 case ",$LOGSPEC," in *,queue,*) LOGARGS="$LOGARGS -log tor_downqueue";; esac
 echo "[run_lib] cc=$CC lb=$LB failed=$FAILED topo=$TOPO seed=$SEED cm=$CM log=$LOGSPEC tag=$TAG"
 $BIN -topo "topologies/$TOPO" -tm "$CM" -nodes "$NODES" \
      -sender_cc_algo "$CC" -load_balancing_algo "$LB" -failed "$FAILED" -mtu "$MTU" \
-     -paths "$PATHS" -seed "$SEED" $TQD_ARG $LOGARGS ${EXTRA_ARGS:-} -end "$END_MS" \
+     -paths "$PATHS" -seed "$SEED" $TQD_ARG $LOGARGS ${EXTRA_ARGS:-} ${LOGTIME_ARG} -end "$END_MS" \
      -o "$OUTDIR/$TAG.dat" > "$OUTDIR/$TAG.stdout" 2>&1
 ASCII="$OUTDIR/$TAG.ascii.tmp"
 "$DECODER" "$OUTDIR/$TAG.dat" -ascii > "$ASCII" 2>/dev/null || true
