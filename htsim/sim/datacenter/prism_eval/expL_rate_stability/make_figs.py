@@ -19,6 +19,11 @@ mpl.rcParams["ps.fonttype"] = 42
 
 import matplotlib.pyplot as plt
 
+try:
+    from .analyze import require_publishable_aggregate_metrics
+except ImportError:  # Direct ``python make_figs.py`` execution.
+    from analyze import require_publishable_aggregate_metrics
+
 
 HERE = Path(__file__).resolve().parent
 LABELS = {"ops": "OPS", "reps": "REPS", "strack": "STrack", "decmt": "DecMT"}
@@ -138,7 +143,8 @@ def render(data_dir: Path, output_dir: Path) -> None:
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
     rate_rows = _read_csv(data_dir / "rate_series.csv", RATE_SERIES_FIELDS)
-    _read_csv(data_dir / "stability_summary.csv", STABILITY_SUMMARY_FIELDS)
+    summary_rows = _read_csv(data_dir / "stability_summary.csv", STABILITY_SUMMARY_FIELDS)
+    require_publishable_aggregate_metrics(summary_rows)
     _render_primary(rate_rows, output_dir)
     _render_beta(rate_rows, output_dir)
 
@@ -170,6 +176,21 @@ def _write_selftest_csvs(data_dir: Path) -> None:
     with (data_dir / "stability_summary.csv").open("w", encoding="ascii", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=STABILITY_SUMMARY_FIELDS, lineterminator="\n")
         writer.writeheader()
+        for condition in CONDITIONS:
+            for arm in PRIMARY_ARMS:
+                writer.writerow({
+                    "kind": "primary", "condition": condition, "arm": arm, "beta": "",
+                    "seed": "aggregate", "valid": "True", "steady_samples": "500",
+                    "steady_mean_gbps": "100.0", "coefficient_of_variation": "0.1",
+                    "normalized_p95_p5": "0.2", "settling_time_us": "1000.0",
+                })
+        for beta in BETA_ORDER:
+            writer.writerow({
+                "kind": "beta", "condition": "", "arm": "", "beta": beta,
+                "seed": "aggregate", "valid": "True", "steady_samples": "500",
+                "steady_mean_gbps": "100.0", "coefficient_of_variation": "0.1",
+                "normalized_p95_p5": "0.2", "settling_time_us": "1000.0",
+            })
 
 
 def _selftest() -> None:

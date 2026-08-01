@@ -258,7 +258,8 @@ def require_publishable_aggregate_metrics(rows: Iterable[dict[str, object]]) -> 
             problems.append(f"missing {key}")
             continue
         settling_time = row.get("settling_time_us")
-        if row.get("valid") is not True or settling_time is None:
+        valid = row.get("valid") is True or str(row.get("valid")).lower() == "true"
+        if not valid or settling_time is None or str(settling_time) == "":
             problems.append(f"invalid or unsettled {key}")
             continue
         try:

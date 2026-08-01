@@ -6,6 +6,8 @@ import csv
 import sys
 from pathlib import Path
 
+import pytest
+
 
 DATACENTER = Path(__file__).resolve().parents[3]
 MAKE_FIGS = DATACENTER / "prism_eval" / "expL_rate_stability" / "make_figs.py"
@@ -25,7 +27,7 @@ SUMMARY_FIELDS = (
 )
 
 
-def write_fixture_csvs(data_dir: Path) -> None:
+def write_fixture_csvs(data_dir: Path, *, invalid_aggregate: bool = False) -> None:
     """Write a complete, deliberately unordered minimal rendering fixture."""
     data_dir.mkdir(parents=True)
     rate_rows: list[dict[str, object]] = []
@@ -61,6 +63,28 @@ def write_fixture_csvs(data_dir: Path) -> None:
     with (data_dir / "stability_summary.csv").open("w", encoding="ascii", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=SUMMARY_FIELDS, lineterminator="\n")
         writer.writeheader()
+        summary_rows = [
+            {
+                "kind": "primary", "condition": condition, "arm": arm, "beta": "",
+                "seed": "aggregate", "valid": "True", "steady_samples": "500",
+                "steady_mean_gbps": "100.0", "coefficient_of_variation": "0.1",
+                "normalized_p95_p5": "0.2", "settling_time_us": "1000.0",
+            }
+            for condition in ("symmetric", "asymmetric")
+            for arm in ("ops", "reps", "strack", "decmt")
+        ] + [
+            {
+                "kind": "beta", "condition": "", "arm": "", "beta": beta,
+                "seed": "aggregate", "valid": "True", "steady_samples": "500",
+                "steady_mean_gbps": "100.0", "coefficient_of_variation": "0.1",
+                "normalized_p95_p5": "0.2", "settling_time_us": "1000.0",
+            }
+            for beta in ("1.0", "0.5", "0.3", "0.15")
+        ]
+        if invalid_aggregate:
+            summary_rows[0]["valid"] = "False"
+            summary_rows[0]["settling_time_us"] = ""
+        writer.writerows(summary_rows)
 
 
 def test_renderer_uses_required_labels_and_type42_embedding():
@@ -81,6 +105,16 @@ def test_renderer_writes_both_figures_from_minimal_csv_fixture(tmp_path):
     for stem in ("figL1_rate_timeseries", "figL2_beta_timeseries"):
         assert (tmp_path / "figs" / f"{stem}.png").is_file()
         assert (tmp_path / "figs" / f"{stem}.pdf").is_file()
+
+
+def test_renderer_rejects_an_invalid_or_unsettled_aggregate_before_writing_figures(tmp_path):
+    """Calling the renderer directly must not bypass the formal publication gate."""
+    write_fixture_csvs(tmp_path / "data", invalid_aggregate=True)
+
+    with pytest.raises(ValueError, match="invalid or unsettled"):
+        render(tmp_path / "data", tmp_path / "figs")
+
+    assert not (tmp_path / "figs").exists()
 
 
 def test_renderer_draws_only_the_two_primary_decmt_interquartile_bands(tmp_path, monkeypatch):
