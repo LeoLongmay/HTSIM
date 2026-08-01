@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import pytest
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,6 +21,9 @@ from prism_eval.expL_rate_stability.run import (
     fixed_environment,
     run_lib_command,
 )
+
+
+REPRO = DATACENTER / "prism_eval" / "expL_rate_stability" / "repro.sh"
 
 
 def test_formal_matrix_has_exactly_sixty_unique_cases():
@@ -58,3 +63,42 @@ def test_workload_is_deterministic_and_rejects_conflicting_content(tmp_path):
     path.write_text("conflict\n", encoding="ascii")
     with pytest.raises(ValueError, match="conflicting"):
         ensure_workload(path)
+
+
+@pytest.mark.parametrize("command", ("deterministic-check", "historical-check"))
+def test_deterministic_gate_runs_the_representative_case_twice_in_isolated_outputs(tmp_path, command):
+    """A one-seed reproducibility gate must compare twins, never invoke analysis."""
+    calls = tmp_path / "python_calls.txt"
+    fake_python = tmp_path / "python3"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" >> \"$CALLS\"\n"
+        "for ((i = 1; i <= $#; i++)); do\n"
+        "  if [[ \"${!i}\" == --output-root ]]; then\n"
+        "    j=$((i + 1))\n"
+        "    output_root=${!j}\n"
+        "    mkdir -p \"$output_root\"\n"
+        "    printf 'identical sink trace\\n' > \"$output_root/rate_asymmetric_decmt_s13.sink.txt\"\n"
+        "  fi\n"
+        "done\n",
+        encoding="ascii",
+    )
+    fake_python.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(REPRO), command],
+        cwd=REPRO.parent,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "CALLS": str(calls)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    invocations = calls.read_text(encoding="ascii").splitlines()
+    assert len(invocations) == 2
+    assert all("run.py --phase smoke --output-root" in invocation for invocation in invocations)
+    roots = [invocation.split(" --output-root ", 1)[1] for invocation in invocations]
+    assert roots[0] != roots[1]
+    assert "analyze.py" not in "\n".join(invocations)

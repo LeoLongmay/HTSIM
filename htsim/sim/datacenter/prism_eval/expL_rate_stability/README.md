@@ -9,16 +9,18 @@ rates; it is not a direct packet-departure trace.
 
 ```bash
 cd htsim/sim/datacenter/prism_eval/expL_rate_stability
-bash repro.sh historical-check
+bash repro.sh deterministic-check
 bash repro.sh full
 ```
 
-`historical-check` runs the representative DecMT asymmetric case and asks the
-analysis step to compare its raw sink trace with the recorded provenance.
-`full` runs the complete formal matrix, analysis, and renderer.  Smoke output
-is isolated under `data/smoke/`, so it can never alter the formal raw bundle.
-The runner reuses only output bundles whose manifest and retained raw files
-have matching SHA-256 hashes.
+`deterministic-check` runs the representative DecMT asymmetric case twice in
+fresh isolated output roots and byte-compares the two retained sink traces.
+`full` performs this deterministic twin-run gate before the complete formal
+matrix, analysis, and renderer.  The legacy `historical-check` spelling remains
+an alias for the deterministic gate.  Smoke output is isolated under
+`data/smoke/`, so it can never alter the formal raw bundle.  The runner reuses
+only output bundles whose manifest and retained raw files have matching
+SHA-256 hashes.
 
 ## Analysis and plotting
 
