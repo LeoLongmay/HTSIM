@@ -7,3 +7,5 @@
 *.ascii.tmp
 *.csv
 __pycache__/
+expL_rate_stability/data/
+expL_rate_stability/data/*.sink.txt
