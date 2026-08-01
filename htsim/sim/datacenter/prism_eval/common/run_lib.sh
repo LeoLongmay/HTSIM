@@ -34,7 +34,15 @@ DECODER=../build/parse_output
 mkdir -p "$OUTDIR"
 TQD_ARG=""; [ -n "${TQD:-}" ] && TQD_ARG="-target_q_delay ${TQD}"
 LOGTIME_ARG=""
-[ -n "${LOGTIME_US:-}" ] && LOGTIME_ARG="-logtime_us ${LOGTIME_US}"
+if [ -n "${LOGTIME_US:-}" ]; then
+    case "$LOGTIME_US" in
+        0|*[!0-9]*)
+            echo "ERROR: LOGTIME_US must be a decimal-free positive integer" >&2
+            exit 2
+            ;;
+    esac
+    LOGTIME_ARG="-logtime_us ${LOGTIME_US}"
+fi
 LOGARGS=""
 case ",$LOGSPEC," in *,sink,*)  LOGARGS="$LOGARGS -log sink";; esac
 case ",$LOGSPEC," in *,queue,*) LOGARGS="$LOGARGS -log tor_downqueue";; esac
