@@ -158,7 +158,8 @@ def fixed_environment(case: Case) -> dict[str, str]:
     env = os.environ.copy()
     for name in (
         "PATHS", "END_MS", "NODES", "MTU", "LOGTIME_US", "EXTRA_ARGS", "TQD", "KEEPDAT",
-        "TMP", "TEMP", "TMPDIR", "PRISM_TRACE", "PRISM_TMP", "UEC_TMP",
+        "TMP", "TEMP", "TMPDIR", "PRISM_TRACE", "PRISM_TMP", "UEC_TMP", "PRISM_PATHRTT",
+        "PRISM_EPOCH", "PRISM_LOSS", "MNSCC_MEDIAN",
     ):
         env.pop(name, None)
     env.update({

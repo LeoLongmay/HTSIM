@@ -39,6 +39,18 @@ def test_primary_arm_commands_and_decmt_v2_flags_are_locked(tmp_path):
     assert env["LOGTIME_US"] == "10"
 
 
+def test_fixed_environment_clears_inherited_controller_trace_knobs(monkeypatch):
+    case = Case(kind="primary", condition="asymmetric", arm="decmt", seed=13)
+    names = ("PRISM_PATHRTT", "PRISM_EPOCH", "PRISM_LOSS", "MNSCC_MEDIAN")
+    for name in names:
+        monkeypatch.setenv(name, "inherited")
+
+    env = fixed_environment(case)
+
+    for name in names:
+        assert name not in env
+
+
 def test_workload_is_deterministic_and_rejects_conflicting_content(tmp_path):
     path = tmp_path / "m2m.cm"
     digest = ensure_workload(path)
