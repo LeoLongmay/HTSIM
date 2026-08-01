@@ -29,7 +29,7 @@ deterministic_check() (
 run_formal() {
   deterministic_check
   python3 run.py --phase formal
-  python3 analyze.py
+  python3 analyze.py --require-publishable-aggregates
   python3 make_figs.py
 }
 

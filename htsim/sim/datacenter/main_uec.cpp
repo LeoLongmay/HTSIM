@@ -961,9 +961,9 @@ int main(int argc, char **argv) {
         cerr << "invalid -degraded_capacity_gbps value: must be positive" << endl;
         return 1;
     }
-    if (end_time > 0 && logtime >= timeFromUs((uint32_t)end_time)){
+    if (end_time > 0 && logtime >= timeFromMs((double)end_time)){
         cout << "Logtime set to endtime" << endl;
-        logtime = timeFromUs((uint32_t)end_time) - 1;
+        logtime = timeFromMs((double)end_time) - 1;
     }
 
     assert(trimsize >= 64 && trimsize <= (uint32_t)packet_size);

@@ -26,6 +26,11 @@ STABILITY_SUMMARY_FIELDS = (
 )
 AGGREGATE_SEED = "aggregate"
 LOCKED_SEEDS = frozenset((13, 14, 15, 16, 17))
+EXPECTED_AGGREGATE_GROUPS = frozenset(
+    [("primary", condition, arm, "") for condition in ("symmetric", "asymmetric")
+     for arm in ("ops", "reps", "strack", "decmt")]
+    + [("beta", "", "", beta) for beta in ("1.0", "0.5", "0.3", "0.15")]
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -66,7 +71,8 @@ def parse_sink_rate(path: Path) -> list[tuple[float, int, float]]:
             try:
                 sink_id = int(fields[fields.index("ID") + 1])
                 time_s = float(fields[0])
-                rate_gbps = float(fields[-1]) / 1e9
+                # UecSinkLoggerSampling writes byte/s; figures report Gb/s.
+                rate_gbps = float(fields[-1]) * 8.0 / 1e9
             except (IndexError, ValueError) as exc:
                 raise ValueError(f"{path}: line {line_number}: invalid UEC_SINK Rate record") from exc
             if not (math.isfinite(time_s) and math.isfinite(rate_gbps)):
@@ -238,6 +244,32 @@ def _write_csv(path: Path, fields: Sequence[str], rows: Iterable[dict[str, objec
         writer.writerows(rows)
 
 
+def require_publishable_aggregate_metrics(rows: Iterable[dict[str, object]]) -> None:
+    """Reject formal plots missing a valid, settled 1--6 ms aggregate metric."""
+    aggregate_rows = {
+        (str(row["kind"]), str(row["condition"]), str(row["arm"]), str(row["beta"])): row
+        for row in rows
+        if str(row.get("seed")) == AGGREGATE_SEED
+    }
+    problems = []
+    for key in sorted(EXPECTED_AGGREGATE_GROUPS):
+        row = aggregate_rows.get(key)
+        if row is None:
+            problems.append(f"missing {key}")
+            continue
+        settling_time = row.get("settling_time_us")
+        if row.get("valid") is not True or settling_time is None:
+            problems.append(f"invalid or unsettled {key}")
+            continue
+        try:
+            if not math.isfinite(float(settling_time)):
+                problems.append(f"invalid or unsettled {key}")
+        except (TypeError, ValueError):
+            problems.append(f"invalid or unsettled {key}")
+    if problems:
+        raise ValueError("ExpL aggregate metrics invalid or unsettled: " + "; ".join(problems))
+
+
 def write_analysis(data_dir: Path, output_dir: Path) -> dict[str, list[dict[str, object]]]:
     """Write per-seed raw rates plus an aggregate median/display trajectory and metrics."""
     data_dir = Path(data_dir)
@@ -299,8 +331,11 @@ def main() -> int:
     parser.add_argument("--input", type=Path, default=HERE / "data" / "raw")
     parser.add_argument("--output", type=Path, default=HERE / "data")
     parser.add_argument("--historical-check", action="store_true")
+    parser.add_argument("--require-publishable-aggregates", action="store_true")
     args = parser.parse_args()
-    write_analysis(args.input, args.output)
+    analysis = write_analysis(args.input, args.output)
+    if args.require_publishable_aggregates:
+        require_publishable_aggregate_metrics(analysis["stability_summary"])
     if args.historical_check:
         print("historical-check: parsed and aggregated retained sink trace")
     return 0

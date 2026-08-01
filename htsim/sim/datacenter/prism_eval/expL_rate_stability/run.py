@@ -43,8 +43,8 @@ NODES = 128
 MTU = 4150
 LOGTIME_US = 10
 FLOW_COUNT = 64
-FLOW_SIZE_BYTES = 2_000_000
-WORKLOAD_PARAMETERS = (64, 16, "pairs", 2_000_000, 128, 16)
+FLOW_SIZE_BYTES = 32_000_000
+WORKLOAD_PARAMETERS = (64, 16, "pairs", 32_000_000, 128, 16)
 RETAINED_ARTIFACTS = ("sink", "stdout", "idmap")
 SCHEMA = "expl_rate_stability_runner"
 SCHEMA_VERSION = 1
@@ -119,7 +119,7 @@ def _sha256(path: Path) -> str:
 
 
 def _workload_text() -> str:
-    """Return exactly many2many.py 64 16 pairs 2000000 128 16 output."""
+    """Return exactly many2many.py 64 16 pairs 32000000 128 16 output."""
     senders = [host for host in range(NODES) if host // 16 != 0][:FLOW_COUNT]
     lines = [f"Nodes {NODES}", f"Connections {FLOW_COUNT}"]
     lines.extend(

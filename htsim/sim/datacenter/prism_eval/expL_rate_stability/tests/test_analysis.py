@@ -17,6 +17,7 @@ from prism_eval.expL_rate_stability.analyze import (
     centered_mean,
     median_trajectory,
     parse_sink_rate,
+    require_publishable_aggregate_metrics,
     stability_metrics,
     write_analysis,
 )
@@ -88,7 +89,24 @@ def test_parse_sink_rate_uses_only_sink_rate_records_and_converts_to_gbps(tmp_pa
         encoding="ascii",
     )
 
-    assert parse_sink_rate(sink) == [(0.00001, 7, 25.0)]
+    assert parse_sink_rate(sink) == [(0.00001, 7, 200.0)]
+
+
+def test_publishable_aggregate_gate_rejects_invalid_or_unsettled_expected_case():
+    """Formal plotting must stop rather than publish a missing 1--6 ms metric."""
+    rows = [
+        {
+            "kind": "primary", "condition": "symmetric", "arm": "ops", "beta": "",
+            "seed": "aggregate", "valid": True, "settling_time_us": 1000.0,
+        },
+        {
+            "kind": "primary", "condition": "symmetric", "arm": "reps", "beta": "",
+            "seed": "aggregate", "valid": False, "settling_time_us": None,
+        },
+    ]
+
+    with pytest.raises(ValueError, match="invalid or unsettled"):
+        require_publishable_aggregate_metrics(rows)
 
 
 def test_aggregate_bins_fills_only_the_gap_between_observed_bins():
@@ -137,7 +155,7 @@ def test_write_analysis_emits_per_seed_and_median_aggregate_csv_rows(tmp_path):
     summary_rows = (tmp_path / "data" / "stability_summary.csv").read_text(encoding="ascii").splitlines()
     assert rate_rows[0] == "kind,condition,arm,beta,seed,time_us,rate_gbps,display_rate_gbps"
     assert len(rate_rows) == 13
-    assert any(",aggregate,1000.0,10.0,15.0" in row for row in rate_rows)
+    assert any(",aggregate,1000.0,80.0,120.0" in row for row in rate_rows)
     assert summary_rows[0].startswith("kind,condition,arm,beta,seed,")
     assert len(summary_rows) == 7
 

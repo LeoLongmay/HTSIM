@@ -21,6 +21,14 @@ def test_rate_stability_runner_sets_ten_microsecond_logtime():
     ).read_text()
 
 
+def test_main_uec_clamps_logtime_against_the_ms_end_time_unit():
+    """An 8-ms run must not reinterpret its end time as 8 us and shorten a 10-us logger."""
+    source = Path("htsim/sim/datacenter/main_uec.cpp").read_text()
+
+    assert "logtime >= timeFromMs((double)end_time)" in source
+    assert "logtime = timeFromMs((double)end_time) - 1" in source
+
+
 @pytest.mark.parametrize(
     "value", ["0", "00", "000", "-1", "1.5", "abc", "10 -end 0"]
 )

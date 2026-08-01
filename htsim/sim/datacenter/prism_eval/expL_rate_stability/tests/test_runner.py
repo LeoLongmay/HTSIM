@@ -16,6 +16,7 @@ from prism_eval.expL_rate_stability.run import (
     BETA_VALUES,
     PRIMARY_ARMS,
     Case,
+    FLOW_SIZE_BYTES,
     cases_for_phase,
     ensure_workload,
     fixed_environment,
@@ -32,6 +33,11 @@ def test_formal_matrix_has_exactly_sixty_unique_cases():
     assert len({case.case_id for case in cases}) == 60
     assert {case.arm for case in cases if case.kind == "primary"} == set(PRIMARY_ARMS)
     assert {case.beta for case in cases if case.kind == "beta"} == set(BETA_VALUES)
+
+
+def test_locked_workload_keeps_all_arms_active_through_the_six_ms_metric_window():
+    """A 2-MB transfer completes before the 1--6 ms metric can be valid."""
+    assert FLOW_SIZE_BYTES == 32_000_000
 
 
 def test_primary_arm_commands_and_decmt_v2_flags_are_locked(tmp_path):
@@ -102,3 +108,41 @@ def test_deterministic_gate_runs_the_representative_case_twice_in_isolated_outpu
     roots = [invocation.split(" --output-root ", 1)[1] for invocation in invocations]
     assert roots[0] != roots[1]
     assert "analyze.py" not in "\n".join(invocations)
+
+
+def test_full_reproduction_stops_before_rendering_when_publishable_analysis_fails(tmp_path):
+    """A failed aggregate gate must not leave a visually plausible but invalid paper figure."""
+    calls = tmp_path / "python_calls.txt"
+    fake_python = tmp_path / "python3"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" >> \"$CALLS\"\n"
+        "if [[ \"$1\" == analyze.py ]]; then\n"
+        "  exit 9\n"
+        "fi\n"
+        "for ((i = 1; i <= $#; i++)); do\n"
+        "  if [[ \"${!i}\" == --output-root ]]; then\n"
+        "    j=$((i + 1))\n"
+        "    output_root=${!j}\n"
+        "    mkdir -p \"$output_root\"\n"
+        "    printf 'identical sink trace\\n' > \"$output_root/rate_asymmetric_decmt_s13.sink.txt\"\n"
+        "  fi\n"
+        "done\n",
+        encoding="ascii",
+    )
+    fake_python.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(REPRO), "full"],
+        cwd=REPRO.parent,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "CALLS": str(calls)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 9
+    invocations = calls.read_text(encoding="ascii").splitlines()
+    assert "analyze.py --require-publishable-aggregates" in invocations
+    assert not any(invocation.startswith("make_figs.py") for invocation in invocations)
