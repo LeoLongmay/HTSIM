@@ -49,6 +49,28 @@ def test_stability_metrics_use_unfiltered_steady_window_and_report_settling():
     assert metrics.settling_time_us == pytest.approx(1000.0)
 
 
+def test_settling_time_does_not_precede_the_steady_metric_window():
+    """Pre-window samples must not make a 1--6 ms stability metric settle early."""
+    bins = [RateBin(float(time_us), 100.0) for time_us in range(0, 6501, 10)]
+
+    metrics = stability_metrics(bins, steady_us=(1000, 6000))
+
+    assert metrics.settling_time_us == pytest.approx(1000.0)
+
+
+def test_settling_time_does_not_use_samples_after_the_steady_metric_window():
+    """A candidate without a complete 200-us in-window horizon is unavailable."""
+    bins = [
+        RateBin(float(time_us), 0.0 if time_us % 200 == 0 and time_us <= 5800 else 100.0)
+        for time_us in range(1000, 6101, 10)
+    ]
+
+    metrics = stability_metrics(bins, steady_us=(1000, 6000))
+
+    assert metrics.valid is True
+    assert metrics.settling_time_us is None
+
+
 def test_insufficient_nonzero_steady_samples_are_invalid():
     """A sparse trace cannot support a meaningful stability estimate."""
     metrics = stability_metrics([RateBin(1000.0, 0.0)], steady_us=(1000, 6000))
@@ -118,3 +140,24 @@ def test_write_analysis_emits_per_seed_and_median_aggregate_csv_rows(tmp_path):
     assert any(",aggregate,1000.0,10.0,15.0" in row for row in rate_rows)
     assert summary_rows[0].startswith("kind,condition,arm,beta,seed,")
     assert len(summary_rows) == 7
+
+
+def test_write_analysis_rejects_a_group_without_all_five_locked_seeds(tmp_path):
+    """A four-seed median must not be mislabeled as the locked five-seed aggregate."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    for seed in (13, 14, 15, 16):
+        case_id = f"symmetric_ops_s{seed}"
+        (raw_dir / f"rate_{case_id}.sink.txt").write_text(
+            "0.001000 Type UEC_SINK ID 1 Ev RATE CAck 1 ReorderBuffer 0 Rate 10000000000\n",
+            encoding="ascii",
+        )
+        (raw_dir / f"{case_id}.manifest.json").write_text(
+            "{\"kind\": \"primary\", \"condition\": \"symmetric\", "
+            f"\"arm\": \"ops\", \"beta\": null, \"seed\": {seed}, "
+            f"\"output_files\": {{\"sink\": {{\"filename\": \"rate_{case_id}.sink.txt\"}}}}}}",
+            encoding="ascii",
+        )
+
+    with pytest.raises(ValueError, match="exactly seeds"):
+        write_analysis(raw_dir, tmp_path / "data")

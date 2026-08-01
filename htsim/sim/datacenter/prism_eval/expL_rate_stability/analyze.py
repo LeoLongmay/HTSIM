@@ -25,6 +25,7 @@ STABILITY_SUMMARY_FIELDS = (
     "settling_time_us",
 )
 AGGREGATE_SEED = "aggregate"
+LOCKED_SEEDS = frozenset((13, 14, 15, 16, 17))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -121,17 +122,25 @@ def _nearest_rank(values: Sequence[float], fraction: float) -> float:
     return ordered[math.ceil(fraction * len(ordered)) - 1]
 
 
-def _settling_time(bins: Sequence[RateBin], steady_mean_gbps: float) -> float | None:
+def _settling_time(
+    bins: Sequence[RateBin], steady_mean_gbps: float, steady_us: tuple[float, float],
+) -> float | None:
     """Find the first time followed by 200 us wholly within ten percent of steady mean."""
     if steady_mean_gbps <= 0:
         return None
-    ordered = sorted(bins, key=lambda bin_: bin_.time_us)
+    start_us, end_us = steady_us
+    ordered = sorted(
+        (bin_ for bin_ in bins if start_us <= bin_.time_us <= end_us),
+        key=lambda bin_: bin_.time_us,
+    )
     if not ordered:
         return None
     lower = steady_mean_gbps * 0.9
     upper = steady_mean_gbps * 1.1
     for index, candidate in enumerate(ordered):
         end_time = candidate.time_us + 200.0
+        if end_time > end_us:
+            continue
         window = [sample for sample in ordered[index:] if sample.time_us <= end_time]
         if not window or window[-1].time_us < end_time:
             continue
@@ -166,7 +175,7 @@ def stability_metrics(
         steady_mean_gbps=mean,
         coefficient_of_variation=statistics.pstdev(steady) / mean,
         normalized_p95_p5=(p95 - p5) / mean,
-        settling_time_us=_settling_time(ordered, mean),
+        settling_time_us=_settling_time(ordered, mean, steady_us),
     )
 
 
@@ -249,6 +258,12 @@ def write_analysis(data_dir: Path, output_dir: Path) -> dict[str, list[dict[str,
         cases = sorted(groups[key], key=lambda item: item[0]["seed"])
         if len({manifest["seed"] for manifest, _ in cases}) != len(cases):
             raise ValueError(f"duplicate ExpL seed for {key}")
+        actual_seeds = {manifest["seed"] for manifest, _ in cases}
+        if actual_seeds != LOCKED_SEEDS:
+            raise ValueError(
+                f"ExpL group {key} must contain exactly seeds {sorted(LOCKED_SEEDS)}; "
+                f"got {sorted(actual_seeds)}"
+            )
         for manifest, bins in cases:
             for bin_ in bins:
                 rate_rows.append(_base_row(manifest, manifest["seed"]) | {
