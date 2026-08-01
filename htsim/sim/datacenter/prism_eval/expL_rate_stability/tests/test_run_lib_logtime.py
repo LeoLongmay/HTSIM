@@ -5,7 +5,10 @@ import subprocess
 import pytest
 
 
-SCRIPT = Path("htsim/sim/datacenter/prism_eval/common/run_lib.sh").read_text()
+EXPL = Path(__file__).resolve().parents[1]
+DATACENTER = EXPL.parents[1]
+RUN_LIB = EXPL.parent / "common" / "run_lib.sh"
+SCRIPT = RUN_LIB.read_text()
 
 
 def test_run_lib_supports_opt_in_logtime_without_changing_default_callers():
@@ -16,14 +19,12 @@ def test_run_lib_supports_opt_in_logtime_without_changing_default_callers():
 
 
 def test_rate_stability_runner_sets_ten_microsecond_logtime():
-    assert '"LOGTIME_US": "10"' in Path(
-        "htsim/sim/datacenter/prism_eval/expL_rate_stability/run.py"
-    ).read_text()
+    assert '"LOGTIME_US": "10"' in (EXPL / "run.py").read_text()
 
 
 def test_main_uec_clamps_logtime_against_the_ms_end_time_unit():
     """An 8-ms run must not reinterpret its end time as 8 us and shorten a 10-us logger."""
-    source = Path("htsim/sim/datacenter/main_uec.cpp").read_text()
+    source = (DATACENTER / "main_uec.cpp").read_text()
 
     assert "logtime >= timeFromMs((double)end_time)" in source
     assert "logtime = timeFromMs((double)end_time) - 1" in source
@@ -36,7 +37,7 @@ def test_run_lib_rejects_invalid_logtime_us(value):
     result = subprocess.run(
         [
             "bash",
-            "htsim/sim/datacenter/prism_eval/common/run_lib.sh",
+            str(RUN_LIB),
             "nscc",
             "reps",
             "0",
