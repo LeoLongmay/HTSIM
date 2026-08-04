@@ -5,9 +5,13 @@ sets, so each group's make_figs.py is a thin wrapper. Reads logs via metrics.py;
 plot_style.py. Baselines are (label, display, color_key) triples; files are named
 {tag_prefix}_{label}_f{failed}_s{seed}.flow.txt and {tag_prefix}_{label}_mech.* ."""
 import os, sys, statistics, collections
+import matplotlib as mpl
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import metrics          # noqa: E402
 import plot_style       # noqa: E402
+
+mpl.rcParams["pdf.fonttype"] = 42
+mpl.rcParams["ps.fonttype"] = 42
 
 def _ms(v):
     """(mean, population std) of a non-empty list -- population std: full fixed seed set.
@@ -154,37 +158,44 @@ def render_main_perf_split(data_dir, figs_dir, tag_prefix, baselines, failed, se
                         color=plot_style.COLORS[ck], label=disp)
         ax.set_ylabel(ylabel)
         ax.set_xlabel(xlabel)
+        if tag_prefix == "expA":
+            # The longer throttled-link label needs a slight left shift to stay inside the crop.
+            ax.xaxis.label.set_x(0.40)
+        if tag_prefix == "expBa4os":
+            expb_label_x = {"avg_fct": 0.42, "goodput": 0.38}.get(key, 0.40)
+            ax.xaxis.label.set_x(expb_label_x)
         if (tag_prefix == "expA" or tag_prefix == "expAload") and key == "goodput":
             if tag_prefix == "expA":
                 ax.yaxis.set_label_coords(-0.2, 0.45)
             elif tag_prefix == "expAload":
                 ax.yaxis.set_label_coords(-0.22, 0.45)
-            ax.xaxis.label.set_x(0.45)
+                ax.xaxis.label.set_x(0.45)
         if (tag_prefix == "expD1" or tag_prefix == "expD3load") and key == "goodput":
             ax.yaxis.set_label_coords(-0.1, 0.45)
-            ax.xaxis.label.set_x(0.45)
+        if tag_prefix == "expD1":
+            # The longer throttled-link label needs a left shift in the cropped D1 panels.
+            ax.xaxis.label.set_x(0.40)
+        if tag_prefix == "expD2_4os":
+            # Keep the longer throttled-link label inside the cropped 4:1 panels.
+            ax.xaxis.label.set_x(0.40)
         if tag_prefix == "expBa4os":
             if key == "goodput":
                 ax.yaxis.set_label_coords(-0.23, 0.45)
-                ax.xaxis.label.set_x(0.45)
             if key == "p99_fct":
                 ax.xaxis.label.set_x(0.45)
         if tag_prefix == "expEp128":
-            if key == "avg_fct":
-                ax.xaxis.label.set_x(0.45)
+            # Keep the longer throttled-link label inside the cropped standalone panels.
+            ax.xaxis.label.set_x(0.39 if key in ("avg_fct", "goodput") else 0.40)
             if key == "goodput":
                 ax.yaxis.set_label_coords(-0.23, 0.45)
-                ax.xaxis.label.set_x(0.45)
         if tag_prefix == "expEp1024":
-            if key == "avg_fct":
-                ax.xaxis.label.set_x(0.45)
+            # Keep the longer throttled-link label inside the cropped standalone panels.
+            ax.xaxis.label.set_x(0.39 if key == "avg_fct" else 0.40)
             if key == "goodput":
                 ax.yaxis.set_label_coords(-0.16, 0.45)
-                ax.xaxis.label.set_x(0.45)
         if tag_prefix == "expD2_4os":
             if key == 'goodput':
                 ax.yaxis.set_label_coords(-0.2, 0.45)
-                ax.xaxis.label.set_x(0.45)
         ax.set_xticks(failed)
         ax.grid(alpha=0.3)
         # ax.legend(fontsize=9)

@@ -5,8 +5,8 @@
 ## 一键复现
 
 ```bash
-# 0. 编译带钩子的模拟器(从 sim/ 目录)
-cd /home/leo/htsim/htsim/sim
+# 0. Build the simulator (from the repository root)
+cd htsim/sim
 cmake -S . -B build && cmake --build build -j      # 产物 build/datacenter/htsim_uec(./htsim_uec 软链)
 
 # 1. 跑出全部数据 + 生成九张图(figA–figI)

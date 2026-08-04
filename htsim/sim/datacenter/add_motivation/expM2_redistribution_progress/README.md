@@ -27,7 +27,7 @@ no formal run is valid. This is a negative validation result, not evidence for r
 
 ## Commands
 
-Run from `/home/leo/htsim` after building `htsim_uec`:
+Run from the repository root after building `htsim_uec`:
 
 ```bash
 # Fast parser/plot smoke test.

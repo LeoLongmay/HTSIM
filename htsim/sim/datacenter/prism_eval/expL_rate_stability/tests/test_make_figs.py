@@ -107,6 +107,23 @@ def test_renderer_writes_both_figures_from_minimal_csv_fixture(tmp_path):
         assert (tmp_path / "figs" / f"{stem}.pdf").is_file()
 
 
+def test_renderer_writes_legend_free_type42_primary_panels_in_tbps(tmp_path):
+    """Split primary panels must retain a publication-ready independent interface."""
+    write_fixture_csvs(tmp_path / "data")
+
+    render(tmp_path / "data", tmp_path / "figs")
+
+    for stem in ("figL1_rate_symmetric", "figL1_rate_asymmetric"):
+        for extension in ("png", "pdf"):
+            assert (tmp_path / "figs" / f"{stem}.{extension}").is_file()
+    source = MAKE_FIGS.read_text()
+    assert "Sending rate (Tbps)" in source
+    assert 'SPLIT_PRIMARY_LABEL_COORDS = {"symmetric": (-0.18, 0.40), "asymmetric": (-0.19, 0.38)}' in source
+    assert "SPLIT_PANEL_FONT_SIZE = 18" in source
+    assert "(0.2, 2.0)" in source
+    assert "(0.0, 1.2)" in source
+
+
 def test_renderer_rejects_an_invalid_or_unsettled_aggregate_before_writing_figures(tmp_path):
     """Calling the renderer directly must not bypass the formal publication gate."""
     write_fixture_csvs(tmp_path / "data", invalid_aggregate=True)
@@ -117,8 +134,8 @@ def test_renderer_rejects_an_invalid_or_unsettled_aggregate_before_writing_figur
     assert not (tmp_path / "figs").exists()
 
 
-def test_renderer_draws_only_the_two_primary_decmt_interquartile_bands(tmp_path, monkeypatch):
-    """Bands around every arm would falsely imply cross-seed uncertainty is reported for each."""
+def test_renderer_draws_only_the_decmt_interquartile_bands_in_each_primary_view(tmp_path, monkeypatch):
+    """Standalone panels retain only DecMT's band and convert it from Gbps to Tbps."""
     write_fixture_csvs(tmp_path / "data")
     import matplotlib.axes
 
@@ -135,6 +152,8 @@ def test_renderer_draws_only_the_two_primary_decmt_interquartile_bands(tmp_path,
     assert calls == [
         ((0.0, 1.0), (81.0, 91.0), (85.0, 95.0)),
         ((0.0, 1.0), (61.0, 71.0), (65.0, 75.0)),
+        ((0.0, 1.0), (0.081, 0.091), (0.085, 0.095)),
+        ((0.0, 1.0), (0.061, 0.071), (0.065, 0.075)),
     ]
 
 

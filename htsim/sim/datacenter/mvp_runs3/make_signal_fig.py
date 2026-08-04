@@ -29,6 +29,11 @@ diverge and what the mean conflates. It does NOT claim a controller is "wrong" o
 a throughput/latency cost (that needs running both controllers = Evaluation).
 """
 import argparse, os, re, sys, math, collections, statistics as st
+import matplotlib as mpl
+
+# Embed TrueType fonts in vector PDFs for publication-ready editing.
+mpl.rcParams["pdf.fonttype"] = 42
+mpl.rcParams["ps.fonttype"] = 42
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOADS = [4, 8, 16, 32, 64]   # offered load = #senders -> 16 pod0 receivers
@@ -254,7 +259,8 @@ def render_sweep():
 def render_legend():
     """Standalone shared legend for figS1 + figS2 (own image file, like figGH_legend).
     Colors match both panels: C_cc = red line, avg = blue line, target = gray dashed line,
-    conflated spread C_spray = orange band (tab:orange, alpha 0.25, same as both figures)."""
+    queueing gap between avg queueing delay and C_cc = orange band
+    (tab:orange, alpha 0.25, same as both figures)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -262,9 +268,9 @@ def render_legend():
     from matplotlib.patches import Patch
     handles = [
         Line2D([], [], color="tab:red", lw=2.8, label=r"$C_{cc}$"),
-        Line2D([], [], color="tab:blue", lw=2.8, label="avg queueing delay"),
-        Line2D([], [], color="gray", ls="--", lw=1.8, label="target queueing delay"),
-        Patch(facecolor="tab:orange", alpha=0.25, label=r"$C_{spray}$"),
+        Line2D([], [], color="tab:blue", lw=2.8, label="Avg queueing delay"),
+        Line2D([], [], color="gray", ls="--", lw=1.8, label="Target queueing delay"),
+        Patch(facecolor="tab:orange", alpha=0.25, label="Queueing gap"),
     ]
     with plt.rc_context({"font.size": 24}):
         figL = plt.figure(figsize=(22, 0.9))
@@ -274,7 +280,7 @@ def render_legend():
         figL.savefig(os.path.join(HERE, output_stem("figS_legend") + ".pdf"),
                      bbox_inches="tight", pad_inches=0.02)
         plt.close(figL)
-    print("figS_legend: C_cc | avg queuing delay | target queuing delay | conflated spread C_spray")
+    print("figS_legend: C_cc | avg queuing delay | target queuing delay | queueing gap")
 
 
 def render():

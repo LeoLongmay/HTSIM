@@ -6,7 +6,7 @@ analysis does not feed a classification back into path selection or congestion c
 
 ## Reproduction
 
-Run all commands from `/home/leo/htsim`.
+Run all commands from the repository root.
 
 ```bash
 # Build the simulator and binary-log decoder.

@@ -37,7 +37,7 @@ if __name__ == "__main__":
         perf_figs.render_main_perf(DATA, FIGS, "expBa8os", BASELINES, FAILED_8OS, SEEDS,
                                    "figBa_8os_main", "requested -failed (8:1 oversub, delay-driven)")
         perf_figs.render_main_perf_split(DATA, FIGS, "expBa4os", BASELINES, FAILED_4OS, SEEDS,
-                                         "figBa_4os", "Number of failed links")
+                                         "figBa_4os", "Number of throttled links")
         perf_figs.render_fairness(DATA, FIGS, "expBa4os", BASELINES, FAILED_4OS, SEEDS,
                                   "figBa_4os_fairness", "requested -failed (4:1 oversub, delay-driven)")
         perf_figs.render_mechanism(DATA, FIGS, "expBa4os", "figBa_mech", 8,

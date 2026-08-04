@@ -17,6 +17,11 @@ Run: python3 make_paper_figs.py   (after repro.sh has produced the data)
 import os, sys, statistics, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import matplotlib; matplotlib.use("Agg")
+import matplotlib as mpl
+
+# Embed TrueType fonts in the vector PDFs for publication-ready editing.
+mpl.rcParams["pdf.fonttype"] = 42
+mpl.rcParams["ps.fonttype"] = 42
 import matplotlib.pyplot as plt
 import pathrtt_analyze as A
 

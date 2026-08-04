@@ -42,7 +42,7 @@ CDF_ARMS = {
     "ops": "OPS",
     "reps": "REPS",
     "strack": "STrack",
-    "v2": "Prism",
+    "v2": "DecMT",
 }
 
 
@@ -56,6 +56,8 @@ def color_for_arm(arm: str) -> str:
 
 def apply_reference_figure_style() -> None:
     """Use the canvas and base typography of figA1dd_avg_fct."""
+    matplotlib.rcParams["pdf.fonttype"] = 42
+    matplotlib.rcParams["ps.fonttype"] = 42
     plot_style.apply_style(REFERENCE_FONT_SIZE_PT)
 
 
@@ -268,15 +270,15 @@ def render(
         width="100%",
         height="100%",
         loc="lower left",
-        bbox_to_anchor=(0.64, 0.18, 0.32, 0.32),
+        bbox_to_anchor=(0.62, 0.16, 0.28, 0.28),
         bbox_transform=axis.transAxes,
         borderpad=0,
     )
     for arm, label in arms.items():
         color = color_for_arm(arm)
         seed_samples = samples_by_arm[arm]
-        axis.plot(grid, mean_seed_ecdf(seed_samples, grid), color=color, linewidth=1.8, label=label)
-        inset.plot(full_grid, mean_seed_ecdf(seed_samples, full_grid), color=color, linewidth=1.3)
+        axis.plot(grid, mean_seed_ecdf(seed_samples, grid), color=color, linewidth=2.2, label=label)
+        inset.plot(full_grid, mean_seed_ecdf(seed_samples, full_grid), color=color, linewidth=1.6)
         flattened = [value for samples in seed_samples for value in samples]
         print(f"{label}: samples={len(flattened)} "
               f"p50={percentile(flattened, 0.50):.3f}us "
@@ -284,14 +286,14 @@ def render(
               f"p99={percentile(flattened, 0.99):.3f}us")
 
     axis.set_xlim(0.0, main_xmax)
-    axis.set_ylim(0.0, 1.01)
+    axis.set_ylim(0.0, 0.8)
     axis.set_xlabel("Queueing delay (us)")
     axis.set_ylabel("CDF")
     axis.grid(alpha=0.25)
-    inset.set_xlim(0.0, full_xmax)
-    inset.set_ylim(0.0, 1.01)
-    inset.set_title("full range", fontsize=14)
-    inset.tick_params(labelsize=14)
+    inset.set_xlim(40.0, min(100.0, full_xmax))
+    inset.set_ylim(0.8, 1.01)
+    inset.set_title("tail range", fontsize=18)
+    inset.tick_params(labelsize=18)
     inset.grid(alpha=0.2)
     output_stem.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight", pad_inches=0.04)
@@ -460,7 +462,7 @@ def render_failure_sweep(
         fct_axis.plot(
             fct_grid,
             mean_seed_ecdf(fct_samples[arm], fct_grid),
-            linewidth=1.8,
+            linewidth=2.2,
             color=color_for_arm(arm),
             label=label,
         )

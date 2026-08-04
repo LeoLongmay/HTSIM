@@ -21,9 +21,14 @@ The relative-to-baseline ratio cancels any such modeling error and is exact.)
   python3 msgsweep_figs.py --selftest   # math self-check
 """
 import os, sys, math, statistics
+import matplotlib as mpl
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import metrics          # noqa: E402
 import plot_style       # noqa: E402
+
+# Keep editable TrueType text in every PDF produced by this shared renderer.
+mpl.rcParams["pdf.fonttype"] = 42
+mpl.rcParams["ps.fonttype"] = 42
 
 def _geomean(v):
     """(geometric mean, lower error distance, upper error distance) of a list of POSITIVE ratios;

@@ -46,6 +46,8 @@ def test_render_creates_all_standalone_panels(tmp_path):
     for stem in ("figJ1_goodput", "figJ1_avg_fct", "figJ1_p99_fct"):
         assert (tmp_path / f"{stem}.pdf").is_file()
         assert (tmp_path / f"{stem}.png").is_file()
+    assert (tmp_path / "figJ1_legend.pdf").is_file()
+    assert (tmp_path / "figJ1_legend.png").is_file()
 
 
 def test_render_keeps_composite_stable_across_standalone_panel_renders(tmp_path):
@@ -65,6 +67,8 @@ def test_render_keeps_composite_stable_across_standalone_panel_renders(tmp_path)
         for stem in ("figJ1_goodput", "figJ1_avg_fct", "figJ1_p99_fct"):
             assert (output_dir / f"{stem}.pdf").is_file()
             assert (output_dir / f"{stem}.png").is_file()
+        assert (output_dir / "figJ1_legend.pdf").is_file()
+        assert (output_dir / "figJ1_legend.png").is_file()
 
 
 def test_render_rejects_summary_without_the_failed_zero_control(tmp_path):

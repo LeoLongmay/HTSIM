@@ -8,8 +8,11 @@ The three split performance figures (`figs/figBb_4os_{goodput,avg_fct,p99_fct}`)
 `-failed` barely degrades anything → PRISM ≈ tied), whereas at 1024 the 256-link core makes 4:1 a
 **real PRISM win window**.
 
-This group **reuses** the `expD2_4os` data already produced by `../expD_scale1024/repro.sh` — it runs
-**no sweep**. `bash repro.sh` verifies the data exists and renders.
+This group **reuses** the `expD2_4os` data produced by `../expD_scale1024/repro.sh` and runs
+**no independent sweep**. The raw shared dataset is deliberately not retained in this checkout,
+so `bash repro.sh` requires a fresh `expD2_4os` reproduction before it can render the panels.
+The committed figures remain available as rendered artifacts, but this directory does not yet
+contain a minimal archive table for plot-only reproduction.
 
 ## 2. Setup (data reused from expD2_4os)
 

@@ -32,9 +32,10 @@ PANEL_ARMS = (
 )
 PANEL_METRICS = (
     ("mean_goodput_gbps", "std_goodput_gbps", "Goodput (Gbps)", 1.0, "figJ1_goodput"),
-    ("mean_avg_fct_us", "std_avg_fct_us", "Average FCT (ms)", 1e-3, "figJ1_avg_fct"),
+    ("mean_avg_fct_us", "std_avg_fct_us", "Avg FCT (ms)", 1e-3, "figJ1_avg_fct"),
     ("mean_p99_fct_us", "std_p99_fct_us", "P99 FCT (ms)", 1e-3, "figJ1_p99_fct"),
 )
+LEGEND_BASENAME = "figJ1_legend"
 
 
 def _normalize(summary: Iterable[Mapping[str, object]]) -> dict[tuple[str, int], dict[str, float | int | str]]:
@@ -81,27 +82,37 @@ def render_single_panels(
     import matplotlib.pyplot as plt
 
     with mpl.rc_context():
+        mpl.rcParams["pdf.fonttype"] = 42
+        mpl.rcParams["ps.fonttype"] = 42
         plot_style.apply_style(16)
         arms = tuple(run.ARMS)
-        x = [0]
-        group_width = 0.66
-        bar_width = group_width / len(arms)
+        x = list(range(len(arms)))
+        bar_width = 0.55
         for mean_name, std_name, ylabel, scale, stem in PANEL_METRICS:
-            fig, axis = plt.subplots(figsize=(6.4, 2.8))
+            fig, axis = plt.subplots(figsize=(5.2, 3.4))
             for position, (arm, color_key) in enumerate(PANEL_ARMS):
-                offsets = [index - group_width / 2 + bar_width * (position + 0.5) for index in x]
-                values = [float(rows[(arm, 8)][mean_name]) * scale]
-                errors = [float(rows[(arm, 8)][std_name]) * scale]
-                axis.bar(offsets, values, bar_width, yerr=errors, capsize=2,
-                         color=plot_style.COLORS[color_key], label=DISPLAY_LABELS[arm])
-            axis.set_xticks(x, ["8"])
-            axis.set_xlabel("Number of failed links")
-            axis.set_ylabel(ylabel)
+                value = float(rows[(arm, 8)][mean_name]) * scale
+                error = float(rows[(arm, 8)][std_name]) * scale
+                axis.bar(position, value, bar_width, yerr=error, capsize=2,
+                         color=plot_style.COLORS[color_key])
+            axis.set_xticks(x, [])
+            axis.set_ylabel(ylabel, fontsize=22)
+            axis.tick_params(axis="y", labelsize=22)
             axis.grid(axis="y", alpha=0.3)
-            axis.legend(ncol=2, fontsize=9, frameon=False)
             plt.tight_layout()
             plot_style.save(fig, stem, output_dir)
             plt.close(fig)
+
+        legend_figure = plt.figure(figsize=(0.12, 0.1))
+        handles = [
+            plt.Rectangle((0, 0), 1, 1, color=plot_style.COLORS[color_key])
+            for _arm, color_key in PANEL_ARMS
+        ]
+        legend_figure.legend(handles, [DISPLAY_LABELS[arm] for arm, _color_key in PANEL_ARMS],
+                             ncol=4, loc="center", frameon=False, fontsize=16,
+                             columnspacing=1.0, handletextpad=0.4)
+        plot_style.save(legend_figure, LEGEND_BASENAME, output_dir)
+        plt.close(legend_figure)
 
 
 def render(summary: Iterable[Mapping[str, object]], output_dir: Path) -> None:

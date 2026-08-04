@@ -32,6 +32,10 @@ PRIMARY_ARMS = tuple(LABELS)
 CONDITIONS = ("symmetric", "asymmetric")
 BETA_ORDER = ("1.0", "0.5", "0.3", "0.15")
 BETA_COLORS = ("tab:blue", "tab:orange", "tab:green", "tab:red")
+SPLIT_PRIMARY_YLIMS_TBPS = {"symmetric": (0.2, 2.0), "asymmetric": (0.0, 1.2)}
+SPLIT_PRIMARY_STEMS = {"symmetric": "figL1_rate_symmetric", "asymmetric": "figL1_rate_asymmetric"}
+SPLIT_PRIMARY_LABEL_COORDS = {"symmetric": (-0.18, 0.40), "asymmetric": (-0.19, 0.38)}
+SPLIT_PANEL_FONT_SIZE = 18
 RATE_SERIES_FIELDS = (
     "kind", "condition", "arm", "beta", "seed", "time_us", "rate_gbps",
     "display_rate_gbps",
@@ -125,6 +129,29 @@ def _render_primary(rate_rows: list[dict[str, str]], output_dir: Path) -> None:
     _save(fig, output_dir, "figL1_rate_timeseries")
 
 
+def _render_primary_panel(rate_rows: list[dict[str, str]], output_dir: Path, condition: str) -> None:
+    """Render one legend-free FigL1 condition panel in Tbps for standalone use."""
+    fig, axis = plt.subplots(figsize=(4.8, 3.6))
+    band_x, lower, upper = _decmt_iqr(rate_rows, condition)
+    axis.fill_between(
+        band_x,
+        [rate / 1000.0 for rate in lower],
+        [rate / 1000.0 for rate in upper],
+        color=COLORS["decmt"], alpha=0.20, linewidth=0, zorder=1,
+    )
+    for arm in PRIMARY_ARMS:
+        x, y = _curve(rate_rows, kind="primary", condition=condition, arm=arm, beta="")
+        axis.plot(x, [rate / 1000.0 for rate in y], color=COLORS[arm], linewidth=1.8, zorder=2)
+    axis.set_xlabel("Time (ms)", fontsize=SPLIT_PANEL_FONT_SIZE)
+    axis.set_ylabel("Sending rate (Tbps)", fontsize=SPLIT_PANEL_FONT_SIZE)
+    axis.yaxis.set_label_coords(*SPLIT_PRIMARY_LABEL_COORDS[condition])
+    axis.set_ylim(SPLIT_PRIMARY_YLIMS_TBPS[condition])
+    axis.tick_params(axis="both", labelsize=SPLIT_PANEL_FONT_SIZE)
+    axis.grid(True, alpha=0.25)
+    fig.tight_layout()
+    _save(fig, output_dir, SPLIT_PRIMARY_STEMS[condition])
+
+
 def _render_beta(rate_rows: list[dict[str, str]], output_dir: Path) -> None:
     fig, axis = plt.subplots(figsize=(3.6, 2.8))
     for beta, color in zip(BETA_ORDER, BETA_COLORS):
@@ -146,6 +173,8 @@ def render(data_dir: Path, output_dir: Path) -> None:
     summary_rows = _read_csv(data_dir / "stability_summary.csv", STABILITY_SUMMARY_FIELDS)
     require_publishable_aggregate_metrics(summary_rows)
     _render_primary(rate_rows, output_dir)
+    for condition in CONDITIONS:
+        _render_primary_panel(rate_rows, output_dir, condition)
     _render_beta(rate_rows, output_dir)
 
 
@@ -198,7 +227,10 @@ def _selftest() -> None:
         root = Path(temporary_dir)
         _write_selftest_csvs(root / "data")
         render(root / "data", root / "figs")
-        for stem in ("figL1_rate_timeseries", "figL2_beta_timeseries"):
+        for stem in (
+            "figL1_rate_timeseries", "figL1_rate_symmetric", "figL1_rate_asymmetric",
+            "figL2_beta_timeseries",
+        ):
             for extension in ("png", "pdf"):
                 if not (root / "figs" / f"{stem}.{extension}").is_file():
                     raise RuntimeError(f"self-test failed to write {stem}.{extension}")

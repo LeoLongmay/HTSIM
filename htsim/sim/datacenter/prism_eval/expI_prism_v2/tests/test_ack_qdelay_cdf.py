@@ -84,6 +84,6 @@ def test_shared_cdf_legend_uses_short_algorithm_labels(tmp_path):
         "ops": "OPS",
         "reps": "REPS",
         "strack": "STrack",
-        "v2": "Prism",
+        "v2": "DecMT",
     }
     assert (tmp_path / "figI_1024_cdf_legend.pdf").is_file()

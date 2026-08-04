@@ -18,7 +18,7 @@ BASELINES = [("ops", "OPS+NSCC", "ops"), ("reps", "REPS+NSCC", "reps"),
 SEEDS = [13, 14, 15, 16, 17]
 FAILED_128 = [0, 2, 4, 6, 8, 10, 12]
 FAILED_1024 = [0, 8, 16, 24, 32, 40, 48]
-XLABEL = "Number of failed links"
+XLABEL = "Number of throttled links"
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:

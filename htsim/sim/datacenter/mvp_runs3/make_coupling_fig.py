@@ -14,6 +14,11 @@ the LB produces. Reads mvp_runs3/cp{A,B}_tqd{Q}.s{S}.{sink.txt,q.txt,idmap}. Run
   python3 make_coupling_fig.py --selftest # run parser self-checks
 """
 import argparse, collections, os, re, statistics as st, sys
+import matplotlib as mpl
+
+# Embed TrueType fonts in vector PDFs for publication-ready editing.
+mpl.rcParams["pdf.fonttype"] = 42
+mpl.rcParams["ps.fonttype"] = 42
 HERE = os.path.dirname(os.path.abspath(__file__))
 TQD = [2, 4, 6, 8, 12, 16]
 SEEDS = [13, 14, 15, 16, 17]

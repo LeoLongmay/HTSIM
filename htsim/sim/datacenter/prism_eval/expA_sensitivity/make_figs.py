@@ -6,10 +6,14 @@ Reads local sweep data from ./data; reuses default-center PRISM/REPS cells read-
 ../expA_delaydriven/data (expA_prism_f{0,8}, expA_reps_f{0,8}). No controller code, no perf_figs change.
 """
 import os, sys, statistics
+import matplotlib as mpl
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "common"))
 import metrics       # noqa: E402
 import plot_style    # noqa: E402
+
+mpl.rcParams["pdf.fonttype"] = 42
+mpl.rcParams["ps.fonttype"] = 42
 
 DATA  = os.path.join(HERE, "data")
 FIGS  = os.path.join(HERE, "figs")
@@ -22,7 +26,7 @@ FAILED = [0, 8]  # f0 = symmetric cost anchor; f8 = headline asymmetric win anch
 KNOBS = [
     {"name": "tspray", "title": r"$T_{spray}$ (us)",        "token": "ts", "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
     {"name": "tcc",    "title": r"$T_{cc}$ (us)",           "token": "q",  "default": 14,  "xs": [5, 7, 10, 14, 17, 20, 24, 28, 40]},
-    {"name": "kappa",  "title": r"$k$ x base_rtt", "token": "k",  "default": 1.0, "logx": True,
+    {"name": "kappa",  "title": r"$\kappa$ x base_rtt", "token": "k",  "default": 1.0, "logx": True,
      "xs": [0.125, 0.25, 0.375, 0.5, 0.75, 1.0, 1.5, 2, 3, 4, 6, 8]},
 ]
 
@@ -253,6 +257,7 @@ def selftest():
     assert abs(a[0]["avg_fct"] - 1000.0) < 1e-6, a
     assert 99 not in agg_arm(d, "nope", [99], SEEDS), "missing cells must be skipped"
     # (b) tag formatting must match the bash loop tokens exactly
+    assert next(knob for knob in KNOBS if knob["name"] == "kappa")["title"] == r"$\kappa$ x base_rtt"
     assert _tag("kappa", "prism", "k", 0.25) == "expSens_kappa_prism_k0.25"
     assert _tag("kappa", "prism", "k", 2)    == "expSens_kappa_prism_k2"
     assert _tag("tcc",   "reps",  "q", 14)   == "expSens_tcc_reps_q14"

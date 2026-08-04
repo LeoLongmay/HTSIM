@@ -9,5 +9,7 @@
 *.idmap
 *.time
 *.sinkrate.txt
+!archive_data/
+!archive_data/*.csv
 _hooktest*
 _off*

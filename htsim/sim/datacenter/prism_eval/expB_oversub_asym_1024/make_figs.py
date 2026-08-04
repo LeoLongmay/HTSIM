@@ -26,4 +26,4 @@ if __name__ == "__main__":
     else:
         os.makedirs(FIGS, exist_ok=True)
         perf_figs.render_main_perf_split(EXPD_DATA, FIGS, "expD2_4os", BASELINES, FAILED, SEEDS,
-                                         "figBb_4os", "Number of failed links", goodput_tbps=True)
+                                         "figBb_4os", "Number of throttled links", goodput_tbps=True)
