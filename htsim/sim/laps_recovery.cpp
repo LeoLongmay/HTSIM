@@ -33,6 +33,7 @@ LapsAttempt LapsRecoveryDomain::sent(LapsPathKey path, LapsRecoveryOwner& owner,
     attempt_owners_.emplace(attempt.id_, &owner);
     state.records.push_back({attempt, &owner, seq, bytes});
     arm(state);
+    traceTimer(state, path_it->first.path.pid, false);
     updateTimer();
     return attempt;
 }
@@ -60,6 +61,7 @@ bool LapsRecoveryDomain::acknowledge(
     state.records.erase(state.records.begin(), std::next(located->record));
     if (!state.records.empty()) {
         arm(state);
+        traceTimer(state, located->pid, false);
     }
     updateTimer();
     for (const Record& record : inferred_losses) {
@@ -133,7 +135,7 @@ std::optional<LapsRecoveryDomain::LocatedAttempt> LapsRecoveryDomain::findAttemp
                                                 return record.attempt == attempt;
                                             });
         if (record_it != state.records.end()) {
-            return LocatedAttempt{&state, record_it};
+            return LocatedAttempt{&state, record_it, path_it->first.path.pid};
         }
     }
     return std::nullopt;
@@ -149,6 +151,7 @@ bool LapsRecoveryDomain::detach(LapsAttempt attempt) {
     state.records.erase(located->record);
     if (!state.records.empty()) {
         arm(state);
+        traceTimer(state, located->pid, false);
     }
     updateTimer();
     return true;
@@ -161,6 +164,14 @@ void LapsRecoveryDomain::arm(PathState& state) {
     state.deadline = EventList::now() > std::numeric_limits<simtime_picosec>::max() - interval
                          ? std::numeric_limits<simtime_picosec>::max()
                          : EventList::now() + interval;
+}
+
+void LapsRecoveryDomain::traceTimer(const PathState& state, uint16_t pid, bool fired) {
+    const simtime_picosec sample = state.one_way_delay.value_or(0);
+    for (const Record& record : state.records) {
+        record.owner->lapsRecoveryTimerTrace(record.attempt, pid, record.seq, sample,
+                                             state.deadline, fired);
+    }
 }
 
 void LapsRecoveryDomain::removeOwner(LapsRecoveryOwner& owner) {
@@ -192,6 +203,7 @@ void LapsRecoveryDomain::doNextEvent() {
             auto& stats = owner_stats_[path.owner];
             stats.timeout_events++;
             stats.timeout_records += state.records.size();
+            traceTimer(state, path.path.pid, true);
             expired_records.insert(expired_records.end(), state.records.begin(), state.records.end());
             state.records.clear();
         }

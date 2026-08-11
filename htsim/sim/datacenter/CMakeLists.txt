@@ -52,6 +52,9 @@ add_executable(htsim_uec_df main_uec_df.cpp)
 # -------------------------------
 # Linking Executables with Libraries
 # -------------------------------
+option(HTSIM_CREATE_SOURCE_SYMLINKS
+    "Create convenience executable symlinks in the source datacenter directory" ON)
+
 set (ALL_EXECUTABLES
     htsim_tcp
     htsim_ndp
@@ -67,7 +70,9 @@ foreach(EXECUTABLE ${ALL_EXECUTABLES})
     # Link each executable with the 'htsim' library defined in the parent directory.
     target_link_libraries(${EXECUTABLE} PRIVATE htsim_dc)
     target_link_libraries(${EXECUTABLE} PRIVATE htsim)
-    # Add a post-build command to explicitly remove and recreate the symlink for all previous executables.
-    add_symlink_target(${EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR})
+    # Keep the historic source-tree convenience links by default.  Contained
+    # audit builds disable this hook so their artifacts cannot escape the build tree.
+    if (HTSIM_CREATE_SOURCE_SYMLINKS)
+        add_symlink_target(${EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
 endforeach()
-

@@ -96,6 +96,18 @@ void repeated_decrease_keeps_a_representable_positive_laps_rate() {
     }
 }
 
+void control_interval_floor_keeps_one_mtu_sendable() {
+    assert(lapsControlIntervalFloor(4'150, timeFromUs(uint32_t{20}), speedFromGbps(100)) ==
+           speedFromMbps(uint64_t{830}));
+}
+
+void sustained_congestion_stops_at_the_control_interval_floor() {
+    const LapsRateState result = advanceLapsRate(
+        {speedFromGbps(1), speedFromGbps(1), 0, 0, 0},
+        signal(true, true, 0, timeFromUs(uint32_t{20})), 0, speedFromGbps(100), 4'150);
+    assert(result.cur_rate == speedFromMbps(uint64_t{830}));
+}
+
 void increase_never_exceeds_the_nic_rate() {
     const LapsRateState result = advanceLapsRate(
         {speedFromGbps(200), speedFromGbps(300), 6, 0, 0}, signal(true, false, 20, 30), 100,
@@ -134,6 +146,8 @@ int main() {
     stage_six_doubles_the_target_rate();
     decrease_uses_the_paper_halving_rule_without_a_uec_rate_floor();
     repeated_decrease_keeps_a_representable_positive_laps_rate();
+    control_interval_floor_keeps_one_mtu_sendable();
+    sustained_congestion_stops_at_the_control_interval_floor();
     increase_never_exceeds_the_nic_rate();
     cooldown_times_saturate_instead_of_wrapping();
     cooldown_uses_two_times_minimum_real_delay();

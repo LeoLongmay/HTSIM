@@ -38,8 +38,23 @@ inline simtime_picosec saturatingDouble(simtime_picosec value) {
                : 2 * value;
 }
 
+inline linkspeed_bps lapsControlIntervalFloor(mem_b packet_bytes,
+                                              simtime_picosec min_delay,
+                                              linkspeed_bps nic_rate) {
+    if (packet_bytes <= 0 || min_delay == 0 || nic_rate == 0) {
+        return std::min(nic_rate, kLapsMinimumPacingRate);
+    }
+    const simtime_picosec interval = saturatingDouble(min_delay);
+    const unsigned __int128 numerator =
+        static_cast<unsigned __int128>(packet_bytes) * 8 * timeFromSec(1.0);
+    const unsigned __int128 floor =
+        (numerator + static_cast<unsigned __int128>(interval) - 1) / interval;
+    return floor >= nic_rate ? nic_rate : static_cast<linkspeed_bps>(floor);
+}
+
 inline LapsRateState advanceLapsRate(LapsRateState state, const LapsRateSignal& signal,
-                                     simtime_picosec now, linkspeed_bps nic_rate) {
+                                     simtime_picosec now, linkspeed_bps nic_rate,
+                                     mem_b packet_bytes = 0) {
     if (!signal.calibrated) {
         return state;
     }
@@ -47,7 +62,9 @@ inline LapsRateState advanceLapsRate(LapsRateState state, const LapsRateSignal& 
     // Strict LAPS is initialized from a positive NIC speed.  Keep both rate
     // variables in the representable [1 bit/s, NIC] interval so repeated
     // paper-style halving cannot feed a zero divisor to the LAPS pacer.
-    const linkspeed_bps minimum_rate = std::min(nic_rate, kLapsMinimumPacingRate);
+    const linkspeed_bps minimum_rate = std::max(
+        std::min(nic_rate, kLapsMinimumPacingRate),
+        lapsControlIntervalFloor(packet_bytes, signal.min_delay, nic_rate));
     state.cur_rate = std::max(minimum_rate, std::min(state.cur_rate, nic_rate));
     state.tgt_rate = std::max(minimum_rate, std::min(state.tgt_rate, nic_rate));
 

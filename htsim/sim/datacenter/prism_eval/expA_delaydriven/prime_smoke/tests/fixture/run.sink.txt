@@ -1,0 +1,2 @@
+0.000100 Type UEC_SINK ID 1 Ev RATE CAck 2000000 ReorderBuffer 0 Rate 1
+0.000300 Type UEC_SINK ID 2 Ev RATE CAck 2000000 ReorderBuffer 0 Rate 1

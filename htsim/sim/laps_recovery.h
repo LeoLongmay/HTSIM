@@ -51,6 +51,8 @@ public:
         (void)cause;
         lapsRecover(attempt, seq, bytes);
     }
+    virtual void lapsRecoveryTimerTrace(LapsAttempt, uint16_t, UecBasePacket::seq_t,
+                                        simtime_picosec, simtime_picosec, bool) {}
 };
 
 struct LapsRecoveryStats {
@@ -118,11 +120,13 @@ private:
     struct LocatedAttempt {
         PathState* state;
         std::list<Record>::iterator record;
+        uint16_t pid;
     };
 
     std::optional<LocatedAttempt> findAttempt(LapsAttempt attempt);
     bool detach(LapsAttempt attempt);
     void arm(PathState& state);
+    void traceTimer(const PathState& state, uint16_t pid, bool fired);
     void updateTimer();
 
     std::map<OwnerPathKey, PathState> paths_;

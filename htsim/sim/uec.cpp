@@ -20,6 +20,8 @@
 #include "strack_cc.h"               // STrack decision tree (used by updateCwndOnAck_STRACK)
 #include "mnscc_median.h"            // MNSCC median framework (used by updateCwndOnAck_MNSCC)
 #include "motivation_trace.h"
+#include "laps_diagnostics.h"
+#include "prime_diagnostics.h"
 #include "swift_cc.h"                // Swift CC pure logic (used by updateCwndOnAck_SWIFT)
 
 using namespace std;
@@ -92,6 +94,48 @@ string motivationCsvField(const string& value) {
     }
     escaped.push_back('"');
     return escaped;
+}
+
+const char* primeReason(PrimeSelectionReason reason) {
+    switch (reason) {
+        case PrimeSelectionReason::EXPLORATION: return "exploration";
+        case PrimeSelectionReason::CLEAR: return "clear";
+        case PrimeSelectionReason::MINIMUM_PENALTY: return "minimum_penalty";
+    }
+    return "unknown";
+}
+
+const char* primeFeedback(UecMultipath::PathFeedback feedback) {
+    switch (feedback) {
+        case UecMultipath::PATH_GOOD: return "good";
+        case UecMultipath::PATH_GOOD_HIGH_RESIDUAL: return "good_high_residual";
+        case UecMultipath::PATH_ECN: return "ecn";
+        case UecMultipath::PATH_NACK: return "nack";
+        case UecMultipath::PATH_TIMEOUT: return "timeout";
+    }
+    return "unknown";
+}
+
+std::string primeTupleText(const PrimeTuple& tuple) {
+    std::ostringstream stream;
+    for (size_t tier = 0; tier < tuple.ports.size(); ++tier) {
+        if (tier != 0) stream << '/';
+        stream << tuple.ports.at(tier);
+    }
+    return stream.str();
+}
+
+std::string primePenaltiesFor(const PrimeSnapshot& snapshot, const PrimeTuple& tuple) {
+    std::ostringstream stream;
+    for (size_t tier = 0; tier < tuple.ports.size(); ++tier) {
+        if (tier != 0) stream << '/';
+        uint16_t penalty = 0;
+        if (tier < snapshot.penalty.size() && tuple.ports.at(tier) < snapshot.penalty.at(tier).size()) {
+            penalty = snapshot.penalty.at(tier).at(tuple.ports.at(tier));
+        }
+        stream << penalty;
+    }
+    return stream.str();
 }
 }  // namespace
 
@@ -323,6 +367,14 @@ void UecSrc::initNscc(mem_b cwnd, simtime_picosec peer_rtt) {
     _base_rtt = peer_rtt;
     _base_bdp = timeAsSec(_base_rtt)*(_nic.linkspeed()/8);
     _bdp = _base_bdp;
+
+    // Topology setup installs route catalogs before per-flow NSCC initializes
+    // its BDP.  Refresh PRIME here, before any packet can be sent, so its
+    // exploration window uses the transport BDP rather than the constructor's
+    // zero placeholder.
+    if (usesPrimePathControl() && _prime_path_catalog) {
+        _mp->configurePrimeCatalog(_prime_path_catalog, _bdp, flowId());
+    }
 
     setMaxWnd(1.5*_bdp);
     setConfiguredMaxWnd(1.5*_bdp);
@@ -568,9 +620,11 @@ void UecNIC::sendControlPktNow() {
 
     _control_size -= p->size();
     // At the NIC, only control packets or data packets with a payload size of zero are permitted to be transmitted at a higher priority.
-    assert(p->route() == NULL || p->lapsPinnedRoute() ||
+    assert(p->route() == NULL || p->lapsPinnedRoute() || p->primePinnedRoute() ||
            (p->type() == UECDATA && p->size() == UecBasePacket::ACKSIZE));
     if (p->lapsPinnedRoute()) {
+        assert(p->route() != nullptr);
+    } else if (p->primePinnedRoute()) {
         assert(p->route() != nullptr);
     } else if (cp.src && cp.src->usesLapsPathControl() && p->lapsPidValid()) {
         const Route* nic_route = cp.src->getPortRoute(port_to_use);
@@ -803,6 +857,7 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
                 updateCwndOnNack = &UecSrc::dontUpdateCwndOnNack;
                 break;
             case LAPS_CONTROL:
+            case LAPS_CONTROL_PAPERACK:
                 updateCwndOnAck = &UecSrc::updateCwndOnAck_LAPS;
                 // Recovery itself remains UEC-common.  LAPS-Control's rate
                 // decision is made from its path-delay state, not a private
@@ -819,6 +874,15 @@ UecSrc::UecSrc(TrafficLogger* trafficLogger,
     }
     if (usesLapsPathControl()) {
         _laps_rate = {_nic.linkspeed(), _nic.linkspeed(), 0, 0, 0};
+    }
+    // Diagnostics are opt-in observation only.  All arms that already run
+    // the LAPS path-control loop share its event vocabulary; OPS has no
+    // applicable LAPS event stream.
+    if (usesLapsPathControl()) {
+        _laps_diagnostics = LapsDiagnosticsWriter::forRun(std::getenv("LAPS_DIAG"), true);
+    }
+    if (usesPrimePathControl()) {
+        _prime_diagnostics = PrimeDiagnosticsWriter::forRun(std::getenv("PRIME_DIAG"));
     }
     //if (_node_num == 2) _debug_src = true; // use this to enable debugging on one flow at a
     // time
@@ -854,12 +918,47 @@ bool UecSrc::isLapsControl() const {
     return _sender_cc_algo == LAPS_CONTROL && dynamic_cast<const UecMpLaps*>(_mp.get()) != nullptr;
 }
 
+bool UecSrc::isLapsControlPaperAck() const {
+    return _sender_cc_algo == LAPS_CONTROL_PAPERACK &&
+           dynamic_cast<const UecMpLaps*>(_mp.get()) != nullptr;
+}
+
+bool UecSrc::usesLapsControlProbeCap() const {
+    return isLapsControl() || isLapsControlPaperAck();
+}
+
 bool UecSrc::usesLapsPathControl() const {
-    return isLaps() || isLapsControl();
+    return isLaps() || isLapsControl() || isLapsControlPaperAck();
 }
 
 bool UecSrc::usesLapsPrivateRecovery() const {
     return isLaps();
+}
+
+bool UecSrc::usesPrimePathControl() const {
+    return dynamic_cast<const UecMpPrime*>(_mp.get()) != nullptr;
+}
+
+void UecSrc::primeSetPathCatalog(std::shared_ptr<const PrimePathCatalog> catalog) {
+    if (!usesPrimePathControl()) return;
+    if (!catalog) throw logic_error("PRIME source has no path catalog");
+    _prime_path_catalog = std::move(catalog);
+    _mp->configurePrimeCatalog(_prime_path_catalog, _bdp, flowId());
+}
+
+void UecSrc::primeSetPathCatalog(std::shared_ptr<const PrimePathCatalog> catalog,
+                                 uint64_t bdp, uint64_t seed) {
+    if (!usesPrimePathControl()) return;
+    if (!catalog) throw logic_error("PRIME source has no path catalog");
+    _prime_path_catalog = std::move(catalog);
+    _mp->configurePrimeCatalog(_prime_path_catalog, bdp, seed);
+}
+
+const Route& UecSrc::primeForwardRoute(uint16_t catalog_index) const {
+    if (!usesPrimePathControl() || !_prime_path_catalog) {
+        throw logic_error("PRIME source has no path catalog");
+    }
+    return *_prime_path_catalog->entryForIndex(catalog_index).forward;
 }
 
 const Route& UecSrc::lapsForwardRoute(uint16_t pid) const {
@@ -1720,8 +1819,30 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
             _laps_probe_outstanding.erase(pkt.acked_psn());
             ++_laps_probe_acked;
             _mp->observeLapsProbe(pkt.ev(), pkt.lapsOneWayDelay(), now);
+            LapsDiagnosticEvent event;
+            event.time = now;
+            event.flow = flowId();
+            event.event_type = "probe_acked";
+            event.pid = pkt.ev();
+            event.seq = pkt.acked_psn();
+            event.one_way_delay = pkt.lapsOneWayDelay();
+            event.outstanding_probes = _laps_probe_outstanding.size();
+            populateLapsPitDiagnostic(event, static_cast<uint16_t>(pkt.ev()));
+            logLapsDiagnostic(event);
         } else {
             _mp->observeLapsDelay(pkt.ev(), pkt.lapsOneWayDelay(), now);
+            const auto* laps = dynamic_cast<const UecMpLaps*>(_mp.get());
+            if (laps == nullptr) throw logic_error("LAPS ACK has no LAPS multipath state");
+            const uint16_t local_pid = laps->localPid(pkt.ev());
+            LapsDiagnosticEvent event;
+            event.time = now;
+            event.flow = flowId();
+            event.event_type = "data_acked";
+            event.pid = local_pid;
+            event.seq = acked_psn;
+            event.one_way_delay = pkt.lapsOneWayDelay();
+            populateLapsPitDiagnostic(event, local_pid);
+            logLapsDiagnostic(event);
         }
         scheduleLapsProbe();
     }
@@ -1849,9 +1970,9 @@ void UecSrc::processAck(const UecAckPacket& pkt) {
         }
     }
     _mp->setFeedbackTraceContext(ack_event_seq);
-    _mp->processEv(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN :
-                   (reject_high_residual ? UecMultipath::PATH_GOOD_HIGH_RESIDUAL
-                                         : UecMultipath::PATH_GOOD));
+    processMultipathFeedback(pkt.ev(), pkt.ecn_echo() ? UecMultipath::PATH_ECN :
+                             (reject_high_residual ? UecMultipath::PATH_GOOD_HIGH_RESIDUAL
+                                                   : UecMultipath::PATH_GOOD));
     if (_prism_coordination_mode != PrismCoordinationMode::DISABLED &&
         !pkt.ecn_echo()) {
         const UecMpAdmission admission = _mp->lastAdmission();
@@ -2168,7 +2289,17 @@ void UecSrc::updateCwndOnAck_LAPS(bool, simtime_picosec, mem_b) {
                                   _laps_rate.next_increase_at},
                                  {signal.calibrated, signal.all_paths_high,
                                   signal.target_delay, signal.min_delay},
-                                 eventlist().now(), _nic.linkspeed());
+                                 eventlist().now(), _nic.linkspeed(), _mtu);
+    LapsDiagnosticEvent event;
+    event.time = eventlist().now();
+    event.flow = flowId();
+    event.event_type = "rate_update";
+    event.rate_bps = _laps_rate.cur_rate;
+    event.target_rate_bps = _laps_rate.tgt_rate;
+    event.all_paths_high = signal.all_paths_high;
+    event.target_delay = signal.target_delay;
+    event.min_delay = signal.min_delay;
+    logLapsDiagnostic(event);
 }
 
 void UecSrc::updateCwndOnAck_NSCC(bool skip, simtime_picosec delay, mem_b newly_acked_bytes) {
@@ -3287,9 +3418,10 @@ void UecSrc::processNack(const UecNackPacket& pkt) {
 
     _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
     if (pkt.last_hop())
-        _mp->processEv(ev, pkt.ecn_echo() ? UecMultipath::PATH_ECN : UecMultipath::PATH_GOOD);
+        processMultipathFeedback(ev, pkt.ecn_echo() ? UecMultipath::PATH_ECN
+                                                     : UecMultipath::PATH_GOOD);
     else
-        _mp->processEv(ev, UecMultipath::PATH_NACK);
+        processMultipathFeedback(ev, UecMultipath::PATH_NACK);
 
     sendIfPermitted();
 }
@@ -3514,6 +3646,69 @@ void UecSrc::noteLapsDataSent(mem_b bytes) {
     _laps_rate_timer_when = _laps_next_send_at;
     _laps_rate_timer_handle =
         eventlist().sourceIsPendingGetHandle(*this, _laps_rate_timer_when);
+    if (_laps_rate_timer_handle == eventlist().nullHandle()) {
+        // EventList rejects deadlines at or beyond the configured simulation
+        // end.  Keep the deadline and handle as one state pair: retaining a
+        // future deadline with this null handle makes a later NIC-granted
+        // send attempt to cancel an iterator that was never scheduled.
+        _laps_rate_timer_when = 0;
+    }
+}
+
+void UecSrc::logLapsDiagnostic(const LapsDiagnosticEvent& event) {
+    if (_laps_diagnostics) _laps_diagnostics->log(event);
+}
+
+uint32_t UecSrc::nextMultipathEntropy() {
+    if (!_prime_diagnostics) {
+        return _mp->nextEntropy(_highest_sent, static_cast<uint64_t>(_cwnd) / _mss);
+    }
+    const PrimeSnapshot before = _mp->primeSnapshot();
+    const uint32_t entropy = _mp->nextEntropy(_highest_sent, static_cast<uint64_t>(_cwnd) / _mss);
+    logPrimeSelection(entropy, before, _mp->primeSnapshot());
+    return entropy;
+}
+
+void UecSrc::processMultipathFeedback(uint32_t path_id, UecMultipath::PathFeedback feedback) {
+    if (!_prime_diagnostics) {
+        _mp->processEv(path_id, feedback);
+        return;
+    }
+    const PrimeSnapshot before = _mp->primeSnapshot();
+    _mp->processEv(path_id, feedback);
+    logPrimeFeedback(path_id, feedback, before, _mp->primeSnapshot());
+}
+
+void UecSrc::logPrimeSelection(uint32_t entropy, const PrimeSnapshot& before,
+                               const PrimeSnapshot& after) {
+    if (!_prime_diagnostics || !_prime_path_catalog) return;
+    const PrimeTuple& tuple = _prime_path_catalog->entryForEntropy(entropy).tuple;
+    PrimeDiagnosticEvent event;
+    event.time = eventlist().now();
+    event.flow = flowId();
+    event.event = "selection";
+    event.entropy = entropy;
+    event.tuple = primeTupleText(tuple);
+    event.reason = primeReason(after.selection_reason);
+    event.penalty_before = primePenaltiesFor(before, tuple);
+    event.penalty_after = primePenaltiesFor(after, tuple);
+    _prime_diagnostics->log(event);
+}
+
+void UecSrc::logPrimeFeedback(uint32_t entropy, UecMultipath::PathFeedback feedback,
+                              const PrimeSnapshot& before, const PrimeSnapshot& after) {
+    if (!_prime_diagnostics || !_prime_path_catalog) return;
+    const PrimeTuple& tuple = _prime_path_catalog->entryForEntropy(entropy).tuple;
+    PrimeDiagnosticEvent event;
+    event.time = eventlist().now();
+    event.flow = flowId();
+    event.event = "feedback";
+    event.entropy = entropy;
+    event.tuple = primeTupleText(tuple);
+    event.feedback = primeFeedback(feedback);
+    event.penalty_before = primePenaltiesFor(before, tuple);
+    event.penalty_after = primePenaltiesFor(after, tuple);
+    _prime_diagnostics->log(event);
 }
 
 void UecSrc::continueConnection() {
@@ -3843,10 +4038,11 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
 
     uint32_t ev = laps_entropy.has_value()
                       ? *laps_entropy
-                      : _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+                      : nextMultipathEntropy();
     const UecMpSelection selection = _mp->lastSelection();
     const Route* packet_route = &route;
     uint16_t laps_pid = 0;
+    uint16_t prime_catalog_index = 0;
     if (usesLapsPathControl()) {
         bool matched_plane = false;
         for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
@@ -3861,12 +4057,25 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
         }
         if (!matched_plane) throw logic_error("LAPS data route is not bound to a NIC plane");
     }
+    if (usesPrimePathControl()) {
+        if (!_prime_path_catalog) throw logic_error("PRIME source has no path catalog");
+        if (_ports.empty() || _ports[0]->route() != &route) {
+            throw logic_error("PRIME data route is not bound to plane zero");
+        }
+        const PrimePathEntry& entry = _prime_path_catalog->entryForEntropy(ev);
+        prime_catalog_index = entry.catalog_index;
+        packet_route = &primeForwardRoute(prime_catalog_index);
+    }
     auto* p = UecDataPacket::newpkt(_flow, *packet_route, _highest_sent, full_pkt_size, ptype,
                                      _pull_target, _dstaddr);
     p->set_src(_srcaddr);
     if (usesLapsPathControl()) {
         p->setLapsPid(laps_pid);
         p->setLapsPinnedRoute(true);
+    }
+    if (usesPrimePathControl()) {
+        p->setPrimeCatalogIndex(prime_catalog_index);
+        p->setPrimePinnedRoute(true);
     }
     p->set_pathid(ev);
     p->set_hop_count(0);
@@ -3895,7 +4104,21 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
         }
     }
     p->sendOn();
+    if (usesPrimePathControl()) _mp->notePrimeBytesSent(full_pkt_size);
     noteLapsDataSent(full_pkt_size);
+    if (usesLapsPathControl()) {
+        LapsDiagnosticEvent event;
+        event.time = eventlist().now();
+        event.flow = flowId();
+        event.event_type = "data_sent";
+        event.pid = laps_pid;
+        event.seq = p->epsn();
+        event.bytes = full_pkt_size;
+        event.rate_bps = _laps_rate.cur_rate;
+        event.target_rate_bps = _laps_rate.tgt_rate;
+        event.is_retransmission = false;
+        logLapsDiagnostic(event);
+    }
     if (_motivation_trace_writer.enabledFor(flowId())) {
         _motivation_new_data_bytes_sent_total += full_pkt_size;
     }
@@ -3909,7 +4132,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
 }
 
 UecSrc::RtxPathSelection UecSrc::selectRtxPath(UecDataPacket::seq_t seqno) {
-    const uint32_t entropy = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd / _mss);
+    const uint32_t entropy = nextMultipathEntropy();
     return {entropy, _mp->lastSelection()};
 }
 
@@ -3943,6 +4166,7 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     const uint32_t ev = selection.entropy;
     const Route* packet_route = &route;
     uint16_t laps_pid = 0;
+    uint16_t prime_catalog_index = 0;
     if (usesLapsPathControl()) {
         for (uint32_t plane = 0; plane < _ports.size(); ++plane) {
             if (_ports[plane]->route() == &route) {
@@ -3955,12 +4179,25 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
         }
         if (packet_route == &route) throw logic_error("LAPS RTX route is not bound to a NIC plane");
     }
+    if (usesPrimePathControl()) {
+        if (!_prime_path_catalog) throw logic_error("PRIME source has no path catalog");
+        if (_ports.empty() || _ports[0]->route() != &route) {
+            throw logic_error("PRIME RTX route is not bound to plane zero");
+        }
+        const PrimePathEntry& entry = _prime_path_catalog->entryForEntropy(ev);
+        prime_catalog_index = entry.catalog_index;
+        packet_route = &primeForwardRoute(prime_catalog_index);
+    }
     auto* p = UecDataPacket::newpkt(_flow, *packet_route, seq_no, full_pkt_size,
                                      UecDataPacket::DATA_RTX, _pull_target, _dstaddr);
     p->set_src(_srcaddr);
     if (usesLapsPathControl()) {
         p->setLapsPid(laps_pid);
         p->setLapsPinnedRoute(true);
+    }
+    if (usesPrimePathControl()) {
+        p->setPrimeCatalogIndex(prime_catalog_index);
+        p->setPrimePinnedRoute(true);
     }
     p->set_pathid(ev);
     p->set_hop_count(0);
@@ -3986,7 +4223,21 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
         }
     }
     p->sendOn();
+    if (usesPrimePathControl()) _mp->notePrimeBytesSent(full_pkt_size);
     noteLapsDataSent(full_pkt_size);
+    if (usesLapsPathControl()) {
+        LapsDiagnosticEvent event;
+        event.time = eventlist().now();
+        event.flow = flowId();
+        event.event_type = "data_sent";
+        event.pid = laps_pid;
+        event.seq = p->epsn();
+        event.bytes = full_pkt_size;
+        event.rate_bps = _laps_rate.cur_rate;
+        event.target_rate_bps = _laps_rate.tgt_rate;
+        event.is_retransmission = true;
+        logLapsDiagnostic(event);
+    }
     _stats.rtx_pkts_sent++;
     startRTO(eventlist().now());
     return full_pkt_size;
@@ -4002,7 +4253,7 @@ void UecSrc::sendProbe() {
                                     UecBasePacket::DATA_PROBE, 0, _dstaddr);
     p->set_src(_srcaddr);
     p->set_dst(_dstaddr);
-    uint32_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+    uint32_t ev = nextMultipathEntropy();
     const UecMpSelection selection = _mp->lastSelection();
     _motivation_ack_selection_state.rememberProbe(_probe_seqno, selection);
     p->set_pathid(ev);
@@ -4043,7 +4294,29 @@ void UecSrc::sendLapsProbe() {
     _laps_probe_outstanding.insert(_laps_probe_seqno);
     ++_laps_probe_sent;
     _motivation_ack_selection_state.rememberProbe(_laps_probe_seqno, {});
+    LapsDiagnosticEvent event;
+    event.time = eventlist().now();
+    event.flow = flowId();
+    event.event_type = "probe_sent";
+    event.pid = *pid;
+    event.seq = _laps_probe_seqno;
+    event.bytes = _hdr_size;
+    event.outstanding_probes = _laps_probe_outstanding.size();
+    populateLapsPitDiagnostic(event, *pid);
+    logLapsDiagnostic(event);
     _nic.sendControlPacket(p, this, NULL);
+}
+
+void UecSrc::populateLapsPitDiagnostic(LapsDiagnosticEvent& event, uint16_t pid) const {
+    const auto* laps = dynamic_cast<const UecMpLaps*>(_mp.get());
+    if (laps == nullptr) return;
+    const auto snapshot = laps->lapsSnapshot(pid, event.time);
+    if (!snapshot.has_value()) return;
+    event.pit_valid = snapshot->path.valid;
+    event.pit_selectable = snapshot->path.selectable;
+    event.pit_probe_pending = snapshot->path.probe_pending;
+    event.pit_updated_at = snapshot->path.updated_at;
+    event.pit_deadline = snapshot->path.deadline;
 }
 
 void UecSrc::scheduleLapsProbe() {
@@ -4054,12 +4327,11 @@ void UecSrc::scheduleLapsProbe() {
     if (!laps) throw logic_error("LAPS has no LAPS multipath state");
     optional<simtime_picosec> deadline = laps->nextLapsDeadline(eventlist().now());
     if (!deadline.has_value()) return;
-    // With common UEC ACK thinning, a path can legitimately receive no data
-    // sample for several RTTs.  Keep the paper's 2*realVal stale predicate,
-    // but cap LAPS-Control's *active* exploration rate using the existing
-    // command-line probe interval.  The legacy strict-LAPS mode retains its
-    // historical per-deadline behaviour for diagnostic reproducibility.
-    if (isLapsControl() && _laps_last_probe_at != 0) {
+    // Keep the paper's 2*realVal stale predicate. Both ordinary-UEC-recovery
+    // control arms cap active exploration with the configured probe interval;
+    // paperack still deliberately emits per-data ACKs. Strict LAPS retains
+    // its historical per-deadline behavior for reproducibility.
+    if (usesLapsControlProbeCap() && _laps_last_probe_at != 0) {
         const simtime_picosec earliest =
             _laps_last_probe_at > std::numeric_limits<simtime_picosec>::max() - _laps_probe_interval
                 ? std::numeric_limits<simtime_picosec>::max()
@@ -4127,7 +4399,7 @@ void UecSrc::sendRTS() {
 
     uint32_t ev = laps_entropy.has_value()
                       ? *laps_entropy
-                      : _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
+                      : nextMultipathEntropy();
     const UecMpSelection selection = _mp->lastSelection();
     p->set_pathid(ev);
     p->set_hop_count(0);
@@ -4164,7 +4436,7 @@ void UecSrc::createSendRecord(uint32_t path_id, UecBasePacket::seq_t seqno,
         assert(_laps_recovery);
         const auto* laps = dynamic_cast<const UecMpLaps*>(_mp.get());
         assert(laps);
-        const uint16_t pid = static_cast<uint16_t>(path_id);
+        const uint16_t pid = laps->localPid(path_id);
         const auto old_attempt = _laps_attempts.find(seqno);
         if (old_attempt != _laps_attempts.end()) {
             _laps_recovery->retire(old_attempt->second);
@@ -4205,15 +4477,39 @@ void UecSrc::lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seqno, mem_b 
     else ++_laps_source_timeout_rtx;
     const simtime_picosec send_time = sent->second.send_time;
     const mem_b packet_bytes = sent->second.pkt_size;
+    LapsDiagnosticEvent event;
+    event.time = eventlist().now();
+    event.flow = flowId();
+    event.event_type = "recovery";
+    event.pid = pid;
+    event.seq = seqno;
+    event.bytes = packet_bytes;
+    event.recovery_cause = cause == LapsRecoveryCause::ACK_GAP ? "ack_gap"
+                           : cause == LapsRecoveryCause::NACK ? "nack" : "timeout";
+    logLapsDiagnostic(event);
     _tx_bitmap.erase(sent);
     delFromSendTimes(send_time, seqno);
     _in_flight -= packet_bytes;
     _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
-    _mp->processEv(pid, (cause == LapsRecoveryCause::ACK_GAP || cause == LapsRecoveryCause::NACK)
-                            ? UecMultipath::PATH_NACK
-                            : UecMultipath::PATH_TIMEOUT);
+    processMultipathFeedback(pid, (cause == LapsRecoveryCause::ACK_GAP || cause == LapsRecoveryCause::NACK)
+                                      ? UecMultipath::PATH_NACK
+                                      : UecMultipath::PATH_TIMEOUT);
     stopSpeculating();
     queueForRtx(seqno, bytes);
+}
+
+void UecSrc::lapsRecoveryTimerTrace(LapsAttempt, uint16_t pid,
+                                    UecBasePacket::seq_t seqno, simtime_picosec sample,
+                                    simtime_picosec deadline, bool fired) {
+    LapsDiagnosticEvent event;
+    event.time = eventlist().now();
+    event.flow = flowId();
+    event.event_type = fired ? "recovery_timeout_fired" : "recovery_timer_armed";
+    event.pid = pid;
+    event.seq = seqno;
+    event.one_way_delay = sample;
+    event.timer_deadline = deadline;
+    logLapsDiagnostic(event);
 }
 
 void UecSrc::onPfcPause() {
@@ -4387,7 +4683,7 @@ void UecSrc::rtxTimerExpired() {
     mem_b pkt_size = send_record->second.pkt_size;
 
     _mp->setFeedbackTraceContext(UecMpTokenEvent::NO_EVENT);
-    _mp->processEv(send_record->second.path_id, UecMultipath::PATH_TIMEOUT);
+    processMultipathFeedback(send_record->second.path_id, UecMultipath::PATH_TIMEOUT);
 
     // update flightsize?
 
@@ -4693,6 +4989,8 @@ void UecSink::handlePullTarget(UecBasePacket::seq_t pt) {
 
 void UecSink::processData(UecDataPacket& pkt) {
     bool force_ack = false;
+    const bool paper_laps_ack = _src != nullptr &&
+        (_src->usesLapsPrivateRecovery() || _src->isLapsControlPaperAck());
     if (pkt.packet_type() == UecBasePacket::DATA_PROBE){
         UecAckPacket* ack_packet =
             sack(pkt.path_id(), sackBitmapBase(pkt.epsn()), pkt.epsn(), (bool)(pkt.flags() & ECN_CE), pkt.retransmitted(), &pkt);
@@ -4839,7 +5137,7 @@ void UecSink::processData(UecDataPacket& pkt) {
              << _out_of_order_count << " ecn " << ecn << " shouldSack " << shouldSack()
              << " forceack " << force_ack << endl;
     }
-    if ((_src != nullptr && _src->usesLapsPrivateRecovery()) || ecn || shouldSack() || force_ack) {
+    if (paper_laps_ack || ecn || shouldSack() || force_ack) {
         UecAckPacket* ack_packet =
             sack(pkt.path_id(), (ecn || pkt.ar()) ? pkt.epsn() : sackBitmapBase(pkt.epsn()), pkt.epsn(), ecn, pkt.retransmitted(), &pkt);
 
@@ -4904,7 +5202,8 @@ void UecSink::processTrimmed(const UecDataPacket& pkt) {
              << " rtx_backlog " << rtx_backlog() << " at " << timeAsUs(getSrc()->eventlist().now())
              << " flow " << _src->flow()->str() << endl;
 
-    UecNackPacket* nack_packet = nack(pkt.path_id(), pkt.epsn(), is_last_hop, (bool)(pkt.flags() & ECN_CE));
+    UecNackPacket* nack_packet =
+        nack(pkt.path_id(), pkt.epsn(), is_last_hop, (bool)(pkt.flags() & ECN_CE), &pkt);
 
     // nack_packet->sendOn();
     _nic.sendControlPacket(nack_packet, NULL, this);
@@ -5138,6 +5437,8 @@ uint64_t UecSink::buildSackBitmap(UecBasePacket::seq_t ref_epsn) {
 UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
                             UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo,
                             const UecDataPacket* received_data) {
+    const bool paper_laps_ack = _src != nullptr &&
+        (_src->usesLapsPrivateRecovery() || _src->isLapsControlPaperAck());
     uint64_t bitmap = buildSackBitmap(seqno);
     UecAckPacket* pkt =
         UecAckPacket::newpkt(_flow, NULL, _expected_epsn, seqno, acked_psn, path_id, ce, _recvd_bytes,_rcv_cwnd_pen,_srcaddr);
@@ -5151,10 +5452,7 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
         received_data->lapsPidValid()) {
         const uint16_t pid = received_data->lapsPid();
         pkt->setLapsPid(pid);
-        // LAPS-Control intentionally keeps common UEC ACK routing and
-        // retirement semantics.  It receives the forward one-way delay as
-        // metadata, but does not gain the legacy LAPS private reverse route.
-        if (_src->usesLapsPrivateRecovery()) {
+        if (paper_laps_ack) {
         const Route* forward = received_data->route();
         const Route* reverse = nullptr;
         for (const auto& catalog : _laps_path_catalogs) {
@@ -5173,6 +5471,15 @@ UecAckPacket* UecSink::sack(uint32_t path_id, UecBasePacket::seq_t seqno,
         }
         }
     }
+    if (_src != nullptr && _src->usesPrimePathControl() && received_data != nullptr &&
+        received_data->primeCatalogIndexValid()) {
+        if (!_prime_path_catalog) throw logic_error("PRIME sink has no path catalog");
+        const uint16_t catalog_index = received_data->primeCatalogIndex();
+        const PrimePathEntry& entry = _prime_path_catalog->entryForIndex(catalog_index);
+        pkt->setPrimeCatalogIndex(catalog_index);
+        pkt->setPrimePinnedRoute(true);
+        pkt->setPrimeRoute(*entry.reverse);
+    }
     if (received_data != nullptr && received_data->lapsSendTimeValid()) {
         const simtime_picosec now = _nic.eventlist().now();
         if (now >= received_data->lapsSendTime()) {
@@ -5189,12 +5496,22 @@ const Route& UecSink::lapsReverseRoute(uint16_t pid) const {
     return *_laps_path_catalogs[0]->entry(pid).reverse;
 }
 
-UecNackPacket* UecSink::nack(uint32_t path_id, UecBasePacket::seq_t seqno,bool last_hop, bool ecn_echo) {
+UecNackPacket* UecSink::nack(uint32_t path_id, UecBasePacket::seq_t seqno, bool last_hop,
+                              bool ecn_echo, const UecDataPacket* received_data) {
     UecNackPacket* pkt = UecNackPacket::newpkt(_flow, NULL, seqno, path_id,  _recvd_bytes,_rcv_cwnd_pen,_srcaddr);
     pkt->set_src(_dstaddr);
     pkt->set_last_hop(last_hop);
     pkt->set_ecn_echo(ecn_echo);
     pkt->set_hop_count(0);
+    if (_src != nullptr && _src->usesPrimePathControl() && received_data != nullptr &&
+        received_data->primeCatalogIndexValid()) {
+        if (!_prime_path_catalog) throw logic_error("PRIME sink has no path catalog");
+        const uint16_t catalog_index = received_data->primeCatalogIndex();
+        const PrimePathEntry& entry = _prime_path_catalog->entryForIndex(catalog_index);
+        pkt->setPrimeCatalogIndex(catalog_index);
+        pkt->setPrimePinnedRoute(true);
+        pkt->setPrimeRoute(*entry.reverse);
+    }
     return pkt;
 }
 

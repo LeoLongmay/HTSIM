@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <charconv>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -84,6 +85,29 @@ bool parse_byte_value(const char* flag, const char* text, mem_b& value) {
     return true;
 }
 
+bool parse_prime_penalty(const char* flag, const char* text, uint16_t& value) {
+    uint32_t parsed = 0;
+    if (!parse_degraded_count(flag, text, parsed) ||
+        parsed > std::numeric_limits<uint16_t>::max()) {
+        cerr << "invalid " << flag << " value: " << text << endl;
+        return false;
+    }
+    value = static_cast<uint16_t>(parsed);
+    return true;
+}
+
+uint64_t prime_bdp_bytes(simtime_picosec base_rtt, linkspeed_bps linkspeed,
+                         mem_b mtu) {
+    if (base_rtt == 0 || linkspeed == 0) return mtu;
+    constexpr long double kPicosecondsPerSecond = 1'000'000'000'000.0L;
+    const long double bytes = static_cast<long double>(base_rtt) *
+                              static_cast<long double>(linkspeed) /
+                              (8.0L * kPicosecondsPerSecond);
+    if (bytes >= static_cast<long double>(std::numeric_limits<uint64_t>::max()))
+        return std::numeric_limits<uint64_t>::max();
+    return static_cast<uint64_t>(std::ceil(bytes));
+}
+
 }  // namespace
 
 bool parse_degraded_capacity(const char* text, double& value) {
@@ -151,8 +175,9 @@ int main(int argc, char **argv) {
     queue_type qt = COMPOSITE;
 
     enum LoadBalancing_Algo { BITMAP, REPS, REPS_LEGACY, REPS_ACTUAL, FREEZING, OBLIVIOUS, MIXED, ECMP,
-                              LAPS, LAPS_CONTROL};
+                              LAPS, LAPS_CONTROL, LAPS_CONTROL_PAPERACK, PRIME};
     LoadBalancing_Algo load_balancing_algo = MIXED;
+    PrimeConfig prime_config;
 
     bool log_sink = false;
     bool log_nic = false;
@@ -334,6 +359,23 @@ int main(int argc, char **argv) {
             UecSrc::_laps_probe_interval = timeFromUs(atof(argv[i+1]));
             cout << "laps_probe_interval " << atof(argv[i+1]) << " us" << endl;
             i++;
+        } else if (!strcmp(argv[i], "-prime_ecn_penalty")) {
+            if (i + 1 >= argc ||
+                !parse_prime_penalty("-prime_ecn_penalty", argv[i + 1],
+                                     prime_config.ecn_penalty))
+                return 1;
+            i++;
+        } else if (!strcmp(argv[i], "-prime_nack_penalty")) {
+            if (i + 1 >= argc ||
+                !parse_prime_penalty("-prime_nack_penalty", argv[i + 1],
+                                     prime_config.nack_penalty))
+                return 1;
+            i++;
+        } else if (!strcmp(argv[i], "-prime_decay")) {
+            if (i + 1 >= argc ||
+                !parse_prime_penalty("-prime_decay", argv[i + 1], prime_config.decay))
+                return 1;
+            i++;
         } else if (!strcmp(argv[i],"-laps_queue_margin")) {
             cerr << "-laps_queue_margin is not supported by LAPS; "
                  << "remove this legacy knob" << endl;
@@ -511,6 +553,8 @@ int main(int argc, char **argv) {
                 UecSrc::_sender_cc_algo = UecSrc::LAPS;
             else if (!strcmp(argv[i+1],"laps_control"))
                 UecSrc::_sender_cc_algo = UecSrc::LAPS_CONTROL;
+            else if (!strcmp(argv[i+1],"laps_control_paperack"))
+                UecSrc::_sender_cc_algo = UecSrc::LAPS_CONTROL_PAPERACK;
             else {
                 cout << "UNKNOWN CC ALGO " << argv[i+1] << endl;
                 exit(1);
@@ -561,8 +605,14 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[i+1], "laps_control")) {
                 load_balancing_algo = LAPS_CONTROL;
             }
+            else if (!strcmp(argv[i+1], "laps_control_paperack")) {
+                load_balancing_algo = LAPS_CONTROL_PAPERACK;
+            }
+            else if (!strcmp(argv[i+1], "prime")) {
+                load_balancing_algo = PRIME;
+            }
             else {
-                cout << "Unknown load balancing algorithm of type " << argv[i+1] << ", expecting bitmap, reps, reps_legacy, reps_actual, freezing, oblivious, mixed, ecmp, or laps" << endl;
+                cout << "Unknown load balancing algorithm of type " << argv[i+1] << ", expecting bitmap, reps, reps_legacy, reps_actual, freezing, oblivious, mixed, ecmp, laps, or prime" << endl;
                 exit_error(argv[0]);
             }
             cout << "Load balancing algorithm set to  "<< argv[i+1] << endl;
@@ -979,6 +1029,43 @@ int main(int argc, char **argv) {
         cerr << "-motivation_background_config requires -motivation_trace_prefix" << endl;
         return 1;
     }
+    if (load_balancing_algo == PRIME && UecSrc::_sender_cc_algo != UecSrc::NSCC) {
+        cerr << "PRIME requires -sender_cc_algo nscc" << endl;
+        return 1;
+    }
+    if (load_balancing_algo == PRIME && !goal_filename.empty()) {
+        cerr << "PRIME does not support -goal/ATLAHS runs" << endl;
+        return 1;
+    }
+    if (load_balancing_algo == PRIME && planes != 1) {
+        cerr << "PRIME requires -planes 1" << endl;
+        return 1;
+    }
+    if (load_balancing_algo == PRIME &&
+        !(prime_config.nack_penalty > prime_config.ecn_penalty &&
+          prime_config.ecn_penalty > 0 && prime_config.decay > 0)) {
+        cerr << "invalid PRIME penalty configuration: require "
+             << "nack_penalty > ecn_penalty > 0 and decay > 0" << endl;
+        return 1;
+    }
+    if (load_balancing_algo == PRIME) {
+        if (path_entropy_size == 0 ||
+            path_entropy_size > numeric_limits<uint16_t>::max() ||
+            (path_entropy_size & (path_entropy_size - 1)) != 0) {
+            cerr << "PRIME requires a non-zero power-of-two -paths value in the catalog range"
+                 << endl;
+            return 1;
+        }
+        cout << "PRIME configuration: ecn_penalty=" << prime_config.ecn_penalty
+             << " nack_penalty=" << prime_config.nack_penalty
+             << " decay=" << prime_config.decay << endl;
+    }
+    if (UecSrc::_sender_cc_algo == UecSrc::LAPS_CONTROL_PAPERACK &&
+        load_balancing_algo != LAPS_CONTROL_PAPERACK) {
+        cerr << "-sender_cc_algo laps_control_paperack requires "
+             << "-load_balancing_algo laps_control_paperack" << endl;
+        return 1;
+    }
     if (UecSrc::_sender_cc_algo == UecSrc::LAPS && load_balancing_algo != LAPS) {
         cerr << "-sender_cc_algo laps requires -load_balancing_algo laps" << endl;
         return 1;
@@ -993,6 +1080,12 @@ int main(int argc, char **argv) {
     }
     if (load_balancing_algo == LAPS_CONTROL && UecSrc::_sender_cc_algo != UecSrc::LAPS_CONTROL) {
         cerr << "-load_balancing_algo laps_control requires -sender_cc_algo laps_control" << endl;
+        return 1;
+    }
+    if (load_balancing_algo == LAPS_CONTROL_PAPERACK &&
+        UecSrc::_sender_cc_algo != UecSrc::LAPS_CONTROL_PAPERACK) {
+        cerr << "-load_balancing_algo laps_control_paperack requires "
+             << "-sender_cc_algo laps_control_paperack" << endl;
         return 1;
     }
     if (prism_coordination_mode != PrismCoordinationMode::DISABLED &&
@@ -1427,9 +1520,15 @@ int main(int argc, char **argv) {
                 });
                 break;
             case LAPS_CONTROL:
+            case LAPS_CONTROL_PAPERACK:
                 api->setMultipathFactory([path_entropy_size]() {
                     return std::make_unique<UecMpLaps>(path_entropy_size, UecSrc::_debug,
                                                        UecSrc::_laps_beta);
+                });
+                break;
+            case PRIME:
+                api->setMultipathFactory([prime_config]() {
+                    return std::make_unique<UecMpPrime>(UecSrc::_debug, prime_config);
                 });
                 break;
             default:
@@ -1499,6 +1598,11 @@ int main(int argc, char **argv) {
             } else if (load_balancing_algo == LAPS_CONTROL){
                 mp = make_unique<UecMpLaps>(path_entropy_size, UecSrc::_debug,
                                              UecSrc::_laps_beta);
+            } else if (load_balancing_algo == LAPS_CONTROL_PAPERACK){
+                mp = make_unique<UecMpLaps>(path_entropy_size, UecSrc::_debug,
+                                             UecSrc::_laps_beta);
+            } else if (load_balancing_algo == PRIME) {
+                mp = make_unique<UecMpPrime>(UecSrc::_debug, prime_config);
             } else {
                 cout << "ERROR: Failed to set multipath algorithm, abort." << endl;
                 abort();
@@ -1527,6 +1631,43 @@ int main(int argc, char **argv) {
                                       ports);
             else //each connection has its own pacer, so receiver driven mode does not kick in!
                 uec_snk = new UecSink(NULL,linkspeed,1.1,UecBasePacket::unquantize(UecSink::_credit_per_pull),eventlist,*nics.at(dest), ports);
+
+            shared_ptr<const PrimePathCatalog> prime_catalog;
+            if (load_balancing_algo == PRIME) {
+                try {
+                    unique_ptr<vector<const Route*>> candidates(
+                        topo[0]->get_bidir_paths(src, dest, true));
+                    if (!candidates) {
+                        throw invalid_argument(
+                            "could not enumerate bidirectional FatTree paths");
+                    }
+                    PrimeRoutePairs owned_candidates;
+                    owned_candidates.reserve(candidates->size());
+                    unordered_set<Route*> owned_routes;
+                    for (const Route* forward : *candidates) {
+                        Route* const owned_forward = const_cast<Route*>(forward);
+                        Route* const owned_reverse = owned_forward == nullptr
+                            ? nullptr : const_cast<Route*>(owned_forward->reverse());
+                        if (owned_forward == nullptr || owned_reverse == nullptr ||
+                            !owned_routes.insert(owned_forward).second ||
+                            !owned_routes.insert(owned_reverse).second) {
+                            throw invalid_argument(
+                                "candidates must be unique bidirectional route pairs");
+                        }
+                        owned_candidates.push_back(
+                            {unique_ptr<Route>(owned_forward), unique_ptr<Route>(owned_reverse)});
+                    }
+                    appendPrimeTransportEndpoints(owned_candidates, *uec_snk->getPort(0),
+                                                 *uec_src->getPort(0));
+                    prime_catalog = PrimePathCatalog::build(
+                        std::move(owned_candidates), 0,
+                        static_cast<uint16_t>(path_entropy_size));
+                } catch (const exception& error) {
+                    cerr << "PRIME failed to build path catalog for flow " << src
+                         << "->" << dest << ": " << error.what() << endl;
+                    return 1;
+                }
+            }
 
             if (uec_src->usesLapsPathControl()) {
                 if (path_entropy_size > numeric_limits<uint16_t>::max()) {
@@ -1635,6 +1776,15 @@ int main(int argc, char **argv) {
                 } else {
                     uec_src->initNscc(cwnd_b, network_max_unloaded_rtt);
                 }
+            }
+            if (prime_catalog) {
+                const uint64_t prime_seed =
+                    static_cast<uint64_t>(static_cast<uint32_t>(seed)) +
+                    static_cast<uint64_t>(uec_src->flowId());
+                const uint64_t prime_bdp = prime_bdp_bytes(
+                    base_rtt_bw_two_points, linkspeed, Packet::data_packet_size());
+                uec_snk->primeSetPathCatalog(*uec_src, prime_catalog);
+                uec_src->primeSetPathCatalog(prime_catalog, prime_bdp, prime_seed);
             }
             uec_srcs.push_back(uec_src);
             uec_src->setDst(dest);
@@ -1915,6 +2065,13 @@ int main(int argc, char **argv) {
     }
 
     cout << "Done" << endl;
+    const char* delivery_summary = std::getenv("UEC_DELIVERY_SUMMARY");
+    if (delivery_summary != nullptr && *delivery_summary != '\0') {
+        for (const auto& [flow_id, endpoints] : flowmap) {
+            cout << "UEC_DELIVERY_SUMMARY flow=" << flow_id
+                 << " delivered_bytes=" << endpoints.second->deliveredBytes() << endl;
+        }
+    }
     int new_pkts = 0, rtx_pkts = 0, bounce_pkts = 0, rts_pkts = 0, ack_pkts = 0, nack_pkts = 0, pull_pkts = 0, sleek_pkts = 0;
     for (size_t ix = 0; ix < uec_srcs.size(); ix++) {
         const struct UecSrc::Stats& s = uec_srcs[ix]->stats();

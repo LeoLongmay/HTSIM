@@ -10,6 +10,9 @@ void UecBasePacket::resetLapsRouteMetadata() {
   _laps_pid = 0;
   _laps_pid_valid = false;
   _laps_pinned_route = false;
+  _prime_catalog_index = 0;
+  _prime_catalog_index_valid = false;
+  _prime_pinned_route = false;
 }
 
 void UecDataPacket::resetLapsMetadata() {

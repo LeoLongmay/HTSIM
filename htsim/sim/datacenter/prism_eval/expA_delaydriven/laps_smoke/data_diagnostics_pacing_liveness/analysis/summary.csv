@@ -1,0 +1,3 @@
+run,completed,total,completion_rate,min_rate_bps,last_rate_bps,rate_updates,probe_sent,probe_acked,probe_ack_ratio,data_sent,pid_data_share_max,ack_gap_recovery,timeout_recovery,nack_recovery
+reference,64,64,1.0,177854806,2436990224,33910,2323,2073,0.8923805424020663,37359,0.12974116009529163,4729,1283,0
+degraded,63,64,0.984375,213468143,99999999999,36625,5517,4969,0.9006706543411275,46810,0.13311258278145696,11368,4244,0

@@ -14,6 +14,7 @@
 #include <vector>
 #include "eventlist.h"
 #include "buffer_reps.h"
+#include "prime_path_catalog.h"
 
 struct UecMpCacheSlot {
     uint16_t slot = UINT16_MAX;
@@ -69,6 +70,39 @@ struct UecMpLapsSignal {
     simtime_picosec min_delay = 0;
 };
 
+struct UecMpLapsPathSnapshot {
+    bool valid;
+    bool selectable;
+    bool probe_pending;
+    simtime_picosec base_val;
+    simtime_picosec real_val;
+    simtime_picosec updated_at;
+    optional<simtime_picosec> deadline;
+};
+
+// One immutable observation point for tests and diagnostics. The path state
+// and the aggregate control signal are copied at the same caller-supplied
+// simulation time; no mutable PIT reference escapes.
+struct UecMpLapsSnapshot {
+    UecMpLapsPathSnapshot path;
+    UecMpLapsSignal signal;
+};
+
+struct PrimeConfig {
+    uint16_t ecn_penalty = 1;
+    uint16_t nack_penalty = 4;
+    uint16_t decay = 1;
+};
+
+enum class PrimeSelectionReason : uint8_t { EXPLORATION, CLEAR, MINIMUM_PENALTY };
+
+struct PrimeSnapshot {
+    std::vector<std::vector<uint16_t>> penalty;
+    PrimeSelectionReason selection_reason = PrimeSelectionReason::EXPLORATION;
+    uint64_t bytes_sent = 0;
+    uint64_t bdp = 0;
+};
+
 class UecMultipath {
 public:
     enum PathFeedback {PATH_GOOD, PATH_GOOD_HIGH_RESIDUAL, PATH_ECN, PATH_NACK, PATH_TIMEOUT};
@@ -100,9 +134,41 @@ public:
     virtual void observeLapsProbe(uint32_t, simtime_picosec, simtime_picosec) {}
     virtual optional<uint32_t> nextLapsProbeEntropy(simtime_picosec) { return {}; }
     virtual UecMpLapsSignal lapsSignal(simtime_picosec) const { return {}; }
+    virtual void configurePrimeCatalog(std::shared_ptr<const PrimePathCatalog>, uint64_t,
+                                      uint64_t) {}
+    virtual void notePrimeBytesSent(uint64_t) {}
+    virtual PrimeSnapshot primeSnapshot() const { return {}; }
 protected:
     bool _debug;
     string _debug_tag;
+};
+
+class UecMpPrime final : public UecMultipath {
+public:
+    explicit UecMpPrime(bool debug, PrimeConfig config = {});
+    void configureCatalog(std::shared_ptr<const PrimePathCatalog> catalog, uint64_t bdp,
+                          uint64_t seed);
+    void configurePrimeCatalog(std::shared_ptr<const PrimePathCatalog> catalog, uint64_t bdp,
+                              uint64_t seed) override;
+    void notePrimeBytesSent(uint64_t bytes) override;
+    PrimeSnapshot primeSnapshot() const override;
+    void processEv(uint32_t path_id, PathFeedback feedback) override;
+    uint32_t nextEntropy(uint64_t seq_sent, uint64_t cur_cwnd_in_pkts) override;
+
+private:
+    uint32_t nextCandidateEntropy();
+    uint32_t tuplePenalty(uint32_t entropy) const;
+    void decayPenalties();
+
+    PrimeConfig _config;
+    std::shared_ptr<const PrimePathCatalog> _catalog;
+    std::mt19937_64 _rng;
+    std::vector<std::vector<uint16_t>> _port_permutations;
+    std::vector<uint16_t> _port_cursors;
+    std::vector<std::vector<uint16_t>> _penalty;
+    uint64_t _bdp = 0;
+    uint64_t _bytes_sent = 0;
+    PrimeSelectionReason _selection_reason = PrimeSelectionReason::EXPLORATION;
 };
 
 class UecMpOblivious : public UecMultipath {
@@ -137,7 +203,12 @@ public:
     optional<simtime_picosec> nextLapsDeadline(simtime_picosec now) const;
     bool pathIsSelectable(uint16_t pid) const;
     bool hasSelectablePath() const;
+    uint16_t localPid(uint32_t entropy) const {
+        return static_cast<uint16_t>(pathIndex(entropy));
+    }
     std::optional<simtime_picosec> lapsRealVal(uint16_t pid) const;
+    optional<UecMpLapsPathSnapshot> lapsPathSnapshot(uint16_t pid) const;
+    optional<UecMpLapsSnapshot> lapsSnapshot(uint16_t pid, simtime_picosec now) const;
     optional<uint32_t> nextLapsProbeEntropy(simtime_picosec now) override;
     UecMpLapsSignal lapsSignal(simtime_picosec now) const override;
 private:

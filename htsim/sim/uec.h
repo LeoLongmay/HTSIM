@@ -42,6 +42,10 @@ class UecSrc;
 class UecLogger;
 class MotivationTraceWriter;
 class BaseQueue;
+class LapsDiagnosticsWriter;
+struct LapsDiagnosticEvent;
+class PrimeDiagnosticsWriter;
+struct PrimeDiagnosticEvent;
 
 
 // UecNIC aggregates UecSrcs that are on the same NIC.  It round
@@ -190,15 +194,25 @@ public:
     }
     void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes,
                      LapsRecoveryCause cause) override;
+    void lapsRecoveryTimerTrace(LapsAttempt attempt, uint16_t pid,
+                                UecBasePacket::seq_t seq, simtime_picosec sample,
+                                simtime_picosec deadline, bool fired) override;
     uint32_t dst() { return _dstaddr; }
     void setDst(uint32_t dst) { _dstaddr = dst; }
     // ``laps`` is the retained, private-recovery research prototype.  The
-    // separately named ``laps_control`` baseline shares UEC reliability and
-    // only reuses the LAPS-style path/rate controller.
+    // separately named ``laps_control`` baselines share UEC reliability and
+    // only reuse the LAPS-style path/rate controller.
     bool isLaps() const;
     bool isLapsControl() const;
+    bool isLapsControlPaperAck() const;
+    bool usesLapsControlProbeCap() const;
     bool usesLapsPathControl() const;
     bool usesLapsPrivateRecovery() const;
+    bool usesPrimePathControl() const;
+    void primeSetPathCatalog(std::shared_ptr<const PrimePathCatalog> catalog);
+    void primeSetPathCatalog(std::shared_ptr<const PrimePathCatalog> catalog, uint64_t bdp,
+                             uint64_t seed);
+    const Route& primeForwardRoute(uint16_t catalog_index) const;
     using LapsPathResolver = std::function<bool(
         uint32_t, uint32_t, uint32_t, std::vector<const BaseQueue*>&)>;
     void lapsSetPathResolver(LapsPathResolver resolver);
@@ -302,7 +316,7 @@ public:
     static bool _receiver_based_cc;
 
     enum Sender_CC { DCTCP, NSCC, CONSTANT, PRISM, STRACK, MNSCC, SWIFT, LSWIFT, MSWIFT,
-                     LAPS, LAPS_CONTROL};
+                     LAPS, LAPS_CONTROL, LAPS_CONTROL_PAPERACK};
     static Sender_CC _sender_cc_algo;
 
     static bool _disable_quick_adapt;
@@ -378,6 +392,14 @@ public:
     void cancelLapsProbe();
     bool lapsPacingPermitsSend() const;
     void noteLapsDataSent(mem_b bytes);
+    void logLapsDiagnostic(const LapsDiagnosticEvent& event);
+    uint32_t nextMultipathEntropy();
+    void processMultipathFeedback(uint32_t path_id, UecMultipath::PathFeedback feedback);
+    void logPrimeSelection(uint32_t entropy, const PrimeSnapshot& before,
+                           const PrimeSnapshot& after);
+    void logPrimeFeedback(uint32_t entropy, UecMultipath::PathFeedback feedback,
+                          const PrimeSnapshot& before, const PrimeSnapshot& after);
+    void populateLapsPitDiagnostic(LapsDiagnosticEvent& event, uint16_t pid) const;
     void createSendRecord(uint32_t path_id, UecDataPacket::seq_t seqno, mem_b pkt_size,
                           UecMpSelection selection);
     RtxPathSelection selectRtxPath(UecDataPacket::seq_t seqno);
@@ -395,6 +417,7 @@ public:
     LapsPathResolver _laps_path_resolver;
     std::vector<std::shared_ptr<const LapsPathCatalog>> _laps_path_catalogs;
     std::shared_ptr<LapsRouteAudit> _laps_route_audit;
+    std::shared_ptr<const PrimePathCatalog> _prime_path_catalog;
     uint64_t motivationLogAck(const UecAckPacket& pkt, simtime_picosec raw_rtt,
                               simtime_picosec qdelay, bool genuine,
                               const UecMpSelection& selection,
@@ -742,6 +765,8 @@ private:
     std::set<UecDataPacket::seq_t> _laps_probe_outstanding;
     EventList::Handle _laps_probe_timer_handle;
     std::unique_ptr<LapsRecoveryDomain> _laps_recovery;
+    std::shared_ptr<LapsDiagnosticsWriter> _laps_diagnostics;
+    std::shared_ptr<PrimeDiagnosticsWriter> _prime_diagnostics;
     std::map<UecDataPacket::seq_t, LapsAttempt> _laps_attempts;
     LapsRateState _laps_rate{};
     simtime_picosec _laps_next_send_at = 0;
@@ -801,6 +826,7 @@ class UecSink : public DataReceiver {
              uint16_t mtu,
              EventList& eventList,
              UecNIC& nic, uint32_t no_of_ports);
+    mem_b deliveredBytes() const { return _received_bytes; }
     void receivePacket(Packet& pkt, uint32_t port_num);
 
     void processData(UecDataPacket& pkt);
@@ -828,7 +854,8 @@ class UecSink : public DataReceiver {
                        UecBasePacket::seq_t acked_psn, bool ce, bool rtx_echo,
                        const UecDataPacket* received_data = nullptr);
 
-    UecNackPacket* nack(uint32_t path_id, UecBasePacket::seq_t seqno, bool last_hop, bool ecn_echo);
+    UecNackPacket* nack(uint32_t path_id, UecBasePacket::seq_t seqno, bool last_hop,
+                        bool ecn_echo, const UecDataPacket* received_data = nullptr);
 
     UecBasePacket::pull_quanta backlog() {
         if (_highest_pull_target > _latest_pull)
@@ -858,6 +885,11 @@ class UecSink : public DataReceiver {
         if (plane >= _laps_path_catalogs.size())
             _laps_path_catalogs.resize(plane + 1);
         _laps_path_catalogs[plane] = std::move(catalog);
+    }
+    void primeSetPathCatalog(const UecSrc& source,
+                             std::shared_ptr<const PrimePathCatalog> catalog) {
+        if (!source.usesPrimePathControl()) return;
+        _prime_path_catalog = std::move(catalog);
     }
     void lapsSetRouteAudit(const UecSrc& source, std::shared_ptr<LapsRouteAudit> audit) {
         if (!source.usesLapsPathControl()) return;
@@ -986,6 +1018,7 @@ class UecSink : public DataReceiver {
     std::vector<uint32_t> _paths;
     std::vector<std::shared_ptr<const LapsPathCatalog>> _laps_path_catalogs;
     std::shared_ptr<LapsRouteAudit> _laps_route_audit;
+    std::shared_ptr<const PrimePathCatalog> _prime_path_catalog;
 
     //variables for PCIe model
     PCIeModel* _pcie;

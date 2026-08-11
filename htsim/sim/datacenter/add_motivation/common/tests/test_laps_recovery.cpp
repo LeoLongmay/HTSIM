@@ -13,6 +13,20 @@ namespace {
 
 class FakeOwner final : public LapsRecoveryOwner {
 public:
+    struct TimerTrace {
+        LapsAttempt attempt;
+        uint16_t pid;
+        UecBasePacket::seq_t seq;
+        simtime_picosec sample;
+        simtime_picosec deadline;
+        bool fired;
+    };
+
+    void lapsRecoveryTimerTrace(LapsAttempt attempt, uint16_t pid,
+                                UecBasePacket::seq_t seq, simtime_picosec sample,
+                                simtime_picosec deadline, bool fired) override {
+        timer_traces.push_back({attempt, pid, seq, sample, deadline, fired});
+    }
     void lapsRecover(LapsAttempt attempt, UecBasePacket::seq_t seq, mem_b bytes) override {
         lapsRecover(attempt, seq, bytes, LapsRecoveryCause::TIMEOUT);
     }
@@ -36,6 +50,7 @@ public:
     LapsAttempt active_attempt{};
     std::vector<Callback> callbacks;
     std::vector<std::pair<UecBasePacket::seq_t, mem_b>> recovered;
+    std::vector<TimerTrace> timer_traces;
 };
 
 class ReRegisteringOwner final : public LapsRecoveryOwner {

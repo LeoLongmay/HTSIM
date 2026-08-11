@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 
@@ -18,6 +19,155 @@ void tokenize(const std::string& str, char delim, std::vector<std::string>& out)
     }
 }
 }  // namespace
+
+UecMpPrime::UecMpPrime(bool debug, PrimeConfig config)
+    : UecMultipath(debug), _config(config), _rng(0) {}
+
+void UecMpPrime::configureCatalog(std::shared_ptr<const PrimePathCatalog> catalog,
+                                  uint64_t bdp, uint64_t seed) {
+    if (!catalog || catalog->size() == 0 || catalog->tierCount() == 0) {
+        throw std::invalid_argument("PRIME requires a non-empty path catalog");
+    }
+
+    _catalog = std::move(catalog);
+    _bdp = bdp;
+    _bytes_sent = 0;
+    _rng.seed(seed);
+    _penalty.assign(_catalog->tierCount(), {});
+    _port_permutations.assign(_catalog->tierCount(), {});
+    _port_cursors.assign(_catalog->tierCount(), 0);
+
+    for (uint16_t tier = 0; tier < _catalog->tierCount(); ++tier) {
+        size_t port_count = 0;
+        for (uint16_t index = 0; index < _catalog->size(); ++index) {
+            const uint16_t port = _catalog->entryForIndex(index).tuple.ports.at(tier);
+            port_count = std::max(port_count, static_cast<size_t>(port) + 1);
+        }
+        if (port_count == 0) {
+            throw std::invalid_argument("PRIME catalog has an empty tier");
+        }
+        _port_permutations.at(tier).resize(port_count);
+        std::iota(_port_permutations.at(tier).begin(), _port_permutations.at(tier).end(), 0);
+        std::shuffle(_port_permutations.at(tier).begin(), _port_permutations.at(tier).end(), _rng);
+        _penalty.at(tier).assign(port_count, 0);
+    }
+    _selection_reason = PrimeSelectionReason::EXPLORATION;
+}
+
+void UecMpPrime::configurePrimeCatalog(std::shared_ptr<const PrimePathCatalog> catalog,
+                                       uint64_t bdp, uint64_t seed) {
+    configureCatalog(std::move(catalog), bdp, seed);
+}
+
+void UecMpPrime::notePrimeBytesSent(uint64_t bytes) {
+    _bytes_sent = bytes > std::numeric_limits<uint64_t>::max() - _bytes_sent
+                      ? std::numeric_limits<uint64_t>::max()
+                      : _bytes_sent + bytes;
+}
+
+PrimeSnapshot UecMpPrime::primeSnapshot() const {
+    return {_penalty, _selection_reason, _bytes_sent, _bdp};
+}
+
+uint32_t UecMpPrime::nextCandidateEntropy() {
+    if (!_catalog) {
+        throw std::logic_error("PRIME selection requested before catalog configuration");
+    }
+
+    std::vector<uint16_t> tuple;
+    tuple.reserve(_port_permutations.size());
+    for (uint16_t tier = 0; tier < _port_permutations.size(); ++tier) {
+        tuple.push_back(_port_permutations.at(tier).at(_port_cursors.at(tier)));
+    }
+
+    for (uint16_t tier = 0; tier < _port_cursors.size(); ++tier) {
+        uint16_t& cursor = _port_cursors.at(tier);
+        ++cursor;
+        if (cursor != _port_permutations.at(tier).size()) {
+            break;
+        }
+        cursor = 0;
+        std::shuffle(_port_permutations.at(tier).begin(), _port_permutations.at(tier).end(), _rng);
+    }
+
+    for (uint16_t index = 0; index < _catalog->size(); ++index) {
+        const PrimePathEntry& entry = _catalog->entryForIndex(index);
+        if (entry.tuple.ports == tuple) {
+            return entry.entropy;
+        }
+    }
+    throw std::logic_error("PRIME catalog does not contain the generated MP-EV tuple");
+}
+
+uint32_t UecMpPrime::tuplePenalty(uint32_t entropy) const {
+    const PrimeTuple& tuple = _catalog->entryForEntropy(entropy).tuple;
+    uint32_t total = 0;
+    for (uint16_t tier = 0; tier < tuple.ports.size(); ++tier) {
+        total += _penalty.at(tier).at(tuple.ports.at(tier));
+    }
+    return total;
+}
+
+void UecMpPrime::decayPenalties() {
+    for (std::vector<uint16_t>& tier : _penalty) {
+        for (uint16_t& penalty : tier) {
+            penalty = penalty > _config.decay ? static_cast<uint16_t>(penalty - _config.decay) : 0;
+        }
+    }
+}
+
+void UecMpPrime::processEv(uint32_t path_id, PathFeedback feedback) {
+    if (!_catalog) {
+        throw std::logic_error("PRIME feedback received before catalog configuration");
+    }
+    if (feedback == PATH_GOOD || feedback == PATH_GOOD_HIGH_RESIDUAL) return;
+
+    const PrimeTuple& tuple = _catalog->entryForEntropy(path_id).tuple;
+    for (uint16_t tier = 0; tier < tuple.ports.size(); ++tier) {
+        uint16_t& penalty = _penalty.at(tier).at(tuple.ports.at(tier));
+        if (feedback == PATH_ECN) {
+            if (penalty == 0) penalty = _config.ecn_penalty;
+        } else if (feedback == PATH_NACK || feedback == PATH_TIMEOUT) {
+            penalty = _config.nack_penalty;
+        }
+    }
+}
+
+uint32_t UecMpPrime::nextEntropy(uint64_t, uint64_t) {
+    if (!_catalog) {
+        throw std::logic_error("PRIME selection requested before catalog configuration");
+    }
+
+    uint32_t entropy = 0;
+    if (_bytes_sent < _bdp) {
+        entropy = nextCandidateEntropy();
+        _selection_reason = PrimeSelectionReason::EXPLORATION;
+    } else {
+        uint32_t lowest_penalty = std::numeric_limits<uint32_t>::max();
+        uint32_t lowest_entropy = 0;
+        bool selected_clear = false;
+        for (uint16_t candidate = 0; candidate < _catalog->size(); ++candidate) {
+            const uint32_t candidate_entropy = nextCandidateEntropy();
+            const uint32_t penalty = tuplePenalty(candidate_entropy);
+            if (penalty == 0) {
+                entropy = candidate_entropy;
+                _selection_reason = PrimeSelectionReason::CLEAR;
+                selected_clear = true;
+                break;
+            }
+            if (penalty < lowest_penalty) {
+                lowest_penalty = penalty;
+                lowest_entropy = candidate_entropy;
+            }
+        }
+        if (!selected_clear) {
+            entropy = lowest_entropy;
+            _selection_reason = PrimeSelectionReason::MINIMUM_PENALTY;
+        }
+    }
+    decayPenalties();
+    return entropy;
+}
 
 UecMpLaps::UecMpLaps(uint16_t no_of_paths, bool debug, double beta)
     : UecMultipath(debug),
@@ -126,6 +276,21 @@ optional<simtime_picosec> UecMpLaps::lapsRealVal(uint16_t pid) const {
         return {};
     }
     return _paths[pid].real_val;
+}
+
+optional<UecMpLapsPathSnapshot> UecMpLaps::lapsPathSnapshot(uint16_t pid) const {
+    if (pid >= _paths.size()) return {};
+    const LapsPathState& state = _paths[pid];
+    return UecMpLapsPathSnapshot{state.valid, state.valid && !state.probe_pending,
+                                 state.probe_pending, state.base_val, state.real_val,
+                                 state.updated_at, deadline(state)};
+}
+
+optional<UecMpLapsSnapshot> UecMpLaps::lapsSnapshot(uint16_t pid,
+                                                     simtime_picosec now) const {
+    const auto path = lapsPathSnapshot(pid);
+    if (!path.has_value()) return {};
+    return UecMpLapsSnapshot{*path, lapsSignal(now)};
 }
 
 void UecMpLaps::observeLapsDelay(uint32_t path_id, simtime_picosec delay,

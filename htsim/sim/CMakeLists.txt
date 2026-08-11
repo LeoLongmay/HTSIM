@@ -77,9 +77,12 @@ set(SOURCE_FILES
     fairpullqueue.cpp
     hpcc.cpp
     hpccpacket.cpp
+    laps_diagnostics.cpp
     laps_path_catalog.cpp
     laps_route_audit.cpp
     laps_recovery.cpp
+    prime_path_catalog.cpp
+    prime_diagnostics.cpp
     logfile.cpp
     loggers.cpp
     metric.cpp
@@ -186,6 +189,12 @@ if ( ENABLE_TESTS )
     add_test(NAME laps_multipath COMMAND test_laps_multipath)
     set_tests_properties(laps_multipath PROPERTIES LABELS "laps;unit" TIMEOUT 60)
 
+    add_executable(test_laps_falsification_ladder
+        datacenter/add_motivation/common/tests/test_laps_falsification_ladder.cpp)
+    target_link_libraries(test_laps_falsification_ladder PRIVATE htsim)
+    add_test(NAME laps_falsification_ladder COMMAND test_laps_falsification_ladder)
+    set_tests_properties(laps_falsification_ladder PROPERTIES LABELS "laps;unit" TIMEOUT 60)
+
     add_executable(test_shared_buffer_pool
         datacenter/add_motivation/common/tests/test_shared_buffer_pool.cpp)
     target_link_libraries(test_shared_buffer_pool PRIVATE htsim)
@@ -239,6 +248,24 @@ if ( ENABLE_TESTS )
     add_test(NAME laps_path_catalog COMMAND test_laps_path_catalog)
     set_tests_properties(laps_path_catalog PROPERTIES LABELS "laps;unit" TIMEOUT 60)
 
+    add_executable(test_prime_path_catalog
+        datacenter/add_motivation/common/tests/test_prime_path_catalog.cpp)
+    target_link_libraries(test_prime_path_catalog PRIVATE htsim_dc htsim)
+    add_test(NAME prime_path_catalog COMMAND test_prime_path_catalog)
+    set_tests_properties(prime_path_catalog PROPERTIES LABELS "prime;unit" TIMEOUT 60)
+
+    add_executable(test_prime_controller
+        datacenter/add_motivation/common/tests/test_prime_controller.cpp)
+    target_link_libraries(test_prime_controller PRIVATE htsim_dc htsim)
+    add_test(NAME prime_controller COMMAND test_prime_controller)
+    set_tests_properties(prime_controller PROPERTIES LABELS "prime;unit" TIMEOUT 60)
+
+    add_executable(test_prime_packet_feedback
+        datacenter/add_motivation/common/tests/test_prime_packet_feedback.cpp)
+    target_link_libraries(test_prime_packet_feedback PRIVATE htsim_dc htsim)
+    add_test(NAME prime_packet_feedback COMMAND test_prime_packet_feedback)
+    set_tests_properties(prime_packet_feedback PROPERTIES LABELS "prime;unit" TIMEOUT 60)
+
     add_executable(test_prism_coordination
         datacenter/add_motivation/common/tests/test_prism_coordination.cpp)
     target_link_libraries(test_prism_coordination PRIVATE htsim)
@@ -286,6 +313,14 @@ if ( ENABLE_TESTS )
             $<TARGET_FILE:htsim_uec>)
     set_tests_properties(laps_cli
         PROPERTIES LABELS "laps;integration" TIMEOUT 120)
+
+    add_test(
+        NAME prime_cli
+        COMMAND bash
+            ${CMAKE_CURRENT_SOURCE_DIR}/datacenter/add_motivation/common/tests/test_prime_cli.sh
+            $<TARGET_FILE:htsim_uec>)
+    set_tests_properties(prime_cli
+        PROPERTIES LABELS "prime;integration" TIMEOUT 120)
 endif()
 
 # Always print ENABLE_TESTS status, so folks don't miss it.

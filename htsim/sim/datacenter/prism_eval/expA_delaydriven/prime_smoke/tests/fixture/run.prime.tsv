@@ -1,0 +1,3 @@
+time_ps	flow	event	entropy	tuple	reason	feedback	penalty_before	penalty_after
+0	1	selection	10	0/1/2	exploration		0	0
+1	2	selection	11	1/1/2	clear		0	0

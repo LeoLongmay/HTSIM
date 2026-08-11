@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <list>
 #include <optional>
+#include <stdexcept>
 #include "network.h"
 #include "ecn.h"
 
@@ -36,13 +37,33 @@ public:
     static mem_b get_ack_size() {return ACKSIZE;}
 
     inline void setLapsPid(uint16_t pid) {
+        if (_prime_catalog_index_valid || _prime_pinned_route)
+            throw std::logic_error("a UEC packet cannot carry both LAPS and PRIME metadata");
         _laps_pid = pid;
         _laps_pid_valid = true;
     }
     inline uint16_t lapsPid() const { return _laps_pid; }
     inline bool lapsPidValid() const { return _laps_pid_valid; }
-    inline void setLapsPinnedRoute(bool pinned) { _laps_pinned_route = pinned; }
+    inline void setLapsPinnedRoute(bool pinned) {
+        if (pinned && (_prime_catalog_index_valid || _prime_pinned_route))
+            throw std::logic_error("a UEC packet cannot carry both LAPS and PRIME metadata");
+        _laps_pinned_route = pinned;
+    }
     inline bool lapsPinnedRoute() const { return _laps_pinned_route; }
+    inline void setPrimeCatalogIndex(uint16_t catalog_index) {
+        if (_laps_pid_valid || _laps_pinned_route)
+            throw std::logic_error("a UEC packet cannot carry both LAPS and PRIME metadata");
+        _prime_catalog_index = catalog_index;
+        _prime_catalog_index_valid = true;
+    }
+    inline uint16_t primeCatalogIndex() const { return _prime_catalog_index; }
+    inline bool primeCatalogIndexValid() const { return _prime_catalog_index_valid; }
+    inline void setPrimePinnedRoute(bool pinned) {
+        if (pinned && (_laps_pid_valid || _laps_pinned_route))
+            throw std::logic_error("a UEC packet cannot carry both LAPS and PRIME metadata");
+        _prime_pinned_route = pinned;
+    }
+    inline bool primePinnedRoute() const { return _prime_pinned_route; }
 
 protected:
     void resetLapsRouteMetadata();
@@ -51,6 +72,9 @@ private:
     uint16_t _laps_pid;
     bool _laps_pid_valid;
     bool _laps_pinned_route;
+    uint16_t _prime_catalog_index;
+    bool _prime_catalog_index_valid;
+    bool _prime_pinned_route;
 };
 
 class UecDataPacket : public UecBasePacket {
@@ -284,6 +308,7 @@ public:
     inline simtime_picosec lapsOneWayDelay() const { return _laps_one_way_delay; }
     inline bool lapsDelayValid() const { return _laps_delay_valid; }
     inline void setLapsRoute(const Route& route) { Packet::set_route(route); }
+    inline void setPrimeRoute(const Route& route) { Packet::set_route(route); }
 
     virtual ~UecAckPacket(){}
 
@@ -365,6 +390,7 @@ public:
 
     inline void set_last_hop(bool lh){ _last_hop = lh;}
     inline bool last_hop() const { return _last_hop;}
+    inline void setPrimeRoute(const Route& route) { Packet::set_route(route); }
     virtual PktPriority priority() const {return Packet::PRIO_HI;}
   
     virtual ~UecNackPacket(){}

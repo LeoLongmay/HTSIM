@@ -19,6 +19,23 @@ if [[ ! -s "$TMP/accepted.dat" ]]; then
     exit 1
 fi
 
+"$BIN" -topo "$TOPO" -tm "$TM" -nodes 128 -sender_cc_algo laps_control_paperack -sender_cc_only \
+    -load_balancing_algo laps_control_paperack -paths 8 -disable_trim -end 2 \
+    -o "$TMP/paperack-accepted.dat" >"$TMP/paperack-accepted.stdout" 2>&1
+
+if [[ ! -s "$TMP/paperack-accepted.dat" ]]; then
+    echo "paired LAPS-Control-PaperAck configuration did not produce simulation output" >&2
+    exit 1
+fi
+
+if "$BIN" -topo "$TOPO" -tm "$TM" -nodes 128 -sender_cc_algo laps_control_paperack -sender_cc_only \
+    -load_balancing_algo laps -paths 8 -disable_trim -end 2 -o "$TMP/paperack-unpaired.dat" \
+    >"$TMP/paperack-unpaired.stdout" 2>&1; then
+    echo "LAPS-Control-PaperAck sender CC with LAPS load balancing unexpectedly succeeded" >&2
+    exit 1
+fi
+grep -q 'requires -load_balancing_algo laps_control_paperack' "$TMP/paperack-unpaired.stdout"
+
 if "$BIN" -topo "$TOPO" -tm "$TM" -nodes 128 -sender_cc_algo laps -sender_cc_only \
     -load_balancing_algo laps -paths 8 -disable_trim -laps_queue_margin 1 -end 2 \
     -o "$TMP/queue-margin.dat" >"$TMP/queue-margin.stdout" 2>&1; then

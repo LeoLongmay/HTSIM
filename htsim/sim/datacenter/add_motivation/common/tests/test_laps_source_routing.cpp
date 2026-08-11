@@ -19,6 +19,18 @@ void setLapsGlobals() {
     UecSrc::_sender_cc_algo = UecSrc::LAPS;
 }
 
+void setLapsControlGlobals() {
+    UecSrc::_sender_based_cc = true;
+    UecSrc::_receiver_based_cc = false;
+    UecSrc::_sender_cc_algo = UecSrc::LAPS_CONTROL;
+}
+
+void setLapsControlPaperAckGlobals() {
+    UecSrc::_sender_based_cc = true;
+    UecSrc::_receiver_based_cc = false;
+    UecSrc::_sender_cc_algo = UecSrc::LAPS_CONTROL_PAPERACK;
+}
+
 class CapturingSink final : public Pipe {
 public:
     explicit CapturingSink(std::string name)
@@ -31,6 +43,12 @@ public:
 
 private:
     std::string name_;
+};
+
+class AdvanceTime final : public EventSource {
+public:
+    explicit AdvanceTime(EventList& events) : EventSource(events, "advance time") {}
+    void doNextEvent() override {}
 };
 
 struct CatalogPlane {
@@ -69,8 +87,11 @@ public:
           sink(nullptr, nullptr, sink_nic, 2),
           plane0(makeCatalogPlane(0)),
           plane1(makeCatalogPlane(1)) {
+        ordinary_reverse_sink = std::make_unique<CapturingSink>("ordinary-reverse");
         for (uint32_t plane = 0; plane < 2; ++plane) {
-            source.connectPort(plane, forward_fib[plane], reverse_fib[plane], sink, 0);
+            reverse_fib[plane].push_back(ordinary_reverse_sink.get());
+            source.connectPort(plane, forward_fib[plane], reverse_fib[plane], sink,
+                               EventList::now());
             const auto& catalog = plane == 0 ? plane0.catalog : plane1.catalog;
             source.lapsSetPathCatalog(plane, catalog);
             sink.lapsSetPathCatalog(source, plane, catalog);
@@ -85,6 +106,11 @@ public:
         const auto& packets = (plane == 0 ? plane0 : plane1).forward_sinks.at(pid)->packets;
         return packets.empty() ? nullptr : packets.back();
     }
+    const Packet* lastReversePacket(uint32_t plane, uint16_t pid) const {
+        const auto& packets = (plane == 0 ? plane0 : plane1).reverse_sinks.at(pid)->packets;
+        return packets.empty() ? nullptr : packets.back();
+    }
+    size_t ordinaryReversePacketCount() const { return ordinary_reverse_sink->packets.size(); }
     void selectOnly(uint16_t pid) {
         auto* laps = dynamic_cast<UecMpLaps*>(source._mp.get());
         assert(laps != nullptr);
@@ -100,6 +126,7 @@ public:
     UecSink sink;
 
 private:
+    std::unique_ptr<CapturingSink> ordinary_reverse_sink;
     Route forward_fib[2];
     Route reverse_fib[2];
     CatalogPlane plane0;
@@ -204,12 +231,143 @@ void pooled_packet_clears_laps_metadata() {
     reused->free();
 }
 
+void paperack_immediately_acks_data_with_paired_pid_delay_and_route() {
+    setLapsControlPaperAckGlobals();
+    AdvanceTime advance(eventlist);
+    const simtime_picosec one_way_delay = timeFromUs(uint32_t{1});
+    const simtime_picosec send_time = EventList::now();
+    EventList::sourceIsPendingRel(advance, one_way_delay);
+    assert(EventList::doNextEvent());
+    assert(EventList::now() == send_time + one_way_delay);
+
+    LocalizedLapsFixture f;
+    constexpr uint32_t plane = 0;
+    constexpr uint16_t pid = 2;
+    auto* data = UecDataPacket::newpkt(*f.source.flow(), *f.catalog(plane).entry(pid).forward,
+                                       0, 1'500, UecDataPacket::DATA_PULL, 0);
+    data->set_pathid(pid);
+    data->setLapsPid(pid);
+
+    // A non-AR, non-ECN packet after the initial packet is normally delayed.
+    // Paper ACKs must still be emitted immediately.
+    f.source.setFlowsize(10'000);
+    f.sink._received_bytes = 1'500;
+    data->setLapsSendTime(send_time);
+    f.sink.processData(*data);
+    auto* immediate_ack = static_cast<UecAckPacket*>(
+        const_cast<Packet*>(f.lastReversePacket(plane, pid)));
+    assert(immediate_ack != nullptr);
+    assert(immediate_ack->lapsPidValid() && immediate_ack->lapsPid() == pid);
+    assert(immediate_ack->lapsDelayValid());
+    assert(immediate_ack->lapsOneWayDelay() == one_way_delay);
+    assert(immediate_ack->lapsOneWayDelay() > 0);
+    assert(immediate_ack->lapsPinnedRoute());
+    assert(immediate_ack->route() == f.catalog(plane).entry(pid).reverse);
+    immediate_ack->free();
+    data->free();
+}
+
+void legacy_laps_control_ack_remains_unpinned() {
+    setLapsControlGlobals();
+    LocalizedLapsFixture f;
+    constexpr uint32_t plane = 0;
+    constexpr uint16_t pid = 2;
+    auto* data = UecDataPacket::newpkt(*f.source.flow(), *f.catalog(plane).entry(pid).forward,
+                                       0, 1'500, UecDataPacket::DATA_PULL, 0);
+    data->setLapsPid(pid);
+
+    UecAckPacket* ack = f.sink.sack(pid, 0, 0, false, false, data);
+    assert(ack->lapsPidValid() && ack->lapsPid() == pid);
+    assert(!ack->lapsPinnedRoute());
+    assert(ack->route() == nullptr);
+    ack->free();
+
+    // A non-AR, non-ECN subsequent packet remains subject to UEC ACK
+    // thinning for the legacy control arm.
+    f.source.setFlowsize(10'000);
+    f.sink._received_bytes = 1'500;
+    const size_t ordinary_reverse_before = f.ordinaryReversePacketCount();
+    f.sink.processData(*data);
+    assert(f.ordinaryReversePacketCount() == ordinary_reverse_before);
+    data->free();
+}
+
+void paperack_and_legacy_control_share_probe_cap_policy() {
+    setLapsControlGlobals();
+    LocalizedLapsFixture legacy;
+    assert(legacy.source.usesLapsControlProbeCap());
+    setLapsControlPaperAckGlobals();
+    LocalizedLapsFixture paperack;
+    assert(paperack.source.usesLapsControlProbeCap());
+    setLapsGlobals();
+    LocalizedLapsFixture strict;
+    assert(!strict.source.usesLapsControlProbeCap());
+}
+
+void paperack_and_legacy_control_schedule_probe_cap_behavior() {
+    const simtime_picosec last_probe_at = EventList::now() + 1'000;
+    const simtime_picosec probe_interval = 500;
+    const simtime_picosec expected_earliest = last_probe_at + probe_interval;
+
+    setLapsControlGlobals();
+    LocalizedLapsFixture legacy;
+    auto* legacy_laps = dynamic_cast<UecMpLaps*>(legacy.source._mp.get());
+    legacy_laps->configurePaths({100, 100, 100, 100});
+    const simtime_picosec legacy_now = EventList::now();
+    for (uint16_t pid = 0; pid < 4; ++pid) {
+        legacy_laps->observeLapsDelay(pid, 100, legacy_now);
+    }
+    const auto legacy_raw_deadline = legacy_laps->nextLapsDeadline(EventList::now());
+    assert(legacy_raw_deadline.has_value());
+    legacy.source._laps_last_probe_at = last_probe_at;
+    legacy.source._laps_probe_interval = probe_interval;
+    legacy.source.scheduleLapsProbe();
+    assert(legacy.source._laps_probe_timer_when >= expected_earliest);
+    assert(legacy.source._laps_probe_timer_when >= *legacy_raw_deadline);
+
+    setLapsControlPaperAckGlobals();
+    LocalizedLapsFixture paperack;
+    auto* paperack_laps = dynamic_cast<UecMpLaps*>(paperack.source._mp.get());
+    paperack_laps->configurePaths({100, 100, 100, 100});
+    const simtime_picosec paperack_now = EventList::now();
+    for (uint16_t pid = 0; pid < 4; ++pid) {
+        paperack_laps->observeLapsDelay(pid, 100, paperack_now);
+    }
+    const auto paperack_raw_deadline = paperack_laps->nextLapsDeadline(EventList::now());
+    assert(paperack_raw_deadline.has_value());
+    paperack.source._laps_last_probe_at = last_probe_at;
+    paperack.source._laps_probe_interval = probe_interval;
+    paperack.source.scheduleLapsProbe();
+    assert(paperack.source._laps_probe_timer_when >= expected_earliest);
+    assert(paperack.source._laps_probe_timer_when >= *paperack_raw_deadline);
+
+    setLapsGlobals();
+    LocalizedLapsFixture strict;
+    auto* strict_laps = dynamic_cast<UecMpLaps*>(strict.source._mp.get());
+    strict_laps->configurePaths({100, 100, 100, 100});
+    const simtime_picosec strict_now = EventList::now();
+    for (uint16_t pid = 0; pid < 4; ++pid) {
+        strict_laps->observeLapsDelay(pid, 100, strict_now);
+    }
+    const auto strict_raw_deadline = strict_laps->nextLapsDeadline(EventList::now());
+    assert(strict_raw_deadline.has_value());
+    strict.source._laps_last_probe_at = last_probe_at;
+    strict.source._laps_probe_interval = probe_interval;
+    strict.source.scheduleLapsProbe();
+    assert(strict.source._laps_probe_timer_when == *strict_raw_deadline);
+}
+
 }  // namespace
 
 int main() {
+    setLapsGlobals();
+    paperack_immediately_acks_data_with_paired_pid_delay_and_route();
     setLapsGlobals();
     localized_laps_keeps_catalog_pairing_but_resprays_retransmissions();
     laps_defers_retransmission_while_every_pid_is_probe_pending();
     laps_defers_rts_while_every_pid_is_probe_pending();
     pooled_packet_clears_laps_metadata();
+    legacy_laps_control_ack_remains_unpinned();
+    paperack_and_legacy_control_share_probe_cap_policy();
+    paperack_and_legacy_control_schedule_probe_cap_behavior();
 }
